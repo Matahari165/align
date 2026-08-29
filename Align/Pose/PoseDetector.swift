@@ -238,6 +238,15 @@ nonisolated enum VisionCoordinateMapper {
         }
     }
 
+    /// Vision body points are bottom-left and ROI-local. Align's overlay is
+    /// full-image top-left, so both the ROI expansion and Y flip happen here.
+    static func bodyOverlayPoint(fromROILocalVisionPoint point: CGPoint, regionOfInterest: CGRect) -> CGPoint {
+        CGPoint(
+            x: regionOfInterest.minX + point.x * regionOfInterest.width,
+            y: 1 - (regionOfInterest.minY + point.y * regionOfInterest.height)
+        )
+    }
+
     static func canonicalized(
         _ point: PosePoint,
         orientation: CGImagePropertyOrientation
@@ -289,17 +298,26 @@ nonisolated final class PoseDetector: @unchecked Sendable {
         )
     }
 
-    func detectBody(in pixelBuffer: CVPixelBuffer) throws -> BodyDetectionOutput {
+    func detectBody(
+        in pixelBuffer: CVPixelBuffer,
+        regionOfInterest: CGRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+    ) throws -> BodyDetectionOutput {
         let orientation = CGImagePropertyOrientation.up
         let handler = VNImageRequestHandler(
             cvPixelBuffer: pixelBuffer,
             orientation: orientation,
             options: [:]
         )
+        bodyRequest.regionOfInterest = regionOfInterest
+        defer { bodyRequest.regionOfInterest = CGRect(x: 0, y: 0, width: 1, height: 1) }
         try handler.perform([bodyRequest])
 
         let bodyResults = bodyRequest.results ?? []
-        let detection = try bodyDetection(from: bodyResults.first, orientation: orientation)
+        let detection = try bodyDetection(
+            from: bodyResults.first,
+            orientation: orientation,
+            regionOfInterest: regionOfInterest
+        )
         return BodyDetectionOutput(
             points: detection.points,
             resultCount: bodyResults.count,
@@ -379,7 +397,8 @@ nonisolated final class PoseDetector: @unchecked Sendable {
 
     private func bodyDetection(
         from observation: VNHumanBodyPoseObservation?,
-        orientation: CGImagePropertyOrientation
+        orientation: CGImagePropertyOrientation,
+        regionOfInterest: CGRect
     ) throws -> (points: [PosePoint], landmarks: UpperBodyLandmarkDiagnostics) {
         guard let observation else { return ([], .empty) }
 
@@ -391,9 +410,13 @@ nonisolated final class PoseDetector: @unchecked Sendable {
             guard point.confidence >= UpperBodyLandmarkDiagnostics.recognitionThreshold else {
                 continue
             }
+            let fullImageTopLeft = VisionCoordinateMapper.bodyOverlayPoint(
+                fromROILocalVisionPoint: point.location,
+                regionOfInterest: regionOfInterest
+            )
             points.append(VisionCoordinateMapper.canonicalized(PosePoint(
                 name: landmark.rawValue,
-                location: point.location,
+                location: fullImageTopLeft,
                 confidence: point.confidence,
                 source: .body
             ), orientation: orientation))

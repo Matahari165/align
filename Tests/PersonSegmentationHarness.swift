@@ -1,7 +1,7 @@
 import Foundation
 
 // Commande macOS exacte depuis la racine Align/Align :
-// env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk -module-cache-path /tmp/align-module-cache -o /tmp/person-segmentation-harness Align/Pose/PoseDetector.swift Align/Pose/PersonSegmentationDetector.swift Align/Pose/FaceOrientation.swift Align/Pose/FaceGeometrySignal.swift Align/Camera/AnalysisCadencePolicy.swift Align/Pose/PoseResultStabilizer.swift Align/Benchmark/BenchmarkSession.swift Tests/PersonSegmentationHarness.swift && /tmp/person-segmentation-harness
+// env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk -module-cache-path /tmp/align-module-cache -o /tmp/person-segmentation-harness Align/Pose/PoseDetector.swift Align/Pose/PersonSegmentationDetector.swift Align/Pose/HumanRectangleDetector.swift Align/Pose/FaceOrientation.swift Align/Pose/FaceGeometrySignal.swift Align/Camera/AnalysisCadencePolicy.swift Align/Pose/PoseResultStabilizer.swift Align/Benchmark/BenchmarkSession.swift Tests/PersonSegmentationHarness.swift && /tmp/person-segmentation-harness
 
 @main
 private enum PersonSegmentationHarness {
@@ -152,7 +152,7 @@ private enum PersonSegmentationHarness {
         let benchmarkPresentation = AnalysisPresentationState(
             isApplicationActive: true,
             isWindowMiniaturized: false,
-            isBenchmarkRunning: true
+            benchmarkExperiment: .silhouette
         )
         expect(
             cadence.shouldRun(at: 10, presentation: benchmarkPresentation),
@@ -172,7 +172,7 @@ private enum PersonSegmentationHarness {
                 presentation: AnalysisPresentationState(
                     isApplicationActive: false,
                     isWindowMiniaturized: false,
-                    isBenchmarkRunning: false
+                    benchmarkExperiment: nil
                 )
             ),
             "la segmentation doit être inactive en arrière-plan"

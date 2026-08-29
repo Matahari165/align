@@ -22,7 +22,7 @@ private enum AnalysisCadenceHarness {
         cadence.updatePresentation(AnalysisPresentationState(
             isApplicationActive: false,
             isWindowMiniaturized: false,
-            isBenchmarkRunning: false
+            benchmarkExperiment: nil
         ))
         expect(!cadence.shouldAnalyze(at: 10.69), "l’arrière-plan ne doit pas dépasser 2 Hz")
         expect(cadence.shouldAnalyze(at: 10.7), "l’arrière-plan doit accepter 2 Hz")
@@ -31,18 +31,47 @@ private enum AnalysisCadenceHarness {
         cadence.updatePresentation(AnalysisPresentationState(
             isApplicationActive: true,
             isWindowMiniaturized: true,
-            isBenchmarkRunning: false
+            benchmarkExperiment: nil
         ))
         expect(approximately(cadence.presentation.faceInterval, 0.5), "une fenêtre réduite doit utiliser 2 Hz")
 
         cadence.updatePresentation(AnalysisPresentationState(
             isApplicationActive: false,
             isWindowMiniaturized: true,
-            isBenchmarkRunning: true
+            benchmarkExperiment: .upperBodyROI
         ))
         expect(approximately(cadence.presentation.faceInterval, 0.2), "le benchmark doit rester à 5 Hz")
         expect(cadence.presentation.publishesVisualUpdates, "le benchmark doit conserver ses mesures visuelles")
+        expect(cadence.presentation.runsUpperBodyROIExperiment, "le benchmark UI doit sélectionner le spike ROI")
+        expect(!cadence.presentation.runsSilhouetteExperiment, "le spike ROI ne doit jamais activer la silhouette")
+        expect(BenchmarkVisionExperiment.upperBodyROI.enables(.upperBodyROISpike), "le scheduler ROI doit autoriser son unité")
+        expect(!BenchmarkVisionExperiment.upperBodyROI.enables(.silhouette), "le scheduler ROI doit exclure toute segmentation")
         expect(cadence.shouldAnalyze(at: 10.9), "le passage du fond au benchmark doit appliquer 5 Hz immédiatement")
+
+        let silhouetteBenchmark = AnalysisPresentationState(
+            isApplicationActive: true,
+            isWindowMiniaturized: false,
+            benchmarkExperiment: .silhouette
+        )
+        expect(silhouetteBenchmark.runsSilhouetteExperiment, "le mode silhouette doit rester disponible explicitement")
+        expect(!silhouetteBenchmark.runsUpperBodyROIExperiment, "le mode silhouette ne doit pas activer le spike ROI")
+        expect(silhouetteBenchmark.runsNormalBodyAnalysis, "le benchmark silhouette doit conserver l'analyse corporelle normale")
+        expect(BenchmarkVisionExperiment.silhouette.enables(.silhouette), "la capacité segmentation doit rester testable")
+        expect(!BenchmarkVisionExperiment.silhouette.enables(.upperBodyROISpike), "la segmentation doit exclure le spike ROI")
+        expect(
+            BenchmarkVisionCandidatePolicy.units(for: .upperBodyROI) == [.upperBodyROISpike],
+            "le scheduler ROI doit exposer uniquement le spike ROI"
+        )
+        expect(
+            BenchmarkVisionCandidatePolicy.units(for: .silhouette) == [.silhouette],
+            "le scheduler silhouette doit exposer uniquement la segmentation"
+        )
+        expect(
+            BenchmarkVisionCandidatePolicy.units(for: nil).isEmpty,
+            "hors benchmark, aucune expérience coûteuse ne doit être candidate"
+        )
+        expect(!cadence.presentation.runsNormalBodyAnalysis, "le benchmark ROI doit remplacer l'analyse corporelle normale")
+        expect(AnalysisPresentationState.foreground.runsNormalBodyAnalysis, "le suivi normal doit conserver l'analyse corporelle")
 
         cadence.updatePresentation(.foreground)
         expect(approximately(cadence.presentation.faceInterval, 0.2), "le retour au premier plan doit restaurer 5 Hz")

@@ -79,7 +79,7 @@ struct DiagnosticsView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Démarrer benchmark") {
-                    camera.startBenchmark()
+                    camera.startBenchmark(experiment: .upperBodyROI)
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
@@ -111,7 +111,7 @@ struct DiagnosticsView: View {
                     }
                     .accessibilityLabel("Copier le rapport du benchmark")
                     Button("Recommencer") {
-                        camera.startBenchmark()
+                        camera.startBenchmark(experiment: .upperBodyROI)
                     }
                     .disabled(camera.state != .running)
                 }

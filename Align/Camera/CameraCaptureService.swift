@@ -16,6 +16,7 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
         facePoints: 0,
         bodyResults: 0,
         upperBodyLandmarks: .empty,
+        upperBodyROISpike: .empty,
         segmentationAttempts: 0,
         segmentationVisionPerforms: 0,
         segmentationResults: 0,
@@ -40,6 +41,7 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
     let facePoints: Int
     let bodyResults: Int
     let upperBodyLandmarks: UpperBodyLandmarkDiagnostics
+    let upperBodyROISpike: UpperBodyROISpikeDiagnostics
     let segmentationAttempts: Int
     let segmentationVisionPerforms: Int
     let segmentationResults: Int
@@ -60,7 +62,8 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
         let faceGeometrySummary = faceGeometry.map { " · géométrie \($0.summary)" } ?? ""
         let bodyConfidence = " · repères cou/épaules \(upperBodyLandmarks.recognizedCount)/3 · confiance \(upperBodyLandmarks.neckConfidence.map { String(format: "%.0f", $0 * 100) } ?? "—")/\(upperBodyLandmarks.leftShoulderConfidence.map { String(format: "%.0f", $0 * 100) } ?? "—")/\(upperBodyLandmarks.rightShoulderConfidence.map { String(format: "%.0f", $0 * 100) } ?? "—")"
         let segmentation = " · silhouette \(segmentationState.displayName) · cadence/performs/valid \(segmentationAttempts)/\(segmentationVisionPerforms)/\(segmentationContoursValid), \(segmentationDurationP95.map { String(format: "p95 %.0f ms", $0 * 1_000) } ?? "p95 —")"
-        return "Frames \(frameCallbacks) · analyses \(analyses) · orientation \(orientation) · faces \(faceResults) / landmarks \(facesWithLandmarks) / points \(facePoints) · corps \(bodyResults)\(bodyConfidence)\(segmentation)\(faceOrientationSummary)\(faceGeometrySummary)\(error)"
+        let roiSpike = upperBodyROISpike.rectangleAttempts > 0 ? " · spike ROI \(upperBodyROISpike.summary)" : ""
+        return "Frames \(frameCallbacks) · analyses \(analyses) · orientation \(orientation) · faces \(faceResults) / landmarks \(facesWithLandmarks) / points \(facePoints) · corps \(bodyResults)\(bodyConfidence)\(segmentation)\(roiSpike)\(faceOrientationSummary)\(faceGeometrySummary)\(error)"
     }
 }
 
@@ -120,6 +123,7 @@ final class CameraCaptureService: ObservableObject {
     private var activationID = 0
     private var activePoseGeneration: PoseProcessingGeneration?
     private var benchmarkSession: BenchmarkSession?
+    private var benchmarkExperiment: BenchmarkVisionExperiment?
     private var benchmarkSegmentationEpoch = BenchmarkSegmentationEpoch()
     private let benchmarkSegmentationCancellation = BenchmarkSegmentationCancellationBox()
     private var benchmarkProgressTask: Task<Void, Never>?
@@ -260,7 +264,7 @@ final class CameraCaptureService: ObservableObject {
         }
     }
 
-    func startBenchmark() {
+    func startBenchmark(experiment: BenchmarkVisionExperiment) {
         guard state == .running,
               isApplicationActive,
               !isWindowMiniaturized else { return }
@@ -268,8 +272,11 @@ final class CameraCaptureService: ObservableObject {
         var benchmark = BenchmarkSession()
         let uptime = ProcessInfo.processInfo.systemUptime
         benchmark.start(at: uptime)
-        let segmentationToken = benchmarkSegmentationEpoch.begin()
-        benchmarkSegmentationCancellation.activate(segmentationToken)
+        benchmarkExperiment = experiment
+        // The token guards every expensive benchmark probe. The selected
+        // experiment below decides which probe is actually eligible.
+        let benchmarkToken = benchmarkSegmentationEpoch.begin()
+        benchmarkSegmentationCancellation.activate(benchmarkToken)
         benchmarkSession = benchmark
         updateAnalysisPresentation()
         if let progress = benchmark.progress(at: uptime) {
@@ -282,10 +289,12 @@ final class CameraCaptureService: ObservableObject {
                 guard let self, var benchmark = self.benchmarkSession else { return }
                 let now = ProcessInfo.processInfo.systemUptime
                 if benchmark.isComplete(at: now) {
-                    let report = benchmark.finish(at: now)
+                    let rawReport = benchmark.finish(at: now)
+                    let report = "Expérience : \(self.benchmarkExperiment?.reportName ?? "inconnue")\n\(rawReport)"
                     self.benchmarkSegmentationCancellation.invalidate()
                     self.benchmarkSegmentationEpoch.invalidate()
                     self.benchmarkSession = nil
+                    self.benchmarkExperiment = nil
                     self.benchmarkState = .completed(report)
                     self.updateAnalysisPresentation()
                     return
@@ -304,6 +313,7 @@ final class CameraCaptureService: ObservableObject {
         benchmarkSegmentationCancellation.invalidate()
         benchmarkSegmentationEpoch.invalidate()
         benchmarkSession = nil
+        benchmarkExperiment = nil
         benchmarkState = .idle
         updateAnalysisPresentation()
     }
@@ -333,6 +343,7 @@ final class CameraCaptureService: ObservableObject {
         benchmarkSegmentationCancellation.invalidate()
         benchmarkSegmentationEpoch.invalidate()
         benchmarkSession = nil
+        benchmarkExperiment = nil
         benchmarkState = .invalidated(reason)
         updateAnalysisPresentation()
     }
@@ -353,7 +364,7 @@ final class CameraCaptureService: ObservableObject {
         AnalysisPresentationState(
             isApplicationActive: isApplicationActive,
             isWindowMiniaturized: isWindowMiniaturized,
-            isBenchmarkRunning: benchmarkSession != nil
+            benchmarkExperiment: benchmarkSession == nil ? nil : benchmarkExperiment
         )
     }
 
@@ -575,6 +586,7 @@ private enum CameraError: LocalizedError {
 
 nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let detector = PoseDetector()
+    private let humanRectangleDetector = HumanRectangleDetector()
     private let segmentationDetector = PersonSegmentationDetector()
     private let segmentationCancellation: BenchmarkSegmentationCancellationBox
     private let onEvent: @Sendable (PoseProcessingEvent, PoseProcessingGeneration) -> Void
@@ -616,6 +628,8 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     private var segmentationState: PersonSegmentationAvailability = .notRequested
     private var lastUpperBodyLandmarks = UpperBodyLandmarkDiagnostics.empty
     private var benchmarkSegmentationToken: UInt64?
+    private var upperBodyROICadence = UpperBodyROISpikeCadence()
+    private var upperBodyROISpike = UpperBodyROISpikeDiagnostics.empty
 
     init(
         sampleQueue: DispatchQueue,
@@ -648,12 +662,14 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         bodyExpirationWorkItem?.cancel()
         bodyExpirationWorkItem = nil
         bodyFreshness.reset(generation: generation.activationID)
+        upperBodyROICadence.reset()
+        upperBodyROISpike = .empty
         silhouetteCadence.reset()
         silhouetteFreshness.reset(generation: generation.activationID)
         silhouetteExpirationWorkItem?.cancel()
         silhouetteExpirationWorkItem = nil
         if isActive,
-           analysisCadence.presentation.isBenchmarkRunning,
+           analysisCadence.presentation.runsSilhouetteExperiment,
            benchmarkSegmentationToken != nil {
             segmentationDetector.activate()
         } else {
@@ -683,7 +699,11 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     ) {
         analysisCadence.updatePresentation(presentation)
         benchmarkSegmentationToken = benchmarkToken
-        if !presentation.isBenchmarkRunning || benchmarkToken == nil {
+        if !presentation.runsUpperBodyROIExperiment {
+            upperBodyROICadence.reset()
+            upperBodyROISpike = .empty
+        }
+        if !presentation.runsSilhouetteExperiment || benchmarkToken == nil {
             silhouetteExpirationWorkItem?.cancel()
             silhouetteExpirationWorkItem = nil
             silhouetteCadence.reset()
@@ -726,6 +746,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         var segmentationWasInsufficient = false
         var segmentationError = false
         var segmentationDuration: TimeInterval?
+        var roiSpikeMeasurement: UpperBodyROISpikeMeasurement?
 
         switch unit {
         case .face:
@@ -906,6 +927,93 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                 ), uptime), generation)
             }) else { return }
             return
+
+        case .upperBodyROISpike:
+            guard let token = benchmarkSegmentationToken,
+                  segmentationCancellation.accepts(token),
+                  analysisCadence.presentation.runsUpperBodyROIExperiment,
+                  let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+            let stage = upperBodyROICadence.claimStage(at: uptime)
+            enum PreparedSpikeResult {
+                case rectangle(Result<HumanRectangleDetection, Error>)
+                case fullFrame(Result<(BodyDetectionOutput, TimeInterval), Error>)
+                case region(Result<(BodyDetectionOutput, TimeInterval), Error>)
+            }
+            let prepared: PreparedSpikeResult
+            switch stage {
+            case .humanRectangle:
+                do {
+                    prepared = .rectangle(.success(try humanRectangleDetector.detect(in: pixelBuffer)))
+                } catch {
+                    prepared = .rectangle(.failure(error))
+                }
+            case .fullFrameBody:
+                let start = ProcessInfo.processInfo.systemUptime
+                do {
+                    prepared = .fullFrame(.success((try detector.detectBody(in: pixelBuffer), ProcessInfo.processInfo.systemUptime - start)))
+                } catch {
+                    prepared = .fullFrame(.failure(error))
+                }
+            case .regionBody(let region):
+                let start = ProcessInfo.processInfo.systemUptime
+                do {
+                    prepared = .region(.success((try detector.detectBody(in: pixelBuffer, regionOfInterest: region), ProcessInfo.processInfo.systemUptime - start)))
+                } catch {
+                    prepared = .region(.failure(error))
+                }
+            }
+            guard segmentationCancellation.withAcceptedToken(token, commit: {
+                guard benchmarkSegmentationToken == token,
+                      analysisCadence.presentation.runsUpperBodyROIExperiment else { return }
+                switch prepared {
+                case .rectangle(.success(let detection)):
+                    upperBodyROISpike.clearBodyComparison()
+                    upperBodyROISpike.rectangleAttempts += 1
+                    upperBodyROISpike.rectangleDuration = detection.duration
+                    upperBodyROISpike.rectangleConfidence = detection.confidence
+                    if detection.resultCount > 0 { upperBodyROISpike.rectangleResults += 1 }
+                    if detection.isAccepted { upperBodyROISpike.rectangleAccepted += 1 }
+                    upperBodyROICadence.continueAfterRectangle(detection.regionOfInterest)
+                    roiSpikeMeasurement = .rectangle(resultCount: detection.resultCount, accepted: detection.isAccepted, confidence: detection.confidence, duration: detection.duration, error: false)
+                    lastVisionError = nil
+                case .rectangle(.failure(let error)):
+                    upperBodyROISpike.clearBodyComparison()
+                    upperBodyROISpike.rectangleAttempts += 1
+                    upperBodyROISpike.rectangleErrors += 1
+                    upperBodyROISpike.rectangleConfidence = nil
+                    upperBodyROISpike.rectangleDuration = nil
+                    upperBodyROICadence.continueAfterRectangle(nil)
+                    roiSpikeMeasurement = .rectangle(resultCount: 0, accepted: false, confidence: nil, duration: 0, error: true)
+                    lastVisionError = "Rectangle humain : \(error.localizedDescription)"
+                case .fullFrame(.success(let (body, duration))):
+                    upperBodyROISpike.fullFrameAttempts += 1
+                    upperBodyROISpike.fullFrameDuration = duration
+                    upperBodyROISpike.fullFrameCoverage = body.upperBodyLandmarks.recognizedCount
+                    upperBodyROICadence.continueAfterFullFrame()
+                    roiSpikeMeasurement = .fullFrame(coverage: body.upperBodyLandmarks.recognizedCount, duration: duration, error: false)
+                    lastVisionError = nil
+                case .fullFrame(.failure(let error)):
+                    upperBodyROISpike.clearRegionComparison()
+                    upperBodyROISpike.fullFrameAttempts += 1
+                    upperBodyROISpike.fullFrameCoverage = nil
+                    upperBodyROISpike.fullFrameDuration = nil
+                    upperBodyROICadence.continueAfterFullFrame()
+                    roiSpikeMeasurement = .fullFrame(coverage: nil, duration: 0, error: true)
+                    lastVisionError = "Corps plein benchmark : \(error.localizedDescription)"
+                case .region(.success(let (body, duration))):
+                    upperBodyROISpike.regionAttempts += 1
+                    upperBodyROISpike.regionDuration = duration
+                    upperBodyROISpike.regionCoverage = body.upperBodyLandmarks.recognizedCount
+                    roiSpikeMeasurement = .region(coverage: body.upperBodyLandmarks.recognizedCount, duration: duration, error: false)
+                    lastVisionError = nil
+                case .region(.failure(let error)):
+                    upperBodyROISpike.regionAttempts += 1
+                    upperBodyROISpike.regionCoverage = nil
+                    upperBodyROISpike.regionDuration = nil
+                    roiSpikeMeasurement = .region(coverage: nil, duration: 0, error: true)
+                    lastVisionError = "Corps ROI benchmark : \(error.localizedDescription)"
+                }
+            }) else { return }
         }
 
         if bodyOverlayAvailableUntil.map({ uptime < $0 }) != true {
@@ -930,6 +1038,8 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             case .body:
                 onEvent(.overlay(fusedOverlay), generation)
             case .silhouette:
+                break
+            case .upperBodyROISpike:
                 break
             }
         }
@@ -963,7 +1073,8 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                 segmentationContourValid: segmentationContourValid,
                 segmentationInsufficient: segmentationWasInsufficient,
                 segmentationError: segmentationError,
-                segmentationDuration: segmentationDuration
+                segmentationDuration: segmentationDuration,
+                upperBodyROISpike: roiSpikeMeasurement
             ), uptime), generation)
         }
     }
@@ -1029,11 +1140,14 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             analysisCadence.isDue(at: uptime)
                 ? VisionAnalysisCandidate(unit: .face, overdue: analysisCadence.lastAnalysisUptime == nil ? 1 : analysisCadence.overdue(at: uptime), priority: 3)
                 : nil,
-            bodyCadence.isDue(at: uptime)
+            (presentation.runsNormalBodyAnalysis && bodyCadence.isDue(at: uptime))
                 ? VisionAnalysisCandidate(unit: .body, overdue: bodyCadence.lastAttemptUptime == nil ? 1 : bodyCadence.overdue(at: uptime), priority: 2)
                 : nil,
-            silhouetteCadence.isDue(at: uptime, presentation: presentation)
+            (presentation.runsSilhouetteExperiment && silhouetteCadence.isDue(at: uptime, presentation: presentation))
                 ? VisionAnalysisCandidate(unit: .silhouette, overdue: silhouetteCadence.lastAttemptUptime == nil ? 1 : silhouetteCadence.overdue(at: uptime), priority: 1)
+                : nil,
+            upperBodyROICadence.isDue(at: uptime, benchmarkRunning: presentation.runsUpperBodyROIExperiment)
+                ? VisionAnalysisCandidate(unit: .upperBodyROISpike, overdue: 0, priority: 1)
                 : nil
         ].compactMap { $0 }
         return VisionAnalysisSelector.select(candidates)
@@ -1175,6 +1289,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             facePoints: inference?.facePointCount ?? 0,
             bodyResults: inference?.bodyResultCount ?? 0,
             upperBodyLandmarks: lastUpperBodyLandmarks,
+            upperBodyROISpike: upperBodyROISpike,
             segmentationAttempts: segmentationAttempts,
             segmentationVisionPerforms: segmentationVisionPerforms,
             segmentationResults: segmentationResults,

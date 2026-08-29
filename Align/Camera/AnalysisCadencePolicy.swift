@@ -1,9 +1,46 @@
+import CoreGraphics
 import Foundation
 
 nonisolated enum VisionAnalysisUnit: String, Sendable {
     case face
     case body
     case silhouette
+    case upperBodyROISpike
+}
+
+/// Expensive Vision probes are mutually exclusive so one benchmark measures
+/// one experiment instead of making two heavyweight pipelines compete.
+nonisolated enum BenchmarkVisionExperiment: Sendable, Equatable {
+    case upperBodyROI
+    case silhouette
+
+    func enables(_ unit: VisionAnalysisUnit) -> Bool {
+        switch (self, unit) {
+        case (.upperBodyROI, .upperBodyROISpike), (.silhouette, .silhouette): true
+        default: false
+        }
+    }
+
+    var reportName: String {
+        switch self {
+        case .upperBodyROI: "cou et épaules : plein cadre comparé à ROI"
+        case .silhouette: "silhouette par segmentation"
+        }
+    }
+}
+
+nonisolated enum BenchmarkVisionCandidatePolicy {
+    static func units(for experiment: BenchmarkVisionExperiment?) -> [VisionAnalysisUnit] {
+        switch experiment {
+        case .upperBodyROI: [.upperBodyROISpike]
+        case .silhouette: [.silhouette]
+        case nil: []
+        }
+    }
+
+    static func allows(_ unit: VisionAnalysisUnit, in presentation: AnalysisPresentationState) -> Bool {
+        units(for: presentation.benchmarkExperiment).contains { $0 == unit }
+    }
 }
 
 /// Epoch independent from pose-processing generations. It invalidates a
@@ -95,15 +132,74 @@ nonisolated struct VisionCallbackBudget: Sendable {
     }
 }
 
+nonisolated enum UpperBodyROISpikeStage: Sendable, Equatable {
+    case humanRectangle
+    case fullFrameBody
+    case regionBody(CGRect)
+}
+
+/// Benchmark-only three-step probe. Each stage consumes a distinct camera
+/// callback so rectangle, full-frame body and ROI body never share a perform.
+nonisolated struct UpperBodyROISpikeCadence: Sendable {
+    /// One pair every two seconds: full and ROI each run at ~0.5 Hz, keeping
+    /// the total body-pose benchmark budget near 1 Hz.
+    static let interval: TimeInterval = 2.0
+    private(set) var lastCycleUptime: TimeInterval?
+    private(set) var pendingStage: UpperBodyROISpikeStage?
+    private var queuedRegion: CGRect?
+
+    func isDue(at uptime: TimeInterval, benchmarkRunning: Bool) -> Bool {
+        guard benchmarkRunning else { return false }
+        if pendingStage != nil { return true }
+        guard let lastCycleUptime else { return true }
+        return uptime - lastCycleUptime >= Self.interval
+    }
+
+    mutating func claimStage(at uptime: TimeInterval) -> UpperBodyROISpikeStage {
+        if let pendingStage {
+            self.pendingStage = nil
+            return pendingStage
+        }
+        lastCycleUptime = uptime
+        return .humanRectangle
+    }
+
+    mutating func continueAfterRectangle(_ region: CGRect?) {
+        guard let region else {
+            pendingStage = nil
+            queuedRegion = nil
+            return
+        }
+        pendingStage = .fullFrameBody
+        queuedRegion = region
+    }
+
+    mutating func continueAfterFullFrame() {
+        if let queuedRegion { pendingStage = .regionBody(queuedRegion) }
+        queuedRegion = nil
+    }
+
+    mutating func reset() {
+        lastCycleUptime = nil
+        pendingStage = nil
+        queuedRegion = nil
+    }
+}
+
 nonisolated struct AnalysisPresentationState: Equatable, Sendable {
     var isApplicationActive: Bool
     var isWindowMiniaturized: Bool
-    var isBenchmarkRunning: Bool
+    var benchmarkExperiment: BenchmarkVisionExperiment?
+
+    var isBenchmarkRunning: Bool { benchmarkExperiment != nil }
+    var runsSilhouetteExperiment: Bool { BenchmarkVisionCandidatePolicy.allows(.silhouette, in: self) }
+    var runsUpperBodyROIExperiment: Bool { BenchmarkVisionCandidatePolicy.allows(.upperBodyROISpike, in: self) }
+    var runsNormalBodyAnalysis: Bool { !runsUpperBodyROIExperiment }
 
     static let foreground = AnalysisPresentationState(
         isApplicationActive: true,
         isWindowMiniaturized: false,
-        isBenchmarkRunning: false
+        benchmarkExperiment: nil
     )
 
     var faceInterval: TimeInterval {

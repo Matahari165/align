@@ -75,6 +75,7 @@ nonisolated struct BenchmarkMeasurement: Sendable {
     let segmentationInsufficient: Bool
     let segmentationError: Bool
     let segmentationDuration: TimeInterval?
+    let upperBodyROISpike: UpperBodyROISpikeMeasurement?
 
     init(
         faceAttempted: Bool = true,
@@ -99,7 +100,8 @@ nonisolated struct BenchmarkMeasurement: Sendable {
         segmentationContourValid: Bool = false,
         segmentationInsufficient: Bool = false,
         segmentationError: Bool = false,
-        segmentationDuration: TimeInterval? = nil
+        segmentationDuration: TimeInterval? = nil,
+        upperBodyROISpike: UpperBodyROISpikeMeasurement? = nil
     ) {
         self.faceAttempted = faceAttempted
         self.faceDuration = faceDuration
@@ -124,6 +126,7 @@ nonisolated struct BenchmarkMeasurement: Sendable {
         self.segmentationInsufficient = segmentationInsufficient
         self.segmentationError = segmentationError
         self.segmentationDuration = segmentationDuration
+        self.upperBodyROISpike = upperBodyROISpike
     }
 }
 
@@ -252,6 +255,20 @@ nonisolated struct BenchmarkMetrics: Sendable {
     private(set) var segmentationInsufficient = 0
     private(set) var segmentationErrors = 0
     private(set) var segmentationDurations = DurationAggregate()
+    private(set) var roiRectangleAttempts = 0
+    private(set) var roiRectangleResults = 0
+    private(set) var roiRectangleAccepted = 0
+    private(set) var roiRectangleErrors = 0
+    private(set) var roiRectangleConfidence = ScalarAggregate()
+    private(set) var roiRectangleDurations = DurationAggregate()
+    private(set) var roiFullAttempts = 0
+    private(set) var roiFullCoverage = [Int](repeating: 0, count: 4)
+    private(set) var roiFullErrors = 0
+    private(set) var roiFullDurations = DurationAggregate()
+    private(set) var roiRegionAttempts = 0
+    private(set) var roiRegionCoverage = [Int](repeating: 0, count: 4)
+    private(set) var roiRegionErrors = 0
+    private(set) var roiRegionDurations = DurationAggregate()
     private var interruptionStart: TimeInterval?
     private var hasSeenOverlay = false
 
@@ -277,6 +294,27 @@ nonisolated struct BenchmarkMetrics: Sendable {
         if measurement.segmentationInsufficient { segmentationInsufficient += 1 }
         if measurement.segmentationError { segmentationErrors += 1 }
         if let duration = measurement.segmentationDuration { segmentationDurations.record(duration) }
+        if let spike = measurement.upperBodyROISpike {
+            switch spike {
+            case .rectangle(let resultCount, let accepted, let confidence, let duration, let error):
+                roiRectangleAttempts += 1
+                if resultCount > 0 { roiRectangleResults += 1 }
+                if accepted { roiRectangleAccepted += 1 }
+                if error { roiRectangleErrors += 1 }
+                roiRectangleConfidence.record(confidence.map(Double.init))
+                if !error { roiRectangleDurations.record(duration) }
+            case .fullFrame(let coverage, let duration, let error):
+                roiFullAttempts += 1
+                if error { roiFullErrors += 1 }
+                if let coverage { roiFullCoverage[min(3, max(0, coverage))] += 1 }
+                if !error { roiFullDurations.record(duration) }
+            case .region(let coverage, let duration, let error):
+                roiRegionAttempts += 1
+                if error { roiRegionErrors += 1 }
+                if let coverage { roiRegionCoverage[min(3, max(0, coverage))] += 1 }
+                if !error { roiRegionDurations.record(duration) }
+            }
+        }
 
         if measurement.bodyAttempted, let bodyDuration = measurement.bodyDuration {
             bodyAttempts += 1
@@ -351,6 +389,10 @@ nonisolated struct BenchmarkMetrics: Sendable {
             "Overlay : \(overlayDropouts) pertes, interruption max \(String(format: "%.2f s", longestInterruption)), récupération moyenne \(String(format: "%.2f s", recoveryDurations.average))",
             "Géométrie globale : eye-roll \(benchmarkScalarReport(geometryEyeLineRoll)), yaw-proxy \(benchmarkScalarReport(geometryYawProxy)), pitch-proxy \(benchmarkScalarReport(geometryPitchProxy)), interoculaire \(benchmarkScalarReport(geometryInterocularDistance)), longueur \(benchmarkScalarReport(geometryFaceLength))",
             "Silhouette : cadence \(segmentationAttempts), performs \(segmentationVisionPerforms), résultats \(segmentationResults), contours valides \(segmentationContoursValid), insuffisant \(segmentationInsufficient), erreurs \(segmentationErrors), visibilité fusionnée \(silhouetteVisibleSamples), durée p50/p95/max \(milliseconds(segmentationDurations.p50)) / \(milliseconds(segmentationDurations.p95)) / \(milliseconds(segmentationDurations.count == 0 ? nil : segmentationDurations.maximum))",
+            "Spike rectangle humain : bruts \(roiRectangleResults)/\(roiRectangleAttempts), acceptés >=50 % \(roiRectangleAccepted), erreurs \(roiRectangleErrors), confiance \(benchmarkScalarReport(roiRectangleConfidence)), durée p95 \(milliseconds(roiRectangleDurations.p95))",
+            "Comparaison corps plein : \(roiFullAttempts) tentatives, couverture 0/1/2/3 = \(roiFullCoverage.map(String.init).joined(separator: "/")), erreurs \(roiFullErrors), durée p95 \(milliseconds(roiFullDurations.p95))",
+            "Comparaison corps ROI : \(roiRegionAttempts) tentatives, couverture 0/1/2/3 = \(roiRegionCoverage.map(String.init).joined(separator: "/")), erreurs \(roiRegionErrors), durée p95 \(milliseconds(roiRegionDurations.p95))",
+            "Note comparaison : plein cadre et ROI partagent uniquement les cycles avec rectangle accepté, mais utilisent des callbacks successifs non appariés ; Align suppose une seule personne devant la caméra.",
             "CPU/RSS : à mesurer séparément via CLI"
         ].joined(separator: "\n")
     }

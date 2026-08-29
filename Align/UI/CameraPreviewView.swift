@@ -16,6 +16,7 @@ struct CameraPreviewView: NSViewRepresentable {
 }
 
 final class CameraPreviewNSView: NSView {
+    private let mirroredContentLayer = CALayer()
     private let previewLayer: AVCaptureVideoPreviewLayer
     private let jointLayer = CALayer()
     private let faceShapeLayer = CAShapeLayer()
@@ -30,7 +31,8 @@ final class CameraPreviewNSView: NSView {
         layer?.backgroundColor = NSColor.black.cgColor
 
         previewLayer.videoGravity = .resizeAspectFill
-        configureMirroring()
+        configureUnmirroredPreviewConnection()
+        mirroredContentLayer.anchorPoint = .zero
         jointLayer.masksToBounds = true
         faceShapeLayer.fillColor = NSColor.clear.cgColor
         faceShapeLayer.strokeColor = NSColor.systemCyan.cgColor
@@ -49,8 +51,9 @@ final class CameraPreviewNSView: NSView {
         jointLayer.addSublayer(faceShapeLayer)
         jointLayer.addSublayer(bodyShapeLayer)
         jointLayer.addSublayer(silhouetteShapeLayer)
-        layer?.addSublayer(previewLayer)
-        layer?.addSublayer(jointLayer)
+        mirroredContentLayer.addSublayer(previewLayer)
+        mirroredContentLayer.addSublayer(jointLayer)
+        layer?.addSublayer(mirroredContentLayer)
     }
 
     @available(*, unavailable)
@@ -60,15 +63,24 @@ final class CameraPreviewNSView: NSView {
 
     override func layout() {
         super.layout()
-        previewLayer.frame = bounds
-        jointLayer.frame = bounds
-        faceShapeLayer.frame = bounds
-        bodyShapeLayer.frame = bounds
-        silhouetteShapeLayer.frame = bounds
-        configureMirroring()
+        mirroredContentLayer.bounds = CGRect(origin: .zero, size: bounds.size)
+        mirroredContentLayer.position = .zero
+        previewLayer.frame = mirroredContentLayer.bounds
+        jointLayer.frame = mirroredContentLayer.bounds
+        faceShapeLayer.frame = mirroredContentLayer.bounds
+        bodyShapeLayer.frame = mirroredContentLayer.bounds
+        silhouetteShapeLayer.frame = mirroredContentLayer.bounds
+        mirroredContentLayer.setAffineTransform(
+            PreviewMirrorTransform.layerTransform(width: bounds.width)
+        )
+        configureUnmirroredPreviewConnection()
     }
 
     func update(overlay: PoseOverlay) {
+        // The preview connection may be created only after the capture input is
+        // configured. Reassert the single-mirror contract on SwiftUI updates.
+        configureUnmirroredPreviewConnection()
+
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
@@ -111,11 +123,13 @@ final class CameraPreviewNSView: NSView {
         return previewLayer.layerPointConverted(fromCaptureDevicePoint: devicePoint)
     }
 
-    private func configureMirroring() {
+    /// Keep the capture/preview coordinate system anatomical and unmirrored.
+    /// The containing layer mirrors the video and every overlay together once.
+    private func configureUnmirroredPreviewConnection() {
         guard let connection = previewLayer.connection else { return }
         connection.automaticallyAdjustsVideoMirroring = false
         if connection.isVideoMirroringSupported {
-            connection.isVideoMirrored = true
+            connection.isVideoMirrored = false
         }
     }
 }
