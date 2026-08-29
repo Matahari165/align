@@ -9,10 +9,19 @@ import SwiftUI
 
 @main
 struct AlignApp: App {
+    @StateObject private var appModel = AppModel()
+
     var body: some Scene {
-        WindowGroup {
-            ContentView()
+        Window("Align", id: "main") {
+            ContentView(camera: appModel.camera)
         }
         .defaultSize(width: 760, height: 560)
+
+        MenuBarExtra {
+            StatusMenuView(camera: appModel.camera, onQuit: appModel.quit)
+        } label: {
+            StatusMenuLabel(camera: appModel.camera)
+        }
+        .menuBarExtraStyle(.menu)
     }
 }

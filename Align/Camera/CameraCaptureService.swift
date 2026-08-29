@@ -248,7 +248,7 @@ final class CameraCaptureService: ObservableObject {
         }
     }
 
-    func stop() {
+    func stop(completion: (@MainActor @Sendable () -> Void)? = nil) {
         cancelBenchmark()
         operationID += 1
         setPoseProcessingActive(false)
@@ -256,7 +256,12 @@ final class CameraCaptureService: ObservableObject {
         trackingMode = nil
         overlay = .empty
         state = .idle
-        sessionRuntime.stop(operationID: operationID)
+        sessionRuntime.stop(operationID: operationID) {
+            guard let completion else { return }
+            Task { @MainActor in
+                completion()
+            }
+        }
     }
 
     func startBenchmark() {
@@ -477,13 +482,20 @@ nonisolated private final class CameraSessionRuntime: @unchecked Sendable {
         }
     }
 
-    func stop(operationID: Int) {
+    func stop(
+        operationID: Int,
+        completion: (@Sendable () -> Void)? = nil
+    ) {
         queue.async { [self] in
-            guard operationID >= expectedOperationID else { return }
+            guard operationID >= expectedOperationID else {
+                completion?()
+                return
+            }
             expectedOperationID = operationID
             if session.isRunning {
                 session.stopRunning()
             }
+            completion?()
         }
     }
 
