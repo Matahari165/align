@@ -15,9 +15,7 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
         facesWithLandmarks: 0,
         facePoints: 0,
         bodyResults: 0,
-        neckConfidence: nil,
-        leftShoulderConfidence: nil,
-        rightShoulderConfidence: nil,
+        upperBodyLandmarks: .empty,
         segmentationAttempts: 0,
         segmentationVisionPerforms: 0,
         segmentationResults: 0,
@@ -41,9 +39,7 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
     let facesWithLandmarks: Int
     let facePoints: Int
     let bodyResults: Int
-    let neckConfidence: Float?
-    let leftShoulderConfidence: Float?
-    let rightShoulderConfidence: Float?
+    let upperBodyLandmarks: UpperBodyLandmarkDiagnostics
     let segmentationAttempts: Int
     let segmentationVisionPerforms: Int
     let segmentationResults: Int
@@ -62,7 +58,7 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
         let error = lastVisionError.map { " · erreur: \($0)" } ?? ""
         let faceOrientationSummary = faceOrientation.map { " · visage \($0.summary)" } ?? ""
         let faceGeometrySummary = faceGeometry.map { " · géométrie \($0.summary)" } ?? ""
-        let bodyConfidence = " · confiance cou/épaules \(neckConfidence.map { String(format: "%.0f", $0 * 100) } ?? "—")/\(leftShoulderConfidence.map { String(format: "%.0f", $0 * 100) } ?? "—")/\(rightShoulderConfidence.map { String(format: "%.0f", $0 * 100) } ?? "—")"
+        let bodyConfidence = " · repères cou/épaules \(upperBodyLandmarks.recognizedCount)/3 · confiance \(upperBodyLandmarks.neckConfidence.map { String(format: "%.0f", $0 * 100) } ?? "—")/\(upperBodyLandmarks.leftShoulderConfidence.map { String(format: "%.0f", $0 * 100) } ?? "—")/\(upperBodyLandmarks.rightShoulderConfidence.map { String(format: "%.0f", $0 * 100) } ?? "—")"
         let segmentation = " · silhouette \(segmentationState.displayName) · cadence/performs/valid \(segmentationAttempts)/\(segmentationVisionPerforms)/\(segmentationContoursValid), \(segmentationDurationP95.map { String(format: "p95 %.0f ms", $0 * 1_000) } ?? "p95 —")"
         return "Frames \(frameCallbacks) · analyses \(analyses) · orientation \(orientation) · faces \(faceResults) / landmarks \(facesWithLandmarks) / points \(facePoints) · corps \(bodyResults)\(bodyConfidence)\(segmentation)\(faceOrientationSummary)\(faceGeometrySummary)\(error)"
     }
@@ -597,6 +593,9 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     private var bodyCadence = BodyCadenceController()
     private var callbackBudget = VisionCallbackBudget()
     private var bodyStatusAvailableUntil: TimeInterval?
+    private var bodyOverlayAvailableUntil: TimeInterval?
+    private var bodyExpirationWorkItem: DispatchWorkItem?
+    private var bodyFreshness = BodyOverlayFreshnessTracker()
     private var silhouetteCadence = SilhouetteCadenceController()
     private var silhouetteFreshness = SilhouetteOverlayFreshnessTracker()
     private var silhouetteExpirationWorkItem: DispatchWorkItem?
@@ -615,7 +614,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     private var segmentationDurationP95: TimeInterval?
     private var segmentationDurationMax: TimeInterval?
     private var segmentationState: PersonSegmentationAvailability = .notRequested
-    private var lastBodyConfidences: [String: Float] = [:]
+    private var lastUpperBodyLandmarks = UpperBodyLandmarkDiagnostics.empty
     private var benchmarkSegmentationToken: UInt64?
 
     init(
@@ -645,6 +644,10 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         lastVisionError = nil
         bodyCadence.reset()
         bodyStatusAvailableUntil = nil
+        bodyOverlayAvailableUntil = nil
+        bodyExpirationWorkItem?.cancel()
+        bodyExpirationWorkItem = nil
+        bodyFreshness.reset(generation: generation.activationID)
         silhouetteCadence.reset()
         silhouetteFreshness.reset(generation: generation.activationID)
         silhouetteExpirationWorkItem?.cancel()
@@ -671,7 +674,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         segmentationDurationP95 = nil
         segmentationDurationMax = nil
         segmentationState = .notRequested
-        lastBodyConfidences = [:]
+        lastUpperBodyLandmarks = .empty
     }
 
     func updatePresentation(
@@ -713,6 +716,9 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         var bodyDuration: TimeInterval?
         var bodyAttempted = false
         var bodySucceeded = false
+        var bodyObservationAvailable = false
+        var bodyInferenceError = false
+        var upperBodyLandmarks: UpperBodyLandmarkDiagnostics?
         var segmentationAttempted = false
         var segmentationVisionPerformed = false
         var segmentationResult = false
@@ -755,9 +761,14 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             bodyCadence.recordAttempt(at: uptime, bodyAvailable: false)
             bodyAttempted = true
             guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+                bodyInferenceError = true
+                bodyExpirationWorkItem?.cancel()
+                bodyExpirationWorkItem = nil
                 latestBodyDetection = nil
                 bodyStatusAvailableUntil = nil
-                lastBodyConfidences = [:]
+                bodyOverlayAvailableUntil = nil
+                bodyFreshness.recordMiss()
+                lastUpperBodyLandmarks = .empty
                 bodyDuration = 0
                 lastVisionError = "Corps : buffer vidéo absent"
                 break
@@ -768,15 +779,29 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                 bodyDuration = ProcessInfo.processInfo.systemUptime - start
                 latestBodyDetection = body
                 bodySucceeded = body.hasUpperBody
-                lastBodyConfidences = body.confidenceByName
+                bodyObservationAvailable = body.resultCount > 0
+                upperBodyLandmarks = bodyObservationAvailable ? body.upperBodyLandmarks : nil
+                lastUpperBodyLandmarks = body.upperBodyLandmarks
                 bodyStatusAvailableUntil = body.hasUpperBody ? uptime + 1.2 : nil
+                bodyOverlayAvailableUntil = bodyObservationAvailable ? uptime + BodyOverlayFreshnessTracker.maxAge : nil
+                if bodyObservationAvailable {
+                    bodyFreshness.recordObservation(at: uptime, generation: generation.activationID)
+                } else {
+                    bodyFreshness.recordMiss()
+                }
+                scheduleBodyExpirationIfNeeded(at: uptime)
                 bodyCadence.recordAttempt(at: uptime, bodyAvailable: body.hasUpperBody)
                 lastVisionError = nil
             } catch {
                 bodyDuration = ProcessInfo.processInfo.systemUptime - start
+                bodyInferenceError = true
+                bodyExpirationWorkItem?.cancel()
+                bodyExpirationWorkItem = nil
                 latestBodyDetection = nil
                 bodyStatusAvailableUntil = nil
-                lastBodyConfidences = [:]
+                bodyOverlayAvailableUntil = nil
+                bodyFreshness.recordMiss()
+                lastUpperBodyLandmarks = .empty
                 lastVisionError = "Corps : \(error.localizedDescription)"
             }
 
@@ -865,6 +890,8 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                     bodyDuration: nil,
                     bodyAttempted: false,
                     bodySucceeded: false,
+                    bodyObservationAvailable: false,
+                    bodyInferenceError: false,
                     overlayVisible: !fusedOverlay.isEmpty,
                     faceVisible: !latestFaceDetection.polylines.isEmpty,
                     bodyVisible: !latestBodyDetectionPoints(at: uptime).isEmpty,
@@ -881,9 +908,13 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             return
         }
 
-        if bodyStatusAvailableUntil.map({ uptime < $0 }) != true {
+        if bodyOverlayAvailableUntil.map({ uptime < $0 }) != true {
             latestBodyDetection = nil
-            lastBodyConfidences = [:]
+            lastUpperBodyLandmarks = .empty
+            bodyOverlayAvailableUntil = nil
+        }
+        if bodyStatusAvailableUntil.map({ uptime < $0 }) != true {
+            bodyStatusAvailableUntil = nil
         }
         let fused = detector.combine(
             face: latestFaceDetection,
@@ -919,6 +950,9 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                 bodyDuration: bodyDuration,
                 bodyAttempted: bodyAttempted,
                 bodySucceeded: bodySucceeded,
+                bodyObservationAvailable: bodyObservationAvailable,
+                bodyInferenceError: bodyInferenceError,
+                upperBodyLandmarks: upperBodyLandmarks,
                 overlayVisible: !overlay.isEmpty,
                 faceVisible: !latestFaceDetection.polylines.isEmpty,
                 bodyVisible: !latestBodyDetectionPoints(at: uptime).isEmpty,
@@ -935,7 +969,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     }
 
     private func combinedOverlay() -> PoseOverlay {
-        let bodyPoints = bodyStatusAvailableUntil.map { ProcessInfo.processInfo.systemUptime < $0 } == true
+        let bodyPoints = bodyOverlayAvailableUntil.map { ProcessInfo.processInfo.systemUptime < $0 } == true
             ? (latestBodyDetection?.points ?? [])
             : []
         return PoseOverlay(
@@ -945,8 +979,48 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     }
 
     private func latestBodyDetectionPoints(at uptime: TimeInterval) -> [PosePoint] {
-        guard bodyStatusAvailableUntil.map({ uptime < $0 }) == true else { return [] }
+        guard bodyOverlayAvailableUntil.map({ uptime < $0 }) == true else { return [] }
         return latestBodyDetection?.points ?? []
+    }
+
+    private func scheduleBodyExpirationIfNeeded(at uptime: TimeInterval) {
+        bodyExpirationWorkItem?.cancel()
+        bodyExpirationWorkItem = nil
+        guard bodyOverlayAvailableUntil != nil else { return }
+
+        let scheduledGeneration = generation
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.isActive,
+                  self.generation == scheduledGeneration else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            guard self.bodyFreshness.shouldExpire(
+                at: now,
+                generation: scheduledGeneration.activationID
+            ) else { return }
+            self.latestBodyDetection = nil
+            self.lastUpperBodyLandmarks = .empty
+            self.bodyOverlayAvailableUntil = nil
+            self.bodyStatusAvailableUntil = nil
+            self.bodyExpirationWorkItem = nil
+            let fused = self.detector.combine(
+                face: self.latestFaceDetection,
+                body: nil,
+                bodyStatusAvailable: false
+            )
+            self.lastInferenceDiagnostics = fused.diagnostics
+            if self.analysisCadence.presentation.publishesVisualUpdates {
+                self.onEvent(.overlay(self.combinedOverlay()), scheduledGeneration)
+                self.publishDiagnosticsIfNeeded()
+            }
+            self.publishStabilized(
+                result: fused.observation.map { .detected($0.status) } ?? .noPose,
+                at: now
+            )
+        }
+        bodyExpirationWorkItem = workItem
+        let delay = max(0, (bodyOverlayAvailableUntil ?? uptime) - uptime)
+        sampleQueue.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
     private func nextVisionUnit(at uptime: TimeInterval) -> VisionAnalysisUnit? {
@@ -1100,9 +1174,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             facesWithLandmarks: inference?.facesWithLandmarksCount ?? 0,
             facePoints: inference?.facePointCount ?? 0,
             bodyResults: inference?.bodyResultCount ?? 0,
-            neckConfidence: lastBodyConfidences["neck"],
-            leftShoulderConfidence: lastBodyConfidences["leftShoulder"],
-            rightShoulderConfidence: lastBodyConfidences["rightShoulder"],
+            upperBodyLandmarks: lastUpperBodyLandmarks,
             segmentationAttempts: segmentationAttempts,
             segmentationVisionPerforms: segmentationVisionPerforms,
             segmentationResults: segmentationResults,

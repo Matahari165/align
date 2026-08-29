@@ -50,6 +50,31 @@ nonisolated struct SilhouetteOverlayFreshnessTracker {
     }
 }
 
+nonisolated struct BodyOverlayFreshnessTracker {
+    static let maxAge: TimeInterval = 1.2
+    private var generation = 0
+    private var lastObservationUptime: TimeInterval?
+
+    mutating func reset(generation: Int) {
+        self.generation = generation
+        lastObservationUptime = nil
+    }
+
+    mutating func recordObservation(at uptime: TimeInterval, generation: Int) {
+        self.generation = generation
+        lastObservationUptime = uptime
+    }
+
+    mutating func recordMiss() {
+        lastObservationUptime = nil
+    }
+
+    func shouldExpire(at uptime: TimeInterval, generation: Int) -> Bool {
+        guard self.generation == generation, let lastObservationUptime else { return false }
+        return uptime - lastObservationUptime >= Self.maxAge
+    }
+}
+
 nonisolated enum PoseDetectionResult: Sendable {
     case detected(PoseTrackingStatus)
     case noPose

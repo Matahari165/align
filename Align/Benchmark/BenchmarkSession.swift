@@ -61,6 +61,9 @@ nonisolated struct BenchmarkMeasurement: Sendable {
     let bodyDuration: TimeInterval?
     let bodyAttempted: Bool
     let bodySucceeded: Bool
+    let bodyObservationAvailable: Bool
+    let bodyInferenceError: Bool
+    let upperBodyLandmarks: UpperBodyLandmarkDiagnostics?
     let overlayVisible: Bool
     let faceVisible: Bool
     let bodyVisible: Bool
@@ -83,6 +86,9 @@ nonisolated struct BenchmarkMeasurement: Sendable {
         bodyDuration: TimeInterval?,
         bodyAttempted: Bool = false,
         bodySucceeded: Bool,
+        bodyObservationAvailable: Bool = false,
+        bodyInferenceError: Bool = false,
+        upperBodyLandmarks: UpperBodyLandmarkDiagnostics? = nil,
         overlayVisible: Bool,
         faceVisible: Bool = false,
         bodyVisible: Bool = false,
@@ -104,6 +110,9 @@ nonisolated struct BenchmarkMeasurement: Sendable {
         self.bodyDuration = bodyDuration
         self.bodyAttempted = bodyAttempted
         self.bodySucceeded = bodySucceeded
+        self.bodyObservationAvailable = bodyObservationAvailable
+        self.bodyInferenceError = bodyInferenceError
+        self.upperBodyLandmarks = upperBodyLandmarks
         self.overlayVisible = overlayVisible
         self.faceVisible = faceVisible
         self.bodyVisible = bodyVisible
@@ -220,7 +229,13 @@ nonisolated struct BenchmarkMetrics: Sendable {
     private(set) var faceVisibleSamples = 0
     private(set) var bodyAttempts = 0
     private(set) var bodySuccesses = 0
+    private(set) var bodyObservations = 0
+    private(set) var bodyNoResults = 0
+    private(set) var bodyInferenceErrors = 0
     private(set) var bodyVisibleSamples = 0
+    private(set) var upperBodyCoverage = [Int](repeating: 0, count: 4)
+    private(set) var upperBodyPresence = [UpperBodyLandmark: Int]()
+    private(set) var upperBodyConfidence = [UpperBodyLandmark: ScalarAggregate]()
     private(set) var silhouetteVisibleSamples = 0
     private(set) var overlayDropouts = 0
     private(set) var longestInterruption: TimeInterval = 0
@@ -267,6 +282,25 @@ nonisolated struct BenchmarkMetrics: Sendable {
             bodyAttempts += 1
             bodyDurations.record(bodyDuration)
             if measurement.bodySucceeded { bodySuccesses += 1 }
+            if measurement.bodyInferenceError {
+                bodyInferenceErrors += 1
+            } else if measurement.bodyObservationAvailable {
+                bodyObservations += 1
+                let landmarks = measurement.upperBodyLandmarks ?? .empty
+                upperBodyCoverage[landmarks.recognizedCount] += 1
+                for landmark in UpperBodyLandmark.allCases {
+                    if let confidence = landmarks.confidence(for: landmark) {
+                        if landmarks.isRecognized(landmark) {
+                            upperBodyPresence[landmark, default: 0] += 1
+                        }
+                        var aggregate = upperBodyConfidence[landmark] ?? ScalarAggregate()
+                        aggregate.record(Double(confidence))
+                        upperBodyConfidence[landmark] = aggregate
+                    }
+                }
+            } else {
+                bodyNoResults += 1
+            }
         }
 
     }
@@ -299,13 +333,21 @@ nonisolated struct BenchmarkMetrics: Sendable {
         func rate(_ successes: Int, _ attempts: Int) -> String {
             attempts == 0 ? "—" : String(format: "%.1f %%", Double(successes) / Double(attempts) * 100)
         }
+        func landmarkReport(_ landmark: UpperBodyLandmark, label: String) -> String {
+            let present = upperBodyPresence[landmark, default: 0]
+            let confidence = upperBodyConfidence[landmark] ?? ScalarAggregate()
+            return "\(label) \(present)/\(bodyObservations) (\(rate(present, bodyObservations))), confiance \(benchmarkScalarReport(confidence))"
+        }
 
         return [
             "Benchmark Vision Align",
             "Visage : \(faceAttempts) tentatives, \(faceSuccesses) succès (\(rate(faceSuccesses, faceAttempts))), \(facesWithLandmarks) avec landmarks, visibilité fusionnée \(faceVisibleSamples)",
             "Durée visage : moyenne \(milliseconds(faceDurations.average)), max \(milliseconds(faceDurations.maximum))",
             "Corps : \(bodyAttempts) tentatives, \(bodySuccesses) succès (\(rate(bodySuccesses, bodyAttempts))), visibilité fusionnée \(bodyVisibleSamples)",
-            "Durée corps : moyenne \(milliseconds(bodyDurations.average)), max \(milliseconds(bodyDurations.maximum))",
+            "Observations corps : \(bodyObservations), sans résultat \(bodyNoResults), erreurs \(bodyInferenceErrors)",
+            "Repères corps 0/3, 1/3, 2/3, 3/3 : \(upperBodyCoverage.map(String.init).joined(separator: " / "))",
+            "Repères séparés : \(landmarkReport(.neck, label: "cou")) · \(landmarkReport(.leftShoulder, label: "épaule gauche")) · \(landmarkReport(.rightShoulder, label: "épaule droite"))",
+            "Durée corps : moyenne \(milliseconds(bodyDurations.average)), p95 \(milliseconds(bodyDurations.p95)), max \(milliseconds(bodyDurations.maximum))",
             "Overlay : \(overlayDropouts) pertes, interruption max \(String(format: "%.2f s", longestInterruption)), récupération moyenne \(String(format: "%.2f s", recoveryDurations.average))",
             "Géométrie globale : eye-roll \(benchmarkScalarReport(geometryEyeLineRoll)), yaw-proxy \(benchmarkScalarReport(geometryYawProxy)), pitch-proxy \(benchmarkScalarReport(geometryPitchProxy)), interoculaire \(benchmarkScalarReport(geometryInterocularDistance)), longueur \(benchmarkScalarReport(geometryFaceLength))",
             "Silhouette : cadence \(segmentationAttempts), performs \(segmentationVisionPerforms), résultats \(segmentationResults), contours valides \(segmentationContoursValid), insuffisant \(segmentationInsufficient), erreurs \(segmentationErrors), visibilité fusionnée \(silhouetteVisibleSamples), durée p50/p95/max \(milliseconds(segmentationDurations.p50)) / \(milliseconds(segmentationDurations.p95)) / \(milliseconds(segmentationDurations.count == 0 ? nil : segmentationDurations.maximum))",

@@ -99,9 +99,55 @@ nonisolated struct BodyDetectionOutput: Sendable {
     let points: [PosePoint]
     let resultCount: Int
     let hasUpperBody: Bool
+    let upperBodyLandmarks: UpperBodyLandmarkDiagnostics
+}
 
-    var confidenceByName: [String: Float] {
-        Dictionary(uniqueKeysWithValues: points.map { ($0.name, $0.confidence) })
+nonisolated enum UpperBodyLandmark: String, CaseIterable, Sendable {
+    case neck
+    case leftShoulder
+    case rightShoulder
+
+    var visionJointName: VNHumanBodyPoseObservation.JointName {
+        switch self {
+        case .neck: .neck
+        case .leftShoulder: .leftShoulder
+        case .rightShoulder: .rightShoulder
+        }
+    }
+}
+
+/// Presence and confidence of the real Vision joints used by Align.
+/// Missing joints stay missing: this type never extrapolates anatomy.
+nonisolated struct UpperBodyLandmarkDiagnostics: Sendable, Equatable {
+    static let recognitionThreshold: Float = 0.35
+    static let empty = UpperBodyLandmarkDiagnostics(confidenceByLandmark: [:])
+
+    let neckConfidence: Float?
+    let leftShoulderConfidence: Float?
+    let rightShoulderConfidence: Float?
+
+    init(confidenceByLandmark: [UpperBodyLandmark: Float]) {
+        neckConfidence = confidenceByLandmark[.neck]
+        leftShoulderConfidence = confidenceByLandmark[.leftShoulder]
+        rightShoulderConfidence = confidenceByLandmark[.rightShoulder]
+    }
+
+    var recognizedCount: Int {
+        UpperBodyLandmark.allCases
+            .filter(isRecognized)
+            .count
+    }
+
+    func isRecognized(_ landmark: UpperBodyLandmark) -> Bool {
+        confidence(for: landmark).map { $0 >= Self.recognitionThreshold } == true
+    }
+
+    func confidence(for landmark: UpperBodyLandmark) -> Float? {
+        switch landmark {
+        case .neck: neckConfidence
+        case .leftShoulder: leftShoulderConfidence
+        case .rightShoulder: rightShoulderConfidence
+        }
     }
 }
 
@@ -209,11 +255,6 @@ nonisolated final class PoseDetector: @unchecked Sendable {
 
     private let faceRequest = VNDetectFaceLandmarksRequest()
     private let bodyRequest = VNDetectHumanBodyPoseRequest()
-    private let bodyJoints: [VNHumanBodyPoseObservation.JointName] = [
-        .neck,
-        .leftShoulder,
-        .rightShoulder
-    ]
 
     func detectFace(in pixelBuffer: CVPixelBuffer) throws -> FaceDetectionOutput {
         let orientation = CGImagePropertyOrientation.up
@@ -258,12 +299,12 @@ nonisolated final class PoseDetector: @unchecked Sendable {
         try handler.perform([bodyRequest])
 
         let bodyResults = bodyRequest.results ?? []
-        let points = try bodyPoints(from: bodyResults.first, orientation: orientation)
-        let names = Set(points.map(\.name))
+        let detection = try bodyDetection(from: bodyResults.first, orientation: orientation)
         return BodyDetectionOutput(
-            points: points,
+            points: detection.points,
             resultCount: bodyResults.count,
-            hasUpperBody: names.isSuperset(of: ["neck", "leftShoulder", "rightShoulder"])
+            hasUpperBody: detection.landmarks.recognizedCount == UpperBodyLandmark.allCases.count,
+            upperBodyLandmarks: detection.landmarks
         )
     }
 
@@ -336,22 +377,28 @@ nonisolated final class PoseDetector: @unchecked Sendable {
         )
     }
 
-    private func bodyPoints(
+    private func bodyDetection(
         from observation: VNHumanBodyPoseObservation?,
         orientation: CGImagePropertyOrientation
-    ) throws -> [PosePoint] {
-        guard let observation else { return [] }
+    ) throws -> (points: [PosePoint], landmarks: UpperBodyLandmarkDiagnostics) {
+        guard let observation else { return ([], .empty) }
 
-        return try bodyJoints.compactMap { jointName in
-            let point = try observation.recognizedPoint(jointName)
-            guard point.confidence >= 0.35 else { return nil }
-            return VisionCoordinateMapper.canonicalized(PosePoint(
-                name: jointName.rawValue.rawValue,
+        var confidences: [UpperBodyLandmark: Float] = [:]
+        var points: [PosePoint] = []
+        for landmark in UpperBodyLandmark.allCases {
+            let point = try observation.recognizedPoint(landmark.visionJointName)
+            confidences[landmark] = point.confidence
+            guard point.confidence >= UpperBodyLandmarkDiagnostics.recognitionThreshold else {
+                continue
+            }
+            points.append(VisionCoordinateMapper.canonicalized(PosePoint(
+                name: landmark.rawValue,
                 location: point.location,
                 confidence: point.confidence,
                 source: .body
-            ), orientation: orientation)
+            ), orientation: orientation))
         }
+        return (points, UpperBodyLandmarkDiagnostics(confidenceByLandmark: confidences))
     }
 
     private func area(of rectangle: CGRect) -> CGFloat {

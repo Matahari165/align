@@ -182,3 +182,35 @@ uniquement comme diagnostic déclenché explicitement pendant un benchmark, afin
 d'évaluer la qualité visuelle sans imposer ce coût au suivi quotidien. Pour le
 signal permanent cou-épaules, comparer ensuite une approche plus légère avant
 toute activation en arrière-plan.
+
+## 29 août 2026 — Validation réelle du cou et des épaules
+
+La détection corporelle légère utilise toujours
+`VNDetectHumanBodyPoseRequest`, sans requête supplémentaire. Le diagnostic
+sépare désormais le cou, l'épaule gauche et l'épaule droite, avec un seuil de
+confiance de 0,35 et un mapping explicite vers les noms d'articulations Apple.
+
+Deux cadrages réels ont été comparés :
+
+- cadrage habituel devant le Mac, puis cadrage légèrement plus large : visage
+  détecté avec 47 points, mais aucune observation corporelle (`corps 0`,
+  `0/3`) ;
+- cadrage large montrant la tête, le torse et idéalement les hanches : une
+  observation corporelle (`corps 1`) et les trois repères reconnus (`3/3`).
+
+Dernier échantillon du cadrage large :
+
+- 9 522 frames reçues et 1 872 analyses faciales cumulées ;
+- un visage, 47 points faciaux ;
+- cou : confiance 0,63 ;
+- épaule gauche : confiance 0,60 ;
+- épaule droite : confiance 0,65 ;
+- segmentation non demandée.
+
+Conclusion : la détection corporelle Apple et le mapping des trois
+articulations fonctionnent. L'échec dans le cadrage quotidien vient du fait que
+Vision exige une portion du corps beaucoup plus large que celle visible devant
+un Mac à distance normale. Cette piste reste utile comme signal opportuniste
+quand le cadrage le permet, mais ne peut pas être la seule base du suivi
+quotidien. Ne pas augmenter la cadence ou la résolution sans preuve : cela
+répéterait surtout plus souvent une requête vide et augmenterait le coût.
