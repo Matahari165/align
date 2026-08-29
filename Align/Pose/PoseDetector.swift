@@ -75,6 +75,18 @@ nonisolated struct PoseDetectionOutput: Sendable {
     let diagnostics: PoseInferenceDiagnostics
 }
 
+nonisolated struct FaceDetectionOutput: Sendable {
+    let polylines: [PosePolyline]
+    let resultCount: Int
+    let facesWithLandmarksCount: Int
+}
+
+nonisolated struct BodyDetectionOutput: Sendable {
+    let points: [PosePoint]
+    let resultCount: Int
+    let hasUpperBody: Bool
+}
+
 nonisolated extension CGImagePropertyOrientation {
     var alignName: String {
         switch self {
@@ -156,7 +168,7 @@ nonisolated final class PoseDetector: @unchecked Sendable {
         .rightShoulder
     ]
 
-    func detect(in pixelBuffer: CVPixelBuffer) throws -> PoseDetectionOutput {
+    func detectFace(in pixelBuffer: CVPixelBuffer) throws -> FaceDetectionOutput {
         let orientation = CGImagePropertyOrientation.up
         let handler = VNImageRequestHandler(
             cvPixelBuffer: pixelBuffer,
@@ -164,10 +176,9 @@ nonisolated final class PoseDetector: @unchecked Sendable {
             options: [:]
         )
 
-        try handler.perform([faceRequest, bodyRequest])
+        try handler.perform([faceRequest])
 
         let faceResults = faceRequest.results ?? []
-        let bodyResults = bodyRequest.results ?? []
         let primaryFace = faceResults
             .max(by: { area(of: $0.boundingBox) < area(of: $1.boundingBox) })
         let facePolylines = primaryFace.map {
@@ -176,29 +187,56 @@ nonisolated final class PoseDetector: @unchecked Sendable {
                 orientation: orientation
             )
         } ?? []
-        let bodyPoints = try bodyPoints(
-            from: bodyResults.first,
-            orientation: orientation
+        return FaceDetectionOutput(
+            polylines: facePolylines,
+            resultCount: faceResults.count,
+            facesWithLandmarksCount: faceResults.lazy.filter { $0.landmarks != nil }.count
         )
-        let bodyNames = Set(bodyPoints.map(\.name))
-        let hasUpperBody = bodyNames.isSuperset(of: ["neck", "leftShoulder", "rightShoulder"])
-        let facePointCount = facePolylines.reduce(0) { $0 + $1.locations.count }
-        let observation = !facePolylines.isEmpty || hasUpperBody
+    }
+
+    func detectBody(in pixelBuffer: CVPixelBuffer) throws -> BodyDetectionOutput {
+        let orientation = CGImagePropertyOrientation.up
+        let handler = VNImageRequestHandler(
+            cvPixelBuffer: pixelBuffer,
+            orientation: orientation,
+            options: [:]
+        )
+        try handler.perform([bodyRequest])
+
+        let bodyResults = bodyRequest.results ?? []
+        let points = try bodyPoints(from: bodyResults.first, orientation: orientation)
+        let names = Set(points.map(\.name))
+        return BodyDetectionOutput(
+            points: points,
+            resultCount: bodyResults.count,
+            hasUpperBody: names.isSuperset(of: ["neck", "leftShoulder", "rightShoulder"])
+        )
+    }
+
+    func combine(
+        face: FaceDetectionOutput,
+        body: BodyDetectionOutput?,
+        bodyStatusAvailable: Bool
+    ) -> PoseDetectionOutput {
+        let bodyPoints = body?.points ?? []
+        let hasUpperBody = bodyStatusAvailable
+        let facePointCount = face.polylines.reduce(0) { $0 + $1.locations.count }
+        let observation = !face.polylines.isEmpty || hasUpperBody
             ? PoseObservation(
                 points: bodyPoints,
-                polylines: facePolylines,
+                polylines: face.polylines,
                 mode: hasUpperBody ? .bodyAvailable : .faceOnly
             )
             : nil
         return PoseDetectionOutput(
             observation: observation,
             diagnostics: PoseInferenceDiagnostics(
-                candidateOrientation: orientation.alignName,
-                lockedOrientation: orientation.alignName,
-                faceResultCount: faceResults.count,
-                facesWithLandmarksCount: faceResults.lazy.filter { $0.landmarks != nil }.count,
+                candidateOrientation: "up",
+                lockedOrientation: "up",
+                faceResultCount: face.resultCount,
+                facesWithLandmarksCount: face.facesWithLandmarksCount,
                 facePointCount: facePointCount,
-                bodyResultCount: bodyResults.count
+                bodyResultCount: body?.resultCount ?? 0
             )
         )
     }

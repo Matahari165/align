@@ -5,6 +5,7 @@
 //  Created by Jérémy Delloume on 28/08/2026.
 //
 
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
@@ -75,11 +76,87 @@ struct ContentView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .background(.bar)
+
+            if camera.state == .running || benchmarkWasInvalidated {
+                benchmarkControls
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(.bar)
+            }
         }
         .frame(minWidth: 560, minHeight: 430)
         .onDisappear {
             camera.stop()
         }
+    }
+
+    @ViewBuilder
+    private var benchmarkControls: some View {
+        switch camera.benchmarkState {
+        case .idle:
+            HStack {
+                Text("Benchmark local guidé · 50 s")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Démarrer benchmark") {
+                    camera.startBenchmark()
+                }
+            }
+
+        case .running(let progress):
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Étape \(progress.phaseIndex + 1)/\(progress.phaseCount) · \(progress.instruction)")
+                        .font(.callout.weight(.medium))
+                    ProgressView(value: progress.totalProgress)
+                }
+                Button("Annuler") {
+                    camera.cancelBenchmark()
+                }
+            }
+
+        case .completed(let report):
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Benchmark terminé")
+                        .font(.callout.weight(.medium))
+                    Spacer()
+                    Button("Copier") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(report, forType: .string)
+                    }
+                    Button("Recommencer") {
+                        camera.startBenchmark()
+                    }
+                }
+                ScrollView {
+                    Text(report)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(maxHeight: 180)
+            }
+
+        case .invalidated(let reason):
+            HStack(spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(reason)
+                    .font(.callout)
+                Spacer()
+                Button("Fermer") {
+                    camera.cancelBenchmark()
+                }
+            }
+        }
+    }
+
+    private var benchmarkWasInvalidated: Bool {
+        if case .invalidated = camera.benchmarkState { return true }
+        return false
     }
 
     private var stateIcon: String {
