@@ -191,13 +191,24 @@ struct ContentView: View {
 
     private var accessibilitySummary: String {
         guard camera.state == .running else { return camera.state.message }
+        let silhouetteLabel: String
+        switch camera.diagnostics.segmentationState {
+        case .available:
+            silhouetteLabel = " Silhouette estimée visible."
+        case .insufficient:
+            silhouetteLabel = " Silhouette estimée indisponible."
+        case .error:
+            silhouetteLabel = " Silhouette estimée en erreur."
+        case .notRequested:
+            silhouetteLabel = " Silhouette estimée non demandée."
+        }
         switch camera.trackingMode {
         case .faceOnly:
-            return "Analyse locale active. Visage suivi."
+            return "Analyse locale active. Visage suivi.\(silhouetteLabel)"
         case .bodyAvailable:
-            return "Analyse locale active. Visage, cou et épaules suivis."
+            return "Analyse locale active. Visage, cou et épaules suivis.\(silhouetteLabel)"
         case nil:
-            return "Analyse locale active. Recherche de posture."
+            return "Analyse locale active. Recherche de posture.\(silhouetteLabel)"
         }
     }
 

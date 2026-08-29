@@ -6,6 +6,7 @@ import Vision
 nonisolated enum PosePointSource: String, Sendable {
     case face
     case body
+    case silhouette
 }
 
 nonisolated struct PosePoint: Identifiable, Sendable {
@@ -18,6 +19,9 @@ nonisolated struct PosePoint: Identifiable, Sendable {
 }
 
 nonisolated struct PosePolyline: Identifiable, Sendable {
+    /// Existing face/body overlay coordinates. Their numeric convention is
+    /// preserved for the live-validated face renderer; segmentation crosses an
+    /// explicit boundary before entering this type.
     let name: String
     let locations: [CGPoint]
     let source: PosePointSource
@@ -78,6 +82,13 @@ nonisolated struct PoseDetectionOutput: Sendable {
 }
 
 nonisolated struct FaceDetectionOutput: Sendable {
+    static let empty = FaceDetectionOutput(
+        polylines: [],
+        primaryOrientation: nil,
+        resultCount: 0,
+        facesWithLandmarksCount: 0
+    )
+
     let polylines: [PosePolyline]
     let primaryOrientation: FaceOrientationSignal?
     let resultCount: Int
@@ -88,6 +99,10 @@ nonisolated struct BodyDetectionOutput: Sendable {
     let points: [PosePoint]
     let resultCount: Int
     let hasUpperBody: Bool
+
+    var confidenceByName: [String: Float] {
+        Dictionary(uniqueKeysWithValues: points.map { ($0.name, $0.confidence) })
+    }
 }
 
 nonisolated extension CGImagePropertyOrientation {
@@ -106,8 +121,37 @@ nonisolated extension CGImagePropertyOrientation {
 }
 
 nonisolated enum VisionCoordinateMapper {
-    static func captureDevicePoint(from canonicalPoint: CGPoint) -> CGPoint {
-        CGPoint(x: canonicalPoint.x, y: 1 - canonicalPoint.y)
+    /// Converts the shared Align top-left overlay contract to the normalized
+    /// coordinate space expected by `AVCaptureVideoPreviewLayer`.
+    static func captureDevicePoint(fromTopLeftNormalized point: CGPoint) -> CGPoint {
+        CGPoint(x: point.x, y: 1 - point.y)
+    }
+
+    /// Converts an already-published PoseOverlay location to the Preview layer
+    /// point used by the live renderer. Kept separate from the mask conversion
+    /// so the two contracts cannot be confused at call sites.
+    static func previewDevicePoint(fromPoseOverlayPoint point: CGPoint) -> CGPoint {
+        captureDevicePoint(fromTopLeftNormalized: point)
+    }
+
+    /// Testable inverse of the preview conversion. No Vision or image data is
+    /// involved; it documents the exact round-trip expected by the overlay.
+    static func topLeftNormalizedPoint(fromCaptureDevicePoint point: CGPoint) -> CGPoint {
+        CGPoint(x: point.x, y: 1 - point.y)
+    }
+
+    /// Boundary between the existing face/overlay coordinates and the mask
+    /// extractor's top-left coordinates. The face helper's `y = 1 - (...)`
+    /// already is the required vertical contract, so this boundary is an
+    /// intentional identity and prevents a second y inversion.
+    static func segmentationTopLeftPoint(fromFaceOverlayPoint point: CGPoint) -> CGPoint {
+        point
+    }
+
+    /// Boundary between the top-left mask extractor and the existing
+    /// `PoseOverlay` contract. It is the inverse of the face-anchor conversion.
+    static func poseOverlayPoint(fromSegmentationTopLeftPoint point: CGPoint) -> CGPoint {
+        captureDevicePoint(fromTopLeftNormalized: point)
     }
 
     static func faceLandmarkCapturePoint(

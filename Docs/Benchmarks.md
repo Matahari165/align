@@ -153,3 +153,32 @@ restent en mémoire et exposent, par phase, n, moyenne, minimum, maximum et
 haut/bas, écran vers/loin et visage près/loin, avec les échelles
 interoculaire et faciale pour distinguer mouvement de tête et simple
 rapprochement de l’écran.
+
+## 29 août 2026 — Segmentation de personne pour la silhouette cou-épaules
+
+Prototype local fondé sur `VNGeneratePersonSegmentationRequest`, qualité
+rapide, masque monochrome et cadence maximale d'environ une tentative par
+seconde. Le masque est réduit immédiatement à un contour compact puis libéré ;
+aucune image ni aucun masque n'est enregistré.
+
+Première mesure réelle sur MacBook Air M2 8 Go, fenêtre visible et caméra
+active :
+
+- 19 échéances, 18 requêtes Vision réellement exécutées et 18 contours valides ;
+- durée p95 affichée pour la segmentation : 2 287 ms ;
+- CPU après échauffement, neuf échantillons utiles sur environ 10 secondes :
+  moyenne 20,4 %, plage 14,3–22,5 % ;
+- mémoire résidente : 204–205 Mio ;
+- référence antérieure en arrière-plan sans segmentation : environ 11,94 % CPU
+  et 59,6 Mio.
+
+Les objectifs provisoires n'ont pas été atteints : p95 inférieur ou égal à
+500 ms et mémoire inférieure à 100 Mio. Une fraîcheur visuelle de 0,30 s est
+également incompatible avec une requête qui prend parfois plus de deux
+secondes : le contour peut être correct mais trop intermittent.
+
+Décision : ne pas exécuter cette segmentation en continu. La conserver
+uniquement comme diagnostic déclenché explicitement pendant un benchmark, afin
+d'évaluer la qualité visuelle sans imposer ce coût au suivi quotidien. Pour le
+signal permanent cou-épaules, comparer ensuite une approche plus légère avant
+toute activation en arrière-plan.

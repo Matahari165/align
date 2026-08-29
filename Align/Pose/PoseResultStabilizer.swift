@@ -26,6 +26,30 @@ nonisolated struct PoseOverlayFreshnessTracker {
     }
 }
 
+nonisolated struct SilhouetteOverlayFreshnessTracker {
+    /// Visual freshness is independent from the one-second segmentation cadence:
+    /// a contour older than 0.30 s is no longer drawn. Cadence tolerance must
+    /// never be used to keep stale geometry on screen.
+    static let maxAge: TimeInterval = 0.30
+    private var generation = 0
+    private var lastObservationUptime: TimeInterval?
+
+    mutating func reset(generation: Int) {
+        self.generation = generation
+        lastObservationUptime = nil
+    }
+
+    mutating func recordObservation(at uptime: TimeInterval, generation: Int) {
+        self.generation = generation
+        lastObservationUptime = uptime
+    }
+
+    func shouldExpire(at uptime: TimeInterval, generation: Int) -> Bool {
+        guard self.generation == generation, let lastObservationUptime else { return false }
+        return uptime - lastObservationUptime >= Self.maxAge
+    }
+}
+
 nonisolated enum PoseDetectionResult: Sendable {
     case detected(PoseTrackingStatus)
     case noPose

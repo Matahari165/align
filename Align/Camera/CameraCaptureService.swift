@@ -15,6 +15,19 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
         facesWithLandmarks: 0,
         facePoints: 0,
         bodyResults: 0,
+        neckConfidence: nil,
+        leftShoulderConfidence: nil,
+        rightShoulderConfidence: nil,
+        segmentationAttempts: 0,
+        segmentationVisionPerforms: 0,
+        segmentationResults: 0,
+        segmentationContoursValid: 0,
+        segmentationInsufficient: 0,
+        segmentationErrors: 0,
+        segmentationDurationP50: nil,
+        segmentationDurationP95: nil,
+        segmentationDurationMax: nil,
+        segmentationState: .notRequested,
         lastVisionError: nil
     )
 
@@ -28,6 +41,19 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
     let facesWithLandmarks: Int
     let facePoints: Int
     let bodyResults: Int
+    let neckConfidence: Float?
+    let leftShoulderConfidence: Float?
+    let rightShoulderConfidence: Float?
+    let segmentationAttempts: Int
+    let segmentationVisionPerforms: Int
+    let segmentationResults: Int
+    let segmentationContoursValid: Int
+    let segmentationInsufficient: Int
+    let segmentationErrors: Int
+    let segmentationDurationP50: TimeInterval?
+    let segmentationDurationP95: TimeInterval?
+    let segmentationDurationMax: TimeInterval?
+    let segmentationState: PersonSegmentationAvailability
     let lastVisionError: String?
 
     var summary: String {
@@ -36,7 +62,9 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
         let error = lastVisionError.map { " · erreur: \($0)" } ?? ""
         let faceOrientationSummary = faceOrientation.map { " · visage \($0.summary)" } ?? ""
         let faceGeometrySummary = faceGeometry.map { " · géométrie \($0.summary)" } ?? ""
-        return "Frames \(frameCallbacks) · analyses \(analyses) · orientation \(orientation) · faces \(faceResults) / landmarks \(facesWithLandmarks) / points \(facePoints) · corps \(bodyResults)\(faceOrientationSummary)\(faceGeometrySummary)\(error)"
+        let bodyConfidence = " · confiance cou/épaules \(neckConfidence.map { String(format: "%.0f", $0 * 100) } ?? "—")/\(leftShoulderConfidence.map { String(format: "%.0f", $0 * 100) } ?? "—")/\(rightShoulderConfidence.map { String(format: "%.0f", $0 * 100) } ?? "—")"
+        let segmentation = " · silhouette \(segmentationState.displayName) · cadence/performs/valid \(segmentationAttempts)/\(segmentationVisionPerforms)/\(segmentationContoursValid), \(segmentationDurationP95.map { String(format: "p95 %.0f ms", $0 * 1_000) } ?? "p95 —")"
+        return "Frames \(frameCallbacks) · analyses \(analyses) · orientation \(orientation) · faces \(faceResults) / landmarks \(facesWithLandmarks) / points \(facePoints) · corps \(bodyResults)\(bodyConfidence)\(segmentation)\(faceOrientationSummary)\(faceGeometrySummary)\(error)"
     }
 }
 
@@ -96,11 +124,14 @@ final class CameraCaptureService: ObservableObject {
     private var activationID = 0
     private var activePoseGeneration: PoseProcessingGeneration?
     private var benchmarkSession: BenchmarkSession?
+    private var benchmarkSegmentationEpoch = BenchmarkSegmentationEpoch()
+    private let benchmarkSegmentationCancellation = BenchmarkSegmentationCancellationBox()
     private var benchmarkProgressTask: Task<Void, Never>?
     private var isApplicationActive = true
     private var isWindowMiniaturized = false
     private lazy var sampleDelegate = PoseSampleBufferDelegate(
-        sampleQueue: sampleQueue
+        sampleQueue: sampleQueue,
+        segmentationCancellation: benchmarkSegmentationCancellation
     ) { [weak self] event, generation in
         Task { @MainActor [weak self] in
             guard let self,
@@ -123,6 +154,14 @@ final class CameraCaptureService: ObservableObject {
                     self.diagnostics = diagnostics
                 }
             case .overlay(let overlay):
+                if self.currentAnalysisPresentation.publishesVisualUpdates {
+                    self.overlay = overlay
+                }
+            case .silhouetteOverlay(let overlay, let token):
+                guard self.benchmarkSegmentationEpoch.accepts(
+                    token,
+                    benchmarkRunning: self.benchmarkSession != nil
+                ) else { return }
                 if self.currentAnalysisPresentation.publishesVisualUpdates {
                     self.overlay = overlay
                 }
@@ -228,6 +267,8 @@ final class CameraCaptureService: ObservableObject {
         var benchmark = BenchmarkSession()
         let uptime = ProcessInfo.processInfo.systemUptime
         benchmark.start(at: uptime)
+        let segmentationToken = benchmarkSegmentationEpoch.begin()
+        benchmarkSegmentationCancellation.activate(segmentationToken)
         benchmarkSession = benchmark
         updateAnalysisPresentation()
         if let progress = benchmark.progress(at: uptime) {
@@ -241,6 +282,8 @@ final class CameraCaptureService: ObservableObject {
                 let now = ProcessInfo.processInfo.systemUptime
                 if benchmark.isComplete(at: now) {
                     let report = benchmark.finish(at: now)
+                    self.benchmarkSegmentationCancellation.invalidate()
+                    self.benchmarkSegmentationEpoch.invalidate()
                     self.benchmarkSession = nil
                     self.benchmarkState = .completed(report)
                     self.updateAnalysisPresentation()
@@ -257,6 +300,8 @@ final class CameraCaptureService: ObservableObject {
     func cancelBenchmark() {
         benchmarkProgressTask?.cancel()
         benchmarkProgressTask = nil
+        benchmarkSegmentationCancellation.invalidate()
+        benchmarkSegmentationEpoch.invalidate()
         benchmarkSession = nil
         benchmarkState = .idle
         updateAnalysisPresentation()
@@ -284,6 +329,8 @@ final class CameraCaptureService: ObservableObject {
         guard benchmarkSession != nil else { return }
         benchmarkProgressTask?.cancel()
         benchmarkProgressTask = nil
+        benchmarkSegmentationCancellation.invalidate()
+        benchmarkSegmentationEpoch.invalidate()
         benchmarkSession = nil
         benchmarkState = .invalidated(reason)
         updateAnalysisPresentation()
@@ -295,8 +342,9 @@ final class CameraCaptureService: ObservableObject {
             overlay = .empty
         }
         let sampleDelegate = sampleDelegate
+        let benchmarkToken = benchmarkSegmentationEpoch.currentToken
         sampleQueue.async {
-            sampleDelegate.updatePresentation(presentation)
+            sampleDelegate.updatePresentation(presentation, benchmarkToken: benchmarkToken)
         }
     }
 
@@ -363,6 +411,7 @@ nonisolated private enum PoseProcessingEvent: Sendable {
     case analysisFailed
     case diagnostics(CameraAnalysisDiagnostics)
     case overlay(PoseOverlay)
+    case silhouetteOverlay(PoseOverlay, UInt64)
     case benchmarkMeasurement(BenchmarkMeasurement, TimeInterval)
     case benchmarkOverlayVisibility(Bool, TimeInterval)
 }
@@ -518,6 +567,8 @@ private enum CameraError: LocalizedError {
 
 nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let detector = PoseDetector()
+    private let segmentationDetector = PersonSegmentationDetector()
+    private let segmentationCancellation: BenchmarkSegmentationCancellationBox
     private let onEvent: @Sendable (PoseProcessingEvent, PoseProcessingGeneration) -> Void
     private let sampleQueue: DispatchQueue
     private var analysisCadence = AnalysisCadenceController()
@@ -532,19 +583,43 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     private var lastInferenceDiagnostics: PoseInferenceDiagnostics?
     private var lastVisionError: String?
     private var bodyCadence = BodyCadenceController()
+    private var callbackBudget = VisionCallbackBudget()
     private var bodyStatusAvailableUntil: TimeInterval?
+    private var silhouetteCadence = SilhouetteCadenceController()
+    private var silhouetteFreshness = SilhouetteOverlayFreshnessTracker()
+    private var silhouetteExpirationWorkItem: DispatchWorkItem?
+    private var latestFaceDetection = FaceDetectionOutput.empty
+    private var latestBodyDetection: BodyDetectionOutput?
+    private var faceInvisibleSince: TimeInterval?
+    private var latestSilhouetteOverlay = PoseOverlay.empty
+    private var segmentationAttempts = 0
+    private var segmentationVisionPerforms = 0
+    private var segmentationResults = 0
+    private var segmentationContoursValid = 0
+    private var segmentationInsufficient = 0
+    private var segmentationErrors = 0
+    private var segmentationDurations: [TimeInterval] = []
+    private var segmentationDurationP50: TimeInterval?
+    private var segmentationDurationP95: TimeInterval?
+    private var segmentationDurationMax: TimeInterval?
+    private var segmentationState: PersonSegmentationAvailability = .notRequested
+    private var lastBodyConfidences: [String: Float] = [:]
+    private var benchmarkSegmentationToken: UInt64?
 
     init(
         sampleQueue: DispatchQueue,
+        segmentationCancellation: BenchmarkSegmentationCancellationBox,
         onEvent: @escaping @Sendable (PoseProcessingEvent, PoseProcessingGeneration) -> Void
     ) {
         self.sampleQueue = sampleQueue
+        self.segmentationCancellation = segmentationCancellation
         self.onEvent = onEvent
     }
 
     func setActive(_ isActive: Bool, generation: PoseProcessingGeneration) {
         self.isActive = isActive
         self.generation = generation
+        benchmarkSegmentationToken = nil
         analysisCadence.reset()
         expirationWorkItem?.cancel()
         expirationWorkItem = nil
@@ -558,13 +633,51 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         lastVisionError = nil
         bodyCadence.reset()
         bodyStatusAvailableUntil = nil
+        silhouetteCadence.reset()
+        silhouetteFreshness.reset(generation: generation.activationID)
+        silhouetteExpirationWorkItem?.cancel()
+        silhouetteExpirationWorkItem = nil
+        if isActive,
+           analysisCadence.presentation.isBenchmarkRunning,
+           benchmarkSegmentationToken != nil {
+            segmentationDetector.activate()
+        } else {
+            segmentationDetector.deactivate()
+        }
+        latestFaceDetection = .empty
+        latestBodyDetection = nil
+        faceInvisibleSince = nil
+        latestSilhouetteOverlay = .empty
+        segmentationAttempts = 0
+        segmentationVisionPerforms = 0
+        segmentationResults = 0
+        segmentationContoursValid = 0
+        segmentationInsufficient = 0
+        segmentationErrors = 0
+        segmentationDurations.removeAll(keepingCapacity: true)
+        segmentationDurationP50 = nil
+        segmentationDurationP95 = nil
+        segmentationDurationMax = nil
+        segmentationState = .notRequested
+        lastBodyConfidences = [:]
     }
 
-    func updatePresentation(_ presentation: AnalysisPresentationState) {
+    func updatePresentation(
+        _ presentation: AnalysisPresentationState,
+        benchmarkToken: UInt64?
+    ) {
         analysisCadence.updatePresentation(presentation)
-        if !presentation.publishesVisualUpdates {
-            overlayExpirationWorkItem?.cancel()
-            overlayExpirationWorkItem = nil
+        benchmarkSegmentationToken = benchmarkToken
+        if !presentation.isBenchmarkRunning || benchmarkToken == nil {
+            silhouetteExpirationWorkItem?.cancel()
+            silhouetteExpirationWorkItem = nil
+            silhouetteCadence.reset()
+            segmentationDetector.deactivate()
+            latestSilhouetteOverlay = .empty
+            segmentationState = .notRequested
+            onEvent(.overlay(combinedOverlay()), generation)
+        } else if !segmentationDetector.isActive {
+            segmentationDetector.activate()
         }
     }
 
@@ -577,96 +690,288 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         frameCallbacks += 1
 
         let uptime = ProcessInfo.processInfo.systemUptime
-        guard analysisCadence.shouldAnalyze(at: uptime) else { return }
+        callbackBudget.beginCallback()
+        guard let unit = nextVisionUnit(at: uptime), callbackBudget.claim(unit) else { return }
         analyses += 1
+        var faceDuration: TimeInterval?
+        var faceAttempted = false
+        var faceSucceeded = false
+        var faceHadLandmarks = false
+        var faceOrientation: FaceOrientationSignal?
+        var bodyDuration: TimeInterval?
+        var bodyAttempted = false
+        var bodySucceeded = false
+        var segmentationAttempted = false
+        var segmentationVisionPerformed = false
+        var segmentationResult = false
+        var segmentationContourValid = false
+        var segmentationWasInsufficient = false
+        var segmentationError = false
+        var segmentationDuration: TimeInterval?
 
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-            lastVisionError = "Buffer vidéo absent"
-            publishDiagnosticsIfNeeded()
-            publishStabilized(result: .inferenceError, at: uptime)
-            return
-        }
-
-        let faceStart = ProcessInfo.processInfo.systemUptime
-        do {
-            let face = try detector.detectFace(in: pixelBuffer)
-            let faceDuration = ProcessInfo.processInfo.systemUptime - faceStart
-
-            var body: BodyDetectionOutput?
-            var bodyDuration: TimeInterval?
-            if bodyCadence.shouldRun(at: uptime) {
-                let bodyStart = ProcessInfo.processInfo.systemUptime
-                do {
-                    let detectedBody = try detector.detectBody(in: pixelBuffer)
-                    bodyDuration = ProcessInfo.processInfo.systemUptime - bodyStart
-                    body = detectedBody
-                    bodyCadence.recordAttempt(
-                        at: uptime,
-                        bodyAvailable: detectedBody.hasUpperBody
-                    )
-                    bodyStatusAvailableUntil = detectedBody.hasUpperBody
-                        ? uptime + 1.2
-                        : nil
-                } catch {
-                    bodyDuration = ProcessInfo.processInfo.systemUptime - bodyStart
-                    bodyCadence.recordAttempt(at: uptime, bodyAvailable: false)
-                    bodyStatusAvailableUntil = nil
-                    lastVisionError = "Corps : \(error.localizedDescription)"
-                }
+        switch unit {
+        case .face:
+            analysisCadence.recordAnalysis(at: uptime)
+            faceAttempted = true
+            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+                latestFaceDetection = .empty
+                faceDuration = 0
+                lastVisionError = "Visage : buffer vidéo absent"
+                clearFaceOverlay()
+                break
             }
-
-            let output = detector.combine(
-                face: face,
-                body: body,
-                bodyStatusAvailable: bodyStatusAvailableUntil.map { uptime < $0 } == true
-            )
-            let currentOverlay = output.observation?.overlay ?? .empty
-            let isOverlayVisible = !currentOverlay.isEmpty
-            lastInferenceDiagnostics = output.diagnostics
-            if bodyDuration == nil || body != nil {
+            let start = ProcessInfo.processInfo.systemUptime
+            do {
+                let face = try detector.detectFace(in: pixelBuffer)
+                faceDuration = ProcessInfo.processInfo.systemUptime - start
+                latestFaceDetection = face
+                faceSucceeded = face.resultCount > 0
+                faceHadLandmarks = face.facesWithLandmarksCount > 0
+                faceOrientation = face.primaryOrientation
                 lastVisionError = nil
+                handleFaceVisibility(face.polylines.isEmpty ? nil : uptime)
+                if face.polylines.isEmpty { clearFaceOverlay() }
+            } catch {
+                faceDuration = ProcessInfo.processInfo.systemUptime - start
+                latestFaceDetection = .empty
+                handleFaceVisibility(nil, at: uptime)
+                lastVisionError = "Visage : \(error.localizedDescription)"
+                clearFaceOverlay()
             }
-            publishDiagnosticsIfNeeded()
-            if analysisCadence.presentation.publishesVisualUpdates {
-                if isOverlayVisible {
-                    publishFreshOverlay(currentOverlay, at: uptime)
-                } else {
-                    clearOverlay()
-                }
+
+        case .body:
+            bodyCadence.recordAttempt(at: uptime, bodyAvailable: false)
+            bodyAttempted = true
+            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+                latestBodyDetection = nil
+                bodyStatusAvailableUntil = nil
+                lastBodyConfidences = [:]
+                bodyDuration = 0
+                lastVisionError = "Corps : buffer vidéo absent"
+                break
             }
-            publishStabilized(
-                result: output.observation.map { .detected($0.status) } ?? .noPose,
-                at: uptime
+            let start = ProcessInfo.processInfo.systemUptime
+            do {
+                let body = try detector.detectBody(in: pixelBuffer)
+                bodyDuration = ProcessInfo.processInfo.systemUptime - start
+                latestBodyDetection = body
+                bodySucceeded = body.hasUpperBody
+                lastBodyConfidences = body.confidenceByName
+                bodyStatusAvailableUntil = body.hasUpperBody ? uptime + 1.2 : nil
+                bodyCadence.recordAttempt(at: uptime, bodyAvailable: body.hasUpperBody)
+                lastVisionError = nil
+            } catch {
+                bodyDuration = ProcessInfo.processInfo.systemUptime - start
+                latestBodyDetection = nil
+                bodyStatusAvailableUntil = nil
+                lastBodyConfidences = [:]
+                lastVisionError = "Corps : \(error.localizedDescription)"
+            }
+
+        case .silhouette:
+            guard let token = benchmarkSegmentationToken,
+                  analysisCadence.presentation.isBenchmarkRunning,
+                  segmentationCancellation.accepts(token) else { return }
+            let result = segmentationDetector.detect(
+                in: sampleBuffer,
+                faceAnchor: faceAnchor(from: latestFaceDetection)
             )
-            if analysisCadence.presentation.isBenchmarkRunning {
-                onEvent(.benchmarkMeasurement(BenchmarkMeasurement(
-                    faceDuration: faceDuration,
-                    faceSucceeded: face.resultCount > 0,
-                    faceHadLandmarks: face.facesWithLandmarksCount > 0,
-                    faceOrientation: face.primaryOrientation,
-                    faceGeometry: output.diagnostics.faceGeometry,
-                    bodyDuration: bodyDuration,
-                    bodySucceeded: body?.hasUpperBody == true,
-                    overlayVisible: isOverlayVisible
-                ), uptime), generation)
+            let preparedOverlay: PoseOverlay? = if case .contour(let contour, _) = result {
+                PoseOverlay(
+                    points: [],
+                    polylines: contour.polylines.map { polyline in
+                        PosePolyline(
+                            name: "silhouette-\(polyline.side.rawValue)",
+                            locations: polyline.locations.map(VisionCoordinateMapper.poseOverlayPoint(fromSegmentationTopLeftPoint:)),
+                            source: .silhouette,
+                            isClosed: false
+                        )
+                    }
+                )
+            } else {
+                nil
             }
-        } catch {
-            lastVisionError = error.localizedDescription
-            publishDiagnosticsIfNeeded()
-            publishStabilized(result: .inferenceError, at: uptime)
-            if analysisCadence.presentation.isBenchmarkRunning {
+            guard segmentationCancellation.withAcceptedToken(token, commit: {
+                guard benchmarkSegmentationToken == token,
+                      analysisCadence.presentation.isBenchmarkRunning else { return }
+                silhouetteCadence.recordAttempt(at: uptime)
+                segmentationAttempted = true
+                segmentationAttempts += 1
+                segmentationDuration = result.measurement.performedVision ? result.measurement.duration : nil
+                segmentationVisionPerformed = result.measurement.performedVision
+                if segmentationVisionPerformed {
+                    segmentationVisionPerforms += 1
+                    recordSegmentationDuration(result.measurement.duration)
+                }
+                switch result {
+                case .contour:
+                    segmentationResults += 1
+                    segmentationResult = true
+                    segmentationContourValid = true
+                    segmentationContoursValid += 1
+                    segmentationState = .available
+                    latestSilhouetteOverlay = preparedOverlay ?? .empty
+                    publishFreshSilhouette(at: uptime, benchmarkToken: token)
+                case .insufficient(let failure, _):
+                    if result.measurement.performedVision { segmentationResults += 1 }
+                    segmentationResult = result.measurement.performedVision
+                    segmentationWasInsufficient = true
+                    segmentationInsufficient += 1
+                    segmentationState = .insufficient
+                    clearSilhouetteOverlay(benchmarkToken: token)
+                    lastVisionError = failure == .missingFaceAnchor ? nil : "Silhouette : \(failure)"
+                case .error(let failure, _):
+                    segmentationError = true
+                    segmentationErrors += 1
+                    segmentationState = .error
+                    clearSilhouetteOverlay(benchmarkToken: token)
+                    lastVisionError = "Silhouette : \(failure)"
+                }
+
+                let fused = detector.combine(
+                    face: latestFaceDetection,
+                    body: latestBodyDetection,
+                    bodyStatusAvailable: bodyStatusAvailableUntil.map { uptime < $0 } == true
+                )
+                lastInferenceDiagnostics = fused.diagnostics
+                let fusedOverlay = combinedOverlay()
+                if analysisCadence.presentation.publishesVisualUpdates {
+                    onEvent(.silhouetteOverlay(fusedOverlay, token), generation)
+                }
+                publishDiagnosticsIfNeeded()
+                publishStabilized(
+                    result: fused.observation.map { .detected($0.status) } ?? .noPose,
+                    at: uptime
+                )
                 onEvent(.benchmarkMeasurement(BenchmarkMeasurement(
-                    faceDuration: ProcessInfo.processInfo.systemUptime - faceStart,
+                    faceAttempted: false,
+                    faceDuration: 0,
                     faceSucceeded: false,
                     faceHadLandmarks: false,
                     faceOrientation: nil,
-                    faceGeometry: nil,
+                    faceGeometry: fused.diagnostics.faceGeometry,
                     bodyDuration: nil,
+                    bodyAttempted: false,
                     bodySucceeded: false,
-                    overlayVisible: false
+                    overlayVisible: !fusedOverlay.isEmpty,
+                    faceVisible: !latestFaceDetection.polylines.isEmpty,
+                    bodyVisible: !latestBodyDetectionPoints(at: uptime).isEmpty,
+                    silhouetteVisible: !latestSilhouetteOverlay.isEmpty,
+                    segmentationAttempted: segmentationAttempted,
+                    segmentationVisionPerformed: segmentationVisionPerformed,
+                    segmentationResult: segmentationResult,
+                    segmentationContourValid: segmentationContourValid,
+                    segmentationInsufficient: segmentationWasInsufficient,
+                    segmentationError: segmentationError,
+                    segmentationDuration: segmentationDuration
                 ), uptime), generation)
+            }) else { return }
+            return
+        }
+
+        if bodyStatusAvailableUntil.map({ uptime < $0 }) != true {
+            latestBodyDetection = nil
+            lastBodyConfidences = [:]
+        }
+        let fused = detector.combine(
+            face: latestFaceDetection,
+            body: latestBodyDetection,
+            bodyStatusAvailable: bodyStatusAvailableUntil.map { uptime < $0 } == true
+        )
+        lastInferenceDiagnostics = fused.diagnostics
+        let fusedOverlay = combinedOverlay()
+        if analysisCadence.presentation.publishesVisualUpdates {
+            switch unit {
+            case .face:
+                if !latestFaceDetection.polylines.isEmpty { publishFreshOverlay(fusedOverlay, at: uptime) }
+            case .body:
+                onEvent(.overlay(fusedOverlay), generation)
+            case .silhouette:
+                break
             }
         }
+        publishDiagnosticsIfNeeded()
+        publishStabilized(
+            result: fused.observation.map { .detected($0.status) } ?? .noPose,
+            at: uptime
+        )
+        if analysisCadence.presentation.isBenchmarkRunning {
+            let overlay = fusedOverlay
+            onEvent(.benchmarkMeasurement(BenchmarkMeasurement(
+                faceAttempted: faceAttempted,
+                faceDuration: faceDuration ?? 0,
+                faceSucceeded: faceSucceeded,
+                faceHadLandmarks: faceHadLandmarks,
+                faceOrientation: faceOrientation,
+                faceGeometry: fused.diagnostics.faceGeometry,
+                bodyDuration: bodyDuration,
+                bodyAttempted: bodyAttempted,
+                bodySucceeded: bodySucceeded,
+                overlayVisible: !overlay.isEmpty,
+                faceVisible: !latestFaceDetection.polylines.isEmpty,
+                bodyVisible: !latestBodyDetectionPoints(at: uptime).isEmpty,
+                silhouetteVisible: !latestSilhouetteOverlay.isEmpty,
+                segmentationAttempted: segmentationAttempted,
+                segmentationVisionPerformed: segmentationVisionPerformed,
+                segmentationResult: segmentationResult,
+                segmentationContourValid: segmentationContourValid,
+                segmentationInsufficient: segmentationWasInsufficient,
+                segmentationError: segmentationError,
+                segmentationDuration: segmentationDuration
+            ), uptime), generation)
+        }
+    }
+
+    private func combinedOverlay() -> PoseOverlay {
+        let bodyPoints = bodyStatusAvailableUntil.map { ProcessInfo.processInfo.systemUptime < $0 } == true
+            ? (latestBodyDetection?.points ?? [])
+            : []
+        return PoseOverlay(
+            points: bodyPoints,
+            polylines: latestFaceDetection.polylines + latestSilhouetteOverlay.polylines
+        )
+    }
+
+    private func latestBodyDetectionPoints(at uptime: TimeInterval) -> [PosePoint] {
+        guard bodyStatusAvailableUntil.map({ uptime < $0 }) == true else { return [] }
+        return latestBodyDetection?.points ?? []
+    }
+
+    private func nextVisionUnit(at uptime: TimeInterval) -> VisionAnalysisUnit? {
+        let presentation = analysisCadence.presentation
+        let candidates: [VisionAnalysisCandidate] = [
+            analysisCadence.isDue(at: uptime)
+                ? VisionAnalysisCandidate(unit: .face, overdue: analysisCadence.lastAnalysisUptime == nil ? 1 : analysisCadence.overdue(at: uptime), priority: 3)
+                : nil,
+            bodyCadence.isDue(at: uptime)
+                ? VisionAnalysisCandidate(unit: .body, overdue: bodyCadence.lastAttemptUptime == nil ? 1 : bodyCadence.overdue(at: uptime), priority: 2)
+                : nil,
+            silhouetteCadence.isDue(at: uptime, presentation: presentation)
+                ? VisionAnalysisCandidate(unit: .silhouette, overdue: silhouetteCadence.lastAttemptUptime == nil ? 1 : silhouetteCadence.overdue(at: uptime), priority: 1)
+                : nil
+        ].compactMap { $0 }
+        return VisionAnalysisSelector.select(candidates)
+    }
+
+    private func faceAnchor(from face: FaceDetectionOutput) -> PersonSegmentationFaceAnchor? {
+        guard let contour = face.polylines.first(where: { $0.name == "faceContour" }),
+              contour.locations.count >= 3 else { return nil }
+        return PersonSegmentationFaceAnchor(faceOverlayContour: contour.locations)
+    }
+
+    private func handleFaceVisibility(_ visibleAt: TimeInterval?, at uptime: TimeInterval? = nil) {
+        let now = uptime ?? ProcessInfo.processInfo.systemUptime
+        if visibleAt != nil {
+            faceInvisibleSince = nil
+            return
+        }
+        faceInvisibleSince = faceInvisibleSince ?? now
+        guard now - (faceInvisibleSince ?? now) >= 2.0 else { return }
+        segmentationDetector.reset()
+        silhouetteCadence.reset()
+        clearSilhouetteOverlay()
+        segmentationState = .notRequested
+        faceInvisibleSince = now
     }
 
     private func publishFreshOverlay(_ overlay: PoseOverlay, at uptime: TimeInterval) {
@@ -688,8 +993,10 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                 at: uptime,
                 generation: scheduledGeneration.activationID
             ) {
-                self.onEvent(.overlay(.empty), scheduledGeneration)
-                self.onEvent(.benchmarkOverlayVisibility(false, uptime), scheduledGeneration)
+                self.latestFaceDetection = .empty
+                let overlay = self.combinedOverlay()
+                self.onEvent(.overlay(overlay), scheduledGeneration)
+                self.onEvent(.benchmarkOverlayVisibility(!overlay.isEmpty, uptime), scheduledGeneration)
                 self.overlayExpirationWorkItem = nil
             }
         }
@@ -704,11 +1011,67 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         overlayExpirationWorkItem?.cancel()
         overlayExpirationWorkItem = nil
         overlayFreshness.recordMiss()
+        silhouetteFreshness.reset(generation: generation.activationID)
+        silhouetteExpirationWorkItem?.cancel()
+        silhouetteExpirationWorkItem = nil
+        latestFaceDetection = .empty
+        latestSilhouetteOverlay = .empty
         onEvent(.overlay(.empty), generation)
         onEvent(.benchmarkOverlayVisibility(
             false,
             ProcessInfo.processInfo.systemUptime
         ), generation)
+    }
+
+    private func clearFaceOverlay() {
+        overlayExpirationWorkItem?.cancel()
+        overlayExpirationWorkItem = nil
+        overlayFreshness.recordMiss()
+        latestFaceDetection = .empty
+        onEvent(.overlay(combinedOverlay()), generation)
+        onEvent(.benchmarkOverlayVisibility(!combinedOverlay().isEmpty, ProcessInfo.processInfo.systemUptime), generation)
+    }
+
+    private func clearSilhouetteOverlay(benchmarkToken: UInt64? = nil) {
+        silhouetteFreshness.reset(generation: generation.activationID)
+        silhouetteExpirationWorkItem?.cancel()
+        silhouetteExpirationWorkItem = nil
+        latestSilhouetteOverlay = .empty
+        if analysisCadence.presentation.publishesVisualUpdates {
+            let overlay = combinedOverlay()
+            if let benchmarkToken {
+                onEvent(.silhouetteOverlay(overlay, benchmarkToken), generation)
+            } else {
+                onEvent(.overlay(overlay), generation)
+            }
+        }
+    }
+
+    private func publishFreshSilhouette(at uptime: TimeInterval, benchmarkToken: UInt64) {
+        silhouetteExpirationWorkItem?.cancel()
+        silhouetteFreshness.recordObservation(at: uptime, generation: generation.activationID)
+        onEvent(.silhouetteOverlay(combinedOverlay(), benchmarkToken), generation)
+        let scheduledGeneration = generation
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.isActive,
+                  self.generation == scheduledGeneration,
+                  self.benchmarkSegmentationToken == benchmarkToken else { return }
+            self.segmentationCancellation.withAcceptedToken(benchmarkToken) {
+                guard self.isActive,
+                      self.generation == scheduledGeneration,
+                      self.benchmarkSegmentationToken == benchmarkToken else { return }
+                let now = ProcessInfo.processInfo.systemUptime
+                if self.silhouetteFreshness.shouldExpire(at: now, generation: scheduledGeneration.activationID) {
+                    self.latestSilhouetteOverlay = .empty
+                    self.segmentationState = .insufficient
+                    self.onEvent(.silhouetteOverlay(self.combinedOverlay(), benchmarkToken), scheduledGeneration)
+                    self.silhouetteExpirationWorkItem = nil
+                }
+            }
+        }
+        silhouetteExpirationWorkItem = workItem
+        sampleQueue.asyncAfter(deadline: .now() + SilhouetteOverlayFreshnessTracker.maxAge, execute: workItem)
     }
 
     private func publishDiagnosticsIfNeeded() {
@@ -725,8 +1088,33 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             facesWithLandmarks: inference?.facesWithLandmarksCount ?? 0,
             facePoints: inference?.facePointCount ?? 0,
             bodyResults: inference?.bodyResultCount ?? 0,
+            neckConfidence: lastBodyConfidences["neck"],
+            leftShoulderConfidence: lastBodyConfidences["leftShoulder"],
+            rightShoulderConfidence: lastBodyConfidences["rightShoulder"],
+            segmentationAttempts: segmentationAttempts,
+            segmentationVisionPerforms: segmentationVisionPerforms,
+            segmentationResults: segmentationResults,
+            segmentationContoursValid: segmentationContoursValid,
+            segmentationInsufficient: segmentationInsufficient,
+            segmentationErrors: segmentationErrors,
+            segmentationDurationP50: segmentationDurationP50,
+            segmentationDurationP95: segmentationDurationP95,
+            segmentationDurationMax: segmentationDurationMax,
+            segmentationState: segmentationState,
             lastVisionError: lastVisionError
         )), generation)
+    }
+
+    private func recordSegmentationDuration(_ duration: TimeInterval) {
+        segmentationDurations.append(duration)
+        if segmentationDurations.count > 120 { segmentationDurations.removeFirst() }
+        let sorted = segmentationDurations.sorted()
+        func percentile(_ quantile: Double) -> TimeInterval {
+            sorted[min(sorted.count - 1, max(0, Int(ceil(quantile * Double(sorted.count))) - 1))]
+        }
+        segmentationDurationP50 = percentile(0.50)
+        segmentationDurationP95 = percentile(0.95)
+        segmentationDurationMax = sorted.last
     }
 
     private func publishStabilized(result: PoseDetectionResult, at uptime: TimeInterval) {

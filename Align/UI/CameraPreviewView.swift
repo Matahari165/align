@@ -20,6 +20,7 @@ final class CameraPreviewNSView: NSView {
     private let jointLayer = CALayer()
     private let faceShapeLayer = CAShapeLayer()
     private let bodyShapeLayer = CAShapeLayer()
+    private let silhouetteShapeLayer = CAShapeLayer()
 
     init(session: AVCaptureSession) {
         previewLayer = AVCaptureVideoPreviewLayer(session: session)
@@ -39,8 +40,15 @@ final class CameraPreviewNSView: NSView {
         bodyShapeLayer.fillColor = NSColor.systemGreen.cgColor
         bodyShapeLayer.strokeColor = NSColor.white.withAlphaComponent(0.8).cgColor
         bodyShapeLayer.lineWidth = 1
+        silhouetteShapeLayer.fillColor = NSColor.clear.cgColor
+        silhouetteShapeLayer.strokeColor = NSColor.systemPink.cgColor
+        silhouetteShapeLayer.lineWidth = 2
+        silhouetteShapeLayer.lineDashPattern = [6, 4]
+        silhouetteShapeLayer.lineJoin = .round
+        silhouetteShapeLayer.lineCap = .round
         jointLayer.addSublayer(faceShapeLayer)
         jointLayer.addSublayer(bodyShapeLayer)
+        jointLayer.addSublayer(silhouetteShapeLayer)
         layer?.addSublayer(previewLayer)
         layer?.addSublayer(jointLayer)
     }
@@ -56,6 +64,7 @@ final class CameraPreviewNSView: NSView {
         jointLayer.frame = bounds
         faceShapeLayer.frame = bounds
         bodyShapeLayer.frame = bounds
+        silhouetteShapeLayer.frame = bounds
         configureMirroring()
     }
 
@@ -64,7 +73,7 @@ final class CameraPreviewNSView: NSView {
         CATransaction.setDisableActions(true)
 
         let facePath = CGMutablePath()
-        for polyline in overlay.polylines {
+        for polyline in overlay.polylines where polyline.source == .face {
             let positions = polyline.locations.map { layerPosition(for: $0) }
             guard let first = positions.first else { continue }
             facePath.move(to: first)
@@ -85,11 +94,20 @@ final class CameraPreviewNSView: NSView {
         }
         bodyShapeLayer.path = bodyPath
 
+        let silhouettePath = CGMutablePath()
+        for polyline in overlay.polylines where polyline.source == .silhouette {
+            let positions = polyline.locations.map { layerPosition(for: $0) }
+            guard let first = positions.first else { continue }
+            silhouettePath.move(to: first)
+            positions.dropFirst().forEach { silhouettePath.addLine(to: $0) }
+        }
+        silhouetteShapeLayer.path = silhouettePath
+
         CATransaction.commit()
     }
 
     private func layerPosition(for canonicalPoint: CGPoint) -> CGPoint {
-        let devicePoint = VisionCoordinateMapper.captureDevicePoint(from: canonicalPoint)
+        let devicePoint = VisionCoordinateMapper.previewDevicePoint(fromPoseOverlayPoint: canonicalPoint)
         return previewLayer.layerPointConverted(fromCaptureDevicePoint: devicePoint)
     }
 

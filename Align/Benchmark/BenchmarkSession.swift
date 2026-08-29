@@ -52,33 +52,69 @@ nonisolated struct BenchmarkPhase: Equatable, Sendable {
 }
 
 nonisolated struct BenchmarkMeasurement: Sendable {
+    let faceAttempted: Bool
     let faceDuration: TimeInterval
     let faceSucceeded: Bool
     let faceHadLandmarks: Bool
     let faceOrientation: FaceOrientationSignal?
     let faceGeometry: FaceGeometrySignal?
     let bodyDuration: TimeInterval?
+    let bodyAttempted: Bool
     let bodySucceeded: Bool
     let overlayVisible: Bool
+    let faceVisible: Bool
+    let bodyVisible: Bool
+    let silhouetteVisible: Bool
+    let segmentationAttempted: Bool
+    let segmentationVisionPerformed: Bool
+    let segmentationResult: Bool
+    let segmentationContourValid: Bool
+    let segmentationInsufficient: Bool
+    let segmentationError: Bool
+    let segmentationDuration: TimeInterval?
 
     init(
+        faceAttempted: Bool = true,
         faceDuration: TimeInterval,
         faceSucceeded: Bool,
         faceHadLandmarks: Bool,
         faceOrientation: FaceOrientationSignal?,
         faceGeometry: FaceGeometrySignal? = nil,
         bodyDuration: TimeInterval?,
+        bodyAttempted: Bool = false,
         bodySucceeded: Bool,
-        overlayVisible: Bool
+        overlayVisible: Bool,
+        faceVisible: Bool = false,
+        bodyVisible: Bool = false,
+        silhouetteVisible: Bool = false,
+        segmentationAttempted: Bool = false,
+        segmentationVisionPerformed: Bool = false,
+        segmentationResult: Bool = false,
+        segmentationContourValid: Bool = false,
+        segmentationInsufficient: Bool = false,
+        segmentationError: Bool = false,
+        segmentationDuration: TimeInterval? = nil
     ) {
+        self.faceAttempted = faceAttempted
         self.faceDuration = faceDuration
         self.faceSucceeded = faceSucceeded
         self.faceHadLandmarks = faceHadLandmarks
         self.faceOrientation = faceOrientation
         self.faceGeometry = faceGeometry
         self.bodyDuration = bodyDuration
+        self.bodyAttempted = bodyAttempted
         self.bodySucceeded = bodySucceeded
         self.overlayVisible = overlayVisible
+        self.faceVisible = faceVisible
+        self.bodyVisible = bodyVisible
+        self.silhouetteVisible = silhouetteVisible
+        self.segmentationAttempted = segmentationAttempted
+        self.segmentationVisionPerformed = segmentationVisionPerformed
+        self.segmentationResult = segmentationResult
+        self.segmentationContourValid = segmentationContourValid
+        self.segmentationInsufficient = segmentationInsufficient
+        self.segmentationError = segmentationError
+        self.segmentationDuration = segmentationDuration
     }
 }
 
@@ -123,13 +159,25 @@ nonisolated struct DurationAggregate: Sendable {
     private(set) var count = 0
     private(set) var total: TimeInterval = 0
     private(set) var maximum: TimeInterval = 0
+    private var values: [TimeInterval] = []
 
     var average: TimeInterval { count == 0 ? 0 : total / Double(count) }
+
+    var p50: TimeInterval? { percentile(0.50) }
+    var p95: TimeInterval? { percentile(0.95) }
 
     mutating func record(_ duration: TimeInterval) {
         count += 1
         total += duration
         maximum = max(maximum, duration)
+        values.append(duration)
+    }
+
+    private func percentile(_ quantile: Double) -> TimeInterval? {
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        let index = min(sorted.count - 1, max(0, Int(ceil(quantile * Double(sorted.count))) - 1))
+        return sorted[index]
     }
 }
 
@@ -169,8 +217,11 @@ nonisolated struct BenchmarkMetrics: Sendable {
     private(set) var faceAttempts = 0
     private(set) var faceSuccesses = 0
     private(set) var facesWithLandmarks = 0
+    private(set) var faceVisibleSamples = 0
     private(set) var bodyAttempts = 0
     private(set) var bodySuccesses = 0
+    private(set) var bodyVisibleSamples = 0
+    private(set) var silhouetteVisibleSamples = 0
     private(set) var overlayDropouts = 0
     private(set) var longestInterruption: TimeInterval = 0
     private(set) var recoveryDurations = DurationAggregate()
@@ -179,21 +230,40 @@ nonisolated struct BenchmarkMetrics: Sendable {
     private(set) var geometryPitchProxy = ScalarAggregate()
     private(set) var geometryInterocularDistance = ScalarAggregate()
     private(set) var geometryFaceLength = ScalarAggregate()
+    private(set) var segmentationAttempts = 0
+    private(set) var segmentationVisionPerforms = 0
+    private(set) var segmentationResults = 0
+    private(set) var segmentationContoursValid = 0
+    private(set) var segmentationInsufficient = 0
+    private(set) var segmentationErrors = 0
+    private(set) var segmentationDurations = DurationAggregate()
     private var interruptionStart: TimeInterval?
     private var hasSeenOverlay = false
 
     mutating func record(_ measurement: BenchmarkMeasurement) {
-        faceAttempts += 1
-        faceDurations.record(measurement.faceDuration)
-        if measurement.faceSucceeded { faceSuccesses += 1 }
-        if measurement.faceHadLandmarks { facesWithLandmarks += 1 }
-        geometryEyeLineRoll.record(measurement.faceGeometry?.eyeLineRollDegrees)
-        geometryYawProxy.record(measurement.faceGeometry?.yawProxy)
-        geometryPitchProxy.record(measurement.faceGeometry?.pitchProxy)
-        geometryInterocularDistance.record(measurement.faceGeometry?.interocularDistance)
-        geometryFaceLength.record(measurement.faceGeometry?.faceLength)
+        if measurement.faceAttempted {
+            faceAttempts += 1
+            faceDurations.record(measurement.faceDuration)
+            if measurement.faceSucceeded { faceSuccesses += 1 }
+            if measurement.faceHadLandmarks { facesWithLandmarks += 1 }
+            geometryEyeLineRoll.record(measurement.faceGeometry?.eyeLineRollDegrees)
+            geometryYawProxy.record(measurement.faceGeometry?.yawProxy)
+            geometryPitchProxy.record(measurement.faceGeometry?.pitchProxy)
+            geometryInterocularDistance.record(measurement.faceGeometry?.interocularDistance)
+            geometryFaceLength.record(measurement.faceGeometry?.faceLength)
+        }
+        if measurement.faceVisible { faceVisibleSamples += 1 }
+        if measurement.bodyVisible { bodyVisibleSamples += 1 }
+        if measurement.silhouetteVisible { silhouetteVisibleSamples += 1 }
+        if measurement.segmentationAttempted { segmentationAttempts += 1 }
+        if measurement.segmentationVisionPerformed { segmentationVisionPerforms += 1 }
+        if measurement.segmentationResult { segmentationResults += 1 }
+        if measurement.segmentationContourValid { segmentationContoursValid += 1 }
+        if measurement.segmentationInsufficient { segmentationInsufficient += 1 }
+        if measurement.segmentationError { segmentationErrors += 1 }
+        if let duration = measurement.segmentationDuration { segmentationDurations.record(duration) }
 
-        if let bodyDuration = measurement.bodyDuration {
+        if measurement.bodyAttempted, let bodyDuration = measurement.bodyDuration {
             bodyAttempts += 1
             bodyDurations.record(bodyDuration)
             if measurement.bodySucceeded { bodySuccesses += 1 }
@@ -223,8 +293,8 @@ nonisolated struct BenchmarkMetrics: Sendable {
     }
 
     var report: String {
-        func milliseconds(_ value: TimeInterval) -> String {
-            String(format: "%.1f ms", value * 1_000)
+        func milliseconds(_ value: TimeInterval?) -> String {
+            value.map { String(format: "%.1f ms", $0 * 1_000) } ?? "—"
         }
         func rate(_ successes: Int, _ attempts: Int) -> String {
             attempts == 0 ? "—" : String(format: "%.1f %%", Double(successes) / Double(attempts) * 100)
@@ -232,12 +302,13 @@ nonisolated struct BenchmarkMetrics: Sendable {
 
         return [
             "Benchmark Vision Align",
-            "Visage : \(faceAttempts) tentatives, \(faceSuccesses) succès (\(rate(faceSuccesses, faceAttempts))), \(facesWithLandmarks) avec landmarks",
+            "Visage : \(faceAttempts) tentatives, \(faceSuccesses) succès (\(rate(faceSuccesses, faceAttempts))), \(facesWithLandmarks) avec landmarks, visibilité fusionnée \(faceVisibleSamples)",
             "Durée visage : moyenne \(milliseconds(faceDurations.average)), max \(milliseconds(faceDurations.maximum))",
-            "Corps : \(bodyAttempts) tentatives, \(bodySuccesses) succès (\(rate(bodySuccesses, bodyAttempts)))",
+            "Corps : \(bodyAttempts) tentatives, \(bodySuccesses) succès (\(rate(bodySuccesses, bodyAttempts))), visibilité fusionnée \(bodyVisibleSamples)",
             "Durée corps : moyenne \(milliseconds(bodyDurations.average)), max \(milliseconds(bodyDurations.maximum))",
             "Overlay : \(overlayDropouts) pertes, interruption max \(String(format: "%.2f s", longestInterruption)), récupération moyenne \(String(format: "%.2f s", recoveryDurations.average))",
             "Géométrie globale : eye-roll \(benchmarkScalarReport(geometryEyeLineRoll)), yaw-proxy \(benchmarkScalarReport(geometryYawProxy)), pitch-proxy \(benchmarkScalarReport(geometryPitchProxy)), interoculaire \(benchmarkScalarReport(geometryInterocularDistance)), longueur \(benchmarkScalarReport(geometryFaceLength))",
+            "Silhouette : cadence \(segmentationAttempts), performs \(segmentationVisionPerforms), résultats \(segmentationResults), contours valides \(segmentationContoursValid), insuffisant \(segmentationInsufficient), erreurs \(segmentationErrors), visibilité fusionnée \(silhouetteVisibleSamples), durée p50/p95/max \(milliseconds(segmentationDurations.p50)) / \(milliseconds(segmentationDurations.p95)) / \(milliseconds(segmentationDurations.count == 0 ? nil : segmentationDurations.maximum))",
             "CPU/RSS : à mesurer séparément via CLI"
         ].joined(separator: "\n")
     }
@@ -245,8 +316,12 @@ nonisolated struct BenchmarkMetrics: Sendable {
 
 nonisolated struct BenchmarkPhaseMetrics: Sendable {
     private(set) var attempts = 0
+    private(set) var samples = 0
     private(set) var facesWithLandmarks = 0
     private(set) var visibleOverlays = 0
+    private(set) var faceVisibleSamples = 0
+    private(set) var bodyVisibleSamples = 0
+    private(set) var silhouetteVisibleSamples = 0
     private(set) var roll = AngleAggregate()
     private(set) var yaw = AngleAggregate()
     private(set) var pitch = AngleAggregate()
@@ -257,22 +332,30 @@ nonisolated struct BenchmarkPhaseMetrics: Sendable {
     private(set) var faceLength = ScalarAggregate()
 
     mutating func record(_ measurement: BenchmarkMeasurement) {
-        attempts += 1
-        if measurement.faceHadLandmarks { facesWithLandmarks += 1 }
+        samples += 1
+        if measurement.faceAttempted {
+            attempts += 1
+            if measurement.faceHadLandmarks { facesWithLandmarks += 1 }
+        }
         if measurement.overlayVisible { visibleOverlays += 1 }
-        roll.record(measurement.faceOrientation?.rollDegrees)
-        yaw.record(measurement.faceOrientation?.yawDegrees)
-        pitch.record(measurement.faceOrientation?.pitchDegrees)
-        eyeLineRoll.record(measurement.faceGeometry?.eyeLineRollDegrees)
-        yawProxy.record(measurement.faceGeometry?.yawProxy)
-        pitchProxy.record(measurement.faceGeometry?.pitchProxy)
-        interocularDistance.record(measurement.faceGeometry?.interocularDistance)
-        faceLength.record(measurement.faceGeometry?.faceLength)
+        if measurement.faceVisible { faceVisibleSamples += 1 }
+        if measurement.bodyVisible { bodyVisibleSamples += 1 }
+        if measurement.silhouetteVisible { silhouetteVisibleSamples += 1 }
+        if measurement.faceAttempted {
+            roll.record(measurement.faceOrientation?.rollDegrees)
+            yaw.record(measurement.faceOrientation?.yawDegrees)
+            pitch.record(measurement.faceOrientation?.pitchDegrees)
+            eyeLineRoll.record(measurement.faceGeometry?.eyeLineRollDegrees)
+            yawProxy.record(measurement.faceGeometry?.yawProxy)
+            pitchProxy.record(measurement.faceGeometry?.pitchProxy)
+            interocularDistance.record(measurement.faceGeometry?.interocularDistance)
+            faceLength.record(measurement.faceGeometry?.faceLength)
+        }
     }
 
     func report(for phase: BenchmarkPhase, index: Int) -> String {
-        func rate(_ successes: Int) -> String {
-            attempts == 0 ? "—" : String(format: "%.1f %%", Double(successes) / Double(attempts) * 100)
+        func rate(_ successes: Int, denominator: Int) -> String {
+            denominator == 0 ? "—" : String(format: "%.1f %%", Double(successes) / Double(denominator) * 100)
         }
 
         let conforming: Int
@@ -284,7 +367,7 @@ nonisolated struct BenchmarkPhaseMetrics: Sendable {
         }
 
         return [
-            "Étape \(index + 1) · \(phase.instruction) : \(phase.expectation.reportLabel), conformité \(rate(conforming)), overlay visible \(rate(visibleOverlays))",
+            "Étape \(index + 1) · \(phase.instruction) : \(phase.expectation.reportLabel), conformité \(rate(conforming, denominator: attempts)), fusion visible \(rate(visibleOverlays, denominator: samples)), visage/corps/silhouette \(faceVisibleSamples)/\(bodyVisibleSamples)/\(silhouetteVisibleSamples) sur \(samples) mesures",
             "  Orientation (degrés) : roll \(angleReport(roll)), yaw \(angleReport(yaw)), pitch \(angleReport(pitch))",
             "  Géométrie (repères normalisés) : eye-roll \(benchmarkScalarReport(eyeLineRoll)), yaw-proxy \(benchmarkScalarReport(yawProxy)), pitch-proxy \(benchmarkScalarReport(pitchProxy))",
             "  Échelles : interoculaire \(benchmarkScalarReport(interocularDistance)), longueur faciale \(benchmarkScalarReport(faceLength))"
@@ -426,9 +509,21 @@ nonisolated struct BodyCadenceController {
     private let boostedDuration: TimeInterval = 5
 
     mutating func shouldRun(at uptime: TimeInterval) -> Bool {
+        guard isDue(at: uptime) else { return false }
+        recordAttempt(at: uptime, bodyAvailable: false)
+        return true
+    }
+
+    func isDue(at uptime: TimeInterval) -> Bool {
         let interval = (boostedUntil.map { uptime < $0 } == true) ? 0.5 : 1.0
         guard let lastAttemptUptime else { return true }
         return uptime - lastAttemptUptime >= interval
+    }
+
+    func overdue(at uptime: TimeInterval) -> TimeInterval {
+        let interval = (boostedUntil.map { uptime < $0 } == true) ? 0.5 : 1.0
+        guard let lastAttemptUptime else { return 0 }
+        return max(0, uptime - lastAttemptUptime - interval)
     }
 
     mutating func recordAttempt(at uptime: TimeInterval, bodyAvailable: Bool) {
