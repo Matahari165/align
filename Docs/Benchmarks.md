@@ -1,0 +1,70 @@
+# Benchmarks Align
+
+Ce fichier conserve uniquement des mesures agrégées. Aucune image, vidéo ou coordonnée faciale n’est enregistrée.
+
+## 29 août 2026 — Reconnaissance Vision et ressources
+
+### Machine et version
+
+- MacBook Air M2, 8 Go de RAM.
+- Version testée : commit `12ccb83` (`Add local vision benchmark and adaptive cadence`).
+- Une seule instance d’Align active.
+- Caméra intégrée, capture 720p à 15 images/s.
+- Visage analysé jusqu’à 5 fois/s ; corps environ 1 fois/s, avec accélération temporaire possible à 2 fois/s.
+
+### Benchmark guidé de 50 secondes
+
+- Visage : 230 tentatives, 214 succès, soit 93,0 % globalement.
+- Landmarks : présents lors des 214 détections réussies.
+- Durée visage : moyenne 22,1 ms ; maximum 94,7 ms.
+- Corps complet (cou et deux épaules) : 0 succès sur 46 tentatives dans ce cadrage rapproché.
+- Durée corps : moyenne 16,2 ms ; maximum 30,9 ms.
+- Overlay : 1 perte ; interruption maximale 1,08 s ; récupération moyenne 1,08 s.
+
+Résultats par étape :
+
+- Position neutre : 100 %.
+- Tête à gauche : 100 %.
+- Tête à droite : 100 %.
+- Regard vers le haut : 100 %.
+- Regard vers le bas : 100 %.
+- Visage rapproché : 100 %.
+- Visage éloigné : 100 %.
+- Visage masqué : absence correctement observée 47,8 % du temps ; le visage ou une partie reconnaissable est resté détecté 52,2 % du temps.
+- Retour neutre : overlay visible 78,3 % du temps ; récupération mesurée à 1,08 s.
+
+Interprétation : les sept situations où le visage devait rester visible ont toutes obtenu 100 %. Le taux global de 93 % inclut volontairement la phase où le visage était masqué ; les résultats par étape sont donc la référence pour comparer les prochaines versions.
+
+### CPU et mémoire
+
+Mesure de référence avant séparation des cadences :
+
+- CPU moyen : 19,84 % ; plage observée 15,7–23,8 %.
+- Mémoire : environ 45–46 Mio.
+
+Mesure version `12ccb83`, fenêtre visible avant benchmark, 10 échantillons espacés de 2 s :
+
+- CPU moyen : 21,98 % ; plage 18,4–26,2 %.
+- Mémoire : environ 56–63 Mio.
+
+Fenêtre de mesure de 60 s autour du benchmark, 30 échantillons espacés de 2 s :
+
+- CPU moyen : 19,89 % ; plage 12,5–29,1 %.
+- Mémoire moyenne : 55,4 Mio ; plage 50,1–64,2 Mio.
+- Cette fenêtre a commencé avant le clic de démarrage et s’est terminée pendant l’étape 8 : elle représente l’utilisation autour du benchmark, pas exactement ses 50 secondes seules.
+
+Fenêtre réduite, suivi toujours actif, 10 échantillons espacés de 2 s :
+
+- CPU moyen : 18,64 % ; plage 13,9–25,7 %.
+- Mémoire : environ 63–67 Mio.
+
+### Objectifs pour la suite
+
+- CPU moyen en arrière-plan : 15 % ou moins.
+- CPU en pause : moins de 1 % et caméra arrêtée.
+- Mémoire : moins de 100 Mio et dérive inférieure à 10 Mio sur 30 minutes.
+- Visage détecté : au moins 95 % lorsque le visage doit être visible.
+- Récupération après occultation : 1 seconde ou moins.
+- Aucun ancien overlay visible plus de 0,25 seconde.
+
+Prochaine comparaison : cadence visage 5 fois/s lorsque la fenêtre est visible, 2 fois/s en arrière-plan, corps conservé à 1 fois/s.

@@ -21,10 +21,12 @@
 - `PRODUCT / UX DESIGNER` : parcours, calibration initiale, écran principal, retour de posture et barre de menu macOS.
 - `PERFORMANCE` : consommation CPU, mémoire, GPU, batterie, caméra et fonctionnement en arrière-plan.
 - `REVIEWER` : revue indépendante de la qualité, des bugs, régressions, permissions et risques d'expérience utilisateur.
+- `PROFESSEUR` : interlocuteur pédagogique séparé. Il explique à Jeremy, avec davantage de détails et des exemples concrets, le fonctionnement d’Align, les changements significatifs, les tests et leurs limites. Il ne décide pas de la ligne produit et ne modifie rien sans demande explicite.
 
 ## Coordination autonome
 
-- Jeremy échange uniquement avec `CHEF ORCHESTRE`. Les autres agents ne demandent rien directement à Jeremy : ils transmettent leurs questions, blocages et résultats au chef d'orchestre. Le chef d'orchestre transforme les objectifs de Jeremy en tâches précises, les envoie directement aux agents concernés, suit leurs réponses et présente une synthèse simple à Jeremy.
+- Jeremy échange principalement avec `CHEF ORCHESTRE`. Les agents techniques ne demandent rien directement à Jeremy : ils transmettent leurs questions, blocages et résultats au chef d'orchestre. Le chef d'orchestre transforme les objectifs de Jeremy en tâches précises, les envoie directement aux agents concernés, suit leurs réponses et présente une synthèse simple à Jeremy.
+- `PROFESSEUR` est l’unique exception : Jeremy peut lui parler directement pour poser des questions pédagogiques. `CHEF ORCHESTRE` lui transmet automatiquement chaque évolution significative validée afin qu’il puisse l’expliquer. Les décisions produit, le code, Git et la coordination restent sous la responsabilité de `CHEF ORCHESTRE`.
 - Dans un objectif déjà validé par Jeremy, les agents travaillent, se parlent, clarifient leurs dépendances, se transmettent les résultats et poursuivent les étapes techniques normales sans demander à Jeremy d'organiser leur travail ni de répéter ses décisions.
 - Une ambiguïté technique interne doit d'abord être résolue entre les agents. Le chef d'orchestre tranche lorsqu'il peut le faire sans changer l'objectif produit.
 - L'équipe ne sollicite Jeremy que si une décision change réellement le produit, élargit le périmètre, engage un coût, exige une donnée ou permission personnelle, ou autorise une action externe importante comme publier, déployer, acheter, supprimer des données ou envoyer un message.
@@ -73,6 +75,7 @@
 - Utilise au moins un sous-agent dès qu’une tâche comporte une étape qui peut utilement être analysée, recherchée, exécutée ou vérifiée séparément, même si cette étape est relativement petite.
 - N’utilise pas de sous-agent uniquement lorsqu’une tâche est réellement triviale et que la délégation n’apporterait aucune valeur pratique.
 - Lorsque le choix du modèle est disponible, tous les sous-agents doivent utiliser exclusivement Luna `high` ou Luna `xhigh`. N’utilise jamais Sol ni un autre modèle comme sous-agent.
+- Les éventuels sous-agents de `PROFESSEUR` utilisent Luna `high` par défaut ; Luna `xhigh` est réservé à une analyse pédagogique réellement difficile.
 - Utilise Luna `high` par défaut afin de limiter le coût. Réserve Luna `xhigh` aux analyses difficiles, diagnostics ambigus, recherches de bugs, revues critiques ou vérifications indépendantes où le niveau supplémentaire de raisonnement apporte une valeur réelle.
 - Utilise les sous-agents pour le travail borné et parallélisable. Évite les délégations redondantes ou plusieurs agents faisant essentiellement le même travail sans justification.
 - Lorsque plusieurs agents travaillent en parallèle et que leurs périmètres peuvent se chevaucher ou provoquer des conflits, ils doivent se coordonner directement entre eux par messages, sans demander à l’utilisateur d’organiser leur travail. Ils identifient les fichiers et dépendances partagés, conviennent de l’ordre des interventions et se transmettent l’état utile. Si nécessaire, un agent attend que l’autre ait terminé, puis reprend automatiquement son travail dès que le blocage est levé, sans attendre une relance ou une instruction de l’utilisateur. Aucun agent ne doit écraser, annuler ou intégrer silencieusement le travail d’un autre.
