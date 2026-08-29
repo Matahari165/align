@@ -85,6 +85,14 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 560, minHeight: 430)
+        .background {
+            WindowPresentationReader { isApplicationActive, isWindowMiniaturized in
+                camera.updatePresentation(
+                    isApplicationActive: isApplicationActive,
+                    isWindowMiniaturized: isWindowMiniaturized
+                )
+            }
+        }
         .onDisappear {
             camera.stop()
         }

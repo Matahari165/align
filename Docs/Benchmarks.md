@@ -68,3 +68,16 @@ Fenêtre réduite, suivi toujours actif, 10 échantillons espacés de 2 s :
 - Aucun ancien overlay visible plus de 0,25 seconde.
 
 Prochaine comparaison : cadence visage 5 fois/s lorsque la fenêtre est visible, 2 fois/s en arrière-plan, corps conservé à 1 fois/s.
+
+## 29 août 2026 — Cadence réduite en arrière-plan
+
+Version testée : branche `feature/background-performance`, après ajout d’une cadence faciale automatique de 2 analyses/s lorsque Align n’est pas au premier plan. La capture reste à 720p/15 images/s et le corps reste analysé environ 1 fois/s.
+
+Mesure réelle en arrière-plan, une seule instance, 10 échantillons espacés de 2 s :
+
+- CPU moyen : 11,94 % ; plage 8,8–17,5 %.
+- Mémoire moyenne : 59,6 Mio ; plage 55,8–63,5 Mio.
+- Comparaison avec la mesure précédente fenêtre réduite : 18,64 % → 11,94 %, soit une baisse d’environ 35,9 %.
+- Objectif CPU arrière-plan inférieur ou égal à 15 % : atteint sur cette mesure courte de 20 secondes.
+
+Limites : cette mesure courte ne remplace pas encore le contrôle de 10 minutes ni le test de dérive mémoire sur 30 minutes. La consommation en pause complète reste à mesurer après arrêt manuel de la caméra.

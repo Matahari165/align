@@ -91,6 +91,8 @@ final class CameraCaptureService: ObservableObject {
     private var activePoseGeneration: PoseProcessingGeneration?
     private var benchmarkSession: BenchmarkSession?
     private var benchmarkProgressTask: Task<Void, Never>?
+    private var isApplicationActive = true
+    private var isWindowMiniaturized = false
     private lazy var sampleDelegate = PoseSampleBufferDelegate(
         sampleQueue: sampleQueue
     ) { [weak self] event, generation in
@@ -111,9 +113,13 @@ final class CameraCaptureService: ObservableObject {
                 self.trackingMode = nil
                 self.state = .failed("L’analyse de la pose s’est interrompue. Arrêtez puis relancez la caméra.")
             case .diagnostics(let diagnostics):
-                self.diagnostics = diagnostics
+                if self.currentAnalysisPresentation.publishesVisualUpdates {
+                    self.diagnostics = diagnostics
+                }
             case .overlay(let overlay):
-                self.overlay = overlay
+                if self.currentAnalysisPresentation.publishesVisualUpdates {
+                    self.overlay = overlay
+                }
             case .benchmarkMeasurement(let measurement, let uptime):
                 self.benchmarkSession?.record(measurement, at: uptime)
             case .benchmarkOverlayVisibility(let visible, let uptime):
@@ -209,12 +215,15 @@ final class CameraCaptureService: ObservableObject {
     }
 
     func startBenchmark() {
-        guard state == .running else { return }
+        guard state == .running,
+              isApplicationActive,
+              !isWindowMiniaturized else { return }
         benchmarkProgressTask?.cancel()
         var benchmark = BenchmarkSession()
         let uptime = ProcessInfo.processInfo.systemUptime
         benchmark.start(at: uptime)
         benchmarkSession = benchmark
+        updateAnalysisPresentation()
         if let progress = benchmark.progress(at: uptime) {
             benchmarkState = .running(progress)
         }
@@ -228,6 +237,7 @@ final class CameraCaptureService: ObservableObject {
                     let report = benchmark.finish(at: now)
                     self.benchmarkSession = nil
                     self.benchmarkState = .completed(report)
+                    self.updateAnalysisPresentation()
                     return
                 }
                 self.benchmarkSession = benchmark
@@ -243,6 +253,25 @@ final class CameraCaptureService: ObservableObject {
         benchmarkProgressTask = nil
         benchmarkSession = nil
         benchmarkState = .idle
+        updateAnalysisPresentation()
+    }
+
+    func updatePresentation(
+        isApplicationActive: Bool,
+        isWindowMiniaturized: Bool
+    ) {
+        guard self.isApplicationActive != isApplicationActive
+                || self.isWindowMiniaturized != isWindowMiniaturized else { return }
+        self.isApplicationActive = isApplicationActive
+        self.isWindowMiniaturized = isWindowMiniaturized
+        if benchmarkSession != nil,
+           (!isApplicationActive || isWindowMiniaturized) {
+            invalidateBenchmark(
+                reason: "Benchmark annulé : garde Align visible au premier plan pendant la mesure."
+            )
+            return
+        }
+        updateAnalysisPresentation()
     }
 
     private func invalidateBenchmark(reason: String) {
@@ -251,6 +280,26 @@ final class CameraCaptureService: ObservableObject {
         benchmarkProgressTask = nil
         benchmarkSession = nil
         benchmarkState = .invalidated(reason)
+        updateAnalysisPresentation()
+    }
+
+    private func updateAnalysisPresentation() {
+        let presentation = currentAnalysisPresentation
+        if !presentation.publishesVisualUpdates {
+            overlay = .empty
+        }
+        let sampleDelegate = sampleDelegate
+        sampleQueue.async {
+            sampleDelegate.updatePresentation(presentation)
+        }
+    }
+
+    private var currentAnalysisPresentation: AnalysisPresentationState {
+        AnalysisPresentationState(
+            isApplicationActive: isApplicationActive,
+            isWindowMiniaturized: isWindowMiniaturized,
+            isBenchmarkRunning: benchmarkSession != nil
+        )
     }
 
     private func configureAndStart(operationID currentOperationID: Int) {
@@ -465,8 +514,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     private let detector = PoseDetector()
     private let onEvent: @Sendable (PoseProcessingEvent, PoseProcessingGeneration) -> Void
     private let sampleQueue: DispatchQueue
-    private let detectionInterval: TimeInterval = 0.2
-    private var lastDetectionUptime: TimeInterval?
+    private var analysisCadence = AnalysisCadenceController()
     private var isActive = false
     private var generation = PoseProcessingGeneration(operationID: 0, activationID: 0)
     private var stabilizer = PoseResultStabilizer()
@@ -491,7 +539,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     func setActive(_ isActive: Bool, generation: PoseProcessingGeneration) {
         self.isActive = isActive
         self.generation = generation
-        lastDetectionUptime = nil
+        analysisCadence.reset()
         expirationWorkItem?.cancel()
         expirationWorkItem = nil
         overlayExpirationWorkItem?.cancel()
@@ -506,6 +554,14 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         bodyStatusAvailableUntil = nil
     }
 
+    func updatePresentation(_ presentation: AnalysisPresentationState) {
+        analysisCadence.updatePresentation(presentation)
+        if !presentation.publishesVisualUpdates {
+            overlayExpirationWorkItem?.cancel()
+            overlayExpirationWorkItem = nil
+        }
+    }
+
     func captureOutput(
         _ output: AVCaptureOutput,
         didOutput sampleBuffer: CMSampleBuffer,
@@ -515,16 +571,12 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         frameCallbacks += 1
 
         let uptime = ProcessInfo.processInfo.systemUptime
-        if let lastDetectionUptime,
-           uptime - lastDetectionUptime < detectionInterval {
-            return
-        }
-        lastDetectionUptime = uptime
+        guard analysisCadence.shouldAnalyze(at: uptime) else { return }
         analyses += 1
 
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             lastVisionError = "Buffer vidéo absent"
-            publishDiagnostics()
+            publishDiagnosticsIfNeeded()
             publishStabilized(result: .inferenceError, at: uptime)
             return
         }
@@ -568,36 +620,42 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             if bodyDuration == nil || body != nil {
                 lastVisionError = nil
             }
-            publishDiagnostics()
-            if isOverlayVisible {
-                publishFreshOverlay(currentOverlay, at: uptime)
-            } else {
-                clearOverlay()
+            publishDiagnosticsIfNeeded()
+            if analysisCadence.presentation.publishesVisualUpdates {
+                if isOverlayVisible {
+                    publishFreshOverlay(currentOverlay, at: uptime)
+                } else {
+                    clearOverlay()
+                }
             }
             publishStabilized(
                 result: output.observation.map { .detected($0.status) } ?? .noPose,
                 at: uptime
             )
-            onEvent(.benchmarkMeasurement(BenchmarkMeasurement(
-                faceDuration: faceDuration,
-                faceSucceeded: face.resultCount > 0,
-                faceHadLandmarks: face.facesWithLandmarksCount > 0,
-                bodyDuration: bodyDuration,
-                bodySucceeded: body?.hasUpperBody == true,
-                overlayVisible: isOverlayVisible
-            ), uptime), generation)
+            if analysisCadence.presentation.isBenchmarkRunning {
+                onEvent(.benchmarkMeasurement(BenchmarkMeasurement(
+                    faceDuration: faceDuration,
+                    faceSucceeded: face.resultCount > 0,
+                    faceHadLandmarks: face.facesWithLandmarksCount > 0,
+                    bodyDuration: bodyDuration,
+                    bodySucceeded: body?.hasUpperBody == true,
+                    overlayVisible: isOverlayVisible
+                ), uptime), generation)
+            }
         } catch {
             lastVisionError = error.localizedDescription
-            publishDiagnostics()
+            publishDiagnosticsIfNeeded()
             publishStabilized(result: .inferenceError, at: uptime)
-            onEvent(.benchmarkMeasurement(BenchmarkMeasurement(
-                faceDuration: ProcessInfo.processInfo.systemUptime - faceStart,
-                faceSucceeded: false,
-                faceHadLandmarks: false,
-                bodyDuration: nil,
-                bodySucceeded: false,
-                overlayVisible: false
-            ), uptime), generation)
+            if analysisCadence.presentation.isBenchmarkRunning {
+                onEvent(.benchmarkMeasurement(BenchmarkMeasurement(
+                    faceDuration: ProcessInfo.processInfo.systemUptime - faceStart,
+                    faceSucceeded: false,
+                    faceHadLandmarks: false,
+                    bodyDuration: nil,
+                    bodySucceeded: false,
+                    overlayVisible: false
+                ), uptime), generation)
+            }
         }
     }
 
@@ -643,7 +701,8 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         ), generation)
     }
 
-    private func publishDiagnostics() {
+    private func publishDiagnosticsIfNeeded() {
+        guard analysisCadence.presentation.publishesVisualUpdates else { return }
         let inference = lastInferenceDiagnostics
         onEvent(.diagnostics(CameraAnalysisDiagnostics(
             frameCallbacks: frameCallbacks,
