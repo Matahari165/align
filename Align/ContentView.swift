@@ -103,7 +103,7 @@ struct ContentView: View {
         switch camera.benchmarkState {
         case .idle:
             HStack {
-                Text("Benchmark local guidé · 50 s")
+                Text("Benchmark local guidé · 60 s")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()

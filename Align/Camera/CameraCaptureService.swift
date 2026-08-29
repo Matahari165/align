@@ -9,6 +9,7 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
         analyses: 0,
         candidateOrientation: "—",
         lockedOrientation: nil,
+        faceOrientation: nil,
         faceResults: 0,
         facesWithLandmarks: 0,
         facePoints: 0,
@@ -20,6 +21,7 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
     let analyses: Int
     let candidateOrientation: String
     let lockedOrientation: String?
+    let faceOrientation: FaceOrientationSignal?
     let faceResults: Int
     let facesWithLandmarks: Int
     let facePoints: Int
@@ -30,7 +32,8 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
         let orientation = lockedOrientation.map { "\(candidateOrientation)→\($0)" }
             ?? candidateOrientation
         let error = lastVisionError.map { " · erreur: \($0)" } ?? ""
-        return "Frames \(frameCallbacks) · analyses \(analyses) · orientation \(orientation) · faces \(faceResults) / landmarks \(facesWithLandmarks) / points \(facePoints) · corps \(bodyResults)\(error)"
+        let faceOrientationSummary = faceOrientation.map { " · visage \($0.summary)" } ?? ""
+        return "Frames \(frameCallbacks) · analyses \(analyses) · orientation \(orientation) · faces \(faceResults) / landmarks \(facesWithLandmarks) / points \(facePoints) · corps \(bodyResults)\(faceOrientationSummary)\(error)"
     }
 }
 
@@ -637,6 +640,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                     faceDuration: faceDuration,
                     faceSucceeded: face.resultCount > 0,
                     faceHadLandmarks: face.facesWithLandmarksCount > 0,
+                    faceOrientation: face.primaryOrientation,
                     bodyDuration: bodyDuration,
                     bodySucceeded: body?.hasUpperBody == true,
                     overlayVisible: isOverlayVisible
@@ -651,6 +655,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                     faceDuration: ProcessInfo.processInfo.systemUptime - faceStart,
                     faceSucceeded: false,
                     faceHadLandmarks: false,
+                    faceOrientation: nil,
                     bodyDuration: nil,
                     bodySucceeded: false,
                     overlayVisible: false
@@ -709,6 +714,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             analyses: analyses,
             candidateOrientation: inference?.candidateOrientation ?? "—",
             lockedOrientation: inference?.lockedOrientation,
+            faceOrientation: inference?.faceOrientation,
             faceResults: inference?.faceResultCount ?? 0,
             facesWithLandmarks: inference?.facesWithLandmarksCount ?? 0,
             facePoints: inference?.facePointCount ?? 0,

@@ -64,6 +64,7 @@ nonisolated struct PoseObservation: Sendable {
 nonisolated struct PoseInferenceDiagnostics: Sendable {
     let candidateOrientation: String
     let lockedOrientation: String?
+    let faceOrientation: FaceOrientationSignal?
     let faceResultCount: Int
     let facesWithLandmarksCount: Int
     let facePointCount: Int
@@ -77,6 +78,7 @@ nonisolated struct PoseDetectionOutput: Sendable {
 
 nonisolated struct FaceDetectionOutput: Sendable {
     let polylines: [PosePolyline]
+    let primaryOrientation: FaceOrientationSignal?
     let resultCount: Int
     let facesWithLandmarksCount: Int
 }
@@ -189,6 +191,13 @@ nonisolated final class PoseDetector: @unchecked Sendable {
         } ?? []
         return FaceDetectionOutput(
             polylines: facePolylines,
+            primaryOrientation: primaryFace.map {
+                FaceOrientationSignal(
+                    rollRadians: $0.roll?.doubleValue,
+                    yawRadians: $0.yaw?.doubleValue,
+                    pitchRadians: $0.pitch?.doubleValue
+                )
+            },
             resultCount: faceResults.count,
             facesWithLandmarksCount: faceResults.lazy.filter { $0.landmarks != nil }.count
         )
@@ -233,6 +242,7 @@ nonisolated final class PoseDetector: @unchecked Sendable {
             diagnostics: PoseInferenceDiagnostics(
                 candidateOrientation: "up",
                 lockedOrientation: "up",
+                faceOrientation: face.primaryOrientation,
                 faceResultCount: face.resultCount,
                 facesWithLandmarksCount: face.facesWithLandmarksCount,
                 facePointCount: facePointCount,

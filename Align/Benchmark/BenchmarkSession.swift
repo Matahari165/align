@@ -27,6 +27,8 @@ nonisolated struct BenchmarkPhase: Equatable, Sendable {
         BenchmarkPhase(instruction: "Regarde vers le bas", duration: 5, expectation: .faceVisible),
         BenchmarkPhase(instruction: "Rapproche ton visage de l’écran", duration: 5, expectation: .faceVisible),
         BenchmarkPhase(instruction: "Éloigne le visage de l’écran", duration: 5, expectation: .faceVisible),
+        BenchmarkPhase(instruction: "Sans bouger la tête, incline légèrement l’écran vers toi", duration: 5, expectation: .faceVisible),
+        BenchmarkPhase(instruction: "Sans bouger la tête, éloigne légèrement l’écran de toi", duration: 5, expectation: .faceVisible),
         BenchmarkPhase(instruction: "Masque le visage", duration: 5, expectation: .faceAbsent),
         BenchmarkPhase(instruction: "Découvre le visage et reste neutre", duration: 5, expectation: .recovery)
     ]
@@ -36,6 +38,7 @@ nonisolated struct BenchmarkMeasurement: Sendable {
     let faceDuration: TimeInterval
     let faceSucceeded: Bool
     let faceHadLandmarks: Bool
+    let faceOrientation: FaceOrientationSignal?
     let bodyDuration: TimeInterval?
     let bodySucceeded: Bool
     let overlayVisible: Bool
@@ -60,6 +63,36 @@ nonisolated struct DurationAggregate: Sendable {
         count += 1
         total += duration
         maximum = max(maximum, duration)
+    }
+}
+
+/// Agrégat en mémoire d'un angle facial exprimé en degrés.
+nonisolated struct AngleAggregate: Sendable, Equatable {
+    private(set) var count = 0
+    private(set) var total: Double = 0
+    private(set) var minimum: Double?
+    private(set) var maximum: Double?
+    private var sumOfSquares: Double = 0
+
+    var average: Double? {
+        guard count > 0 else { return nil }
+        return total / Double(count)
+    }
+
+    /// Dispersion simple : écart-type de population des échantillons présents.
+    var standardDeviation: Double? {
+        guard count > 0, let average else { return nil }
+        let variance = max(0, sumOfSquares / Double(count) - average * average)
+        return variance.squareRoot()
+    }
+
+    mutating func record(_ value: Double?) {
+        guard let value, value.isFinite else { return }
+        count += 1
+        total += value
+        sumOfSquares += value * value
+        minimum = minimum.map { min($0, value) } ?? value
+        maximum = maximum.map { max($0, value) } ?? value
     }
 }
 
@@ -136,11 +169,17 @@ nonisolated struct BenchmarkPhaseMetrics: Sendable {
     private(set) var attempts = 0
     private(set) var facesWithLandmarks = 0
     private(set) var visibleOverlays = 0
+    private(set) var roll = AngleAggregate()
+    private(set) var yaw = AngleAggregate()
+    private(set) var pitch = AngleAggregate()
 
     mutating func record(_ measurement: BenchmarkMeasurement) {
         attempts += 1
         if measurement.faceHadLandmarks { facesWithLandmarks += 1 }
         if measurement.overlayVisible { visibleOverlays += 1 }
+        roll.record(measurement.faceOrientation?.rollDegrees)
+        yaw.record(measurement.faceOrientation?.yawDegrees)
+        pitch.record(measurement.faceOrientation?.pitchDegrees)
     }
 
     func report(for phase: BenchmarkPhase, index: Int) -> String {
@@ -156,7 +195,27 @@ nonisolated struct BenchmarkPhaseMetrics: Sendable {
             conforming = attempts - facesWithLandmarks
         }
 
-        return "Étape \(index + 1) · \(phase.instruction) : \(phase.expectation.reportLabel), conformité \(rate(conforming)), overlay visible \(rate(visibleOverlays))"
+        return [
+            "Étape \(index + 1) · \(phase.instruction) : \(phase.expectation.reportLabel), conformité \(rate(conforming)), overlay visible \(rate(visibleOverlays))",
+            "  Orientation (degrés) : roll \(angleReport(roll)), yaw \(angleReport(yaw)), pitch \(angleReport(pitch))"
+        ].joined(separator: "\n")
+    }
+
+    private func angleReport(_ aggregate: AngleAggregate) -> String {
+        guard let average = aggregate.average,
+              let minimum = aggregate.minimum,
+              let maximum = aggregate.maximum,
+              let dispersion = aggregate.standardDeviation else {
+            return "n=0, moy=—, min=—, max=—, écart-type=—"
+        }
+        return String(
+            format: "n=%d, moy=%+.1f°, min=%+.1f°, max=%+.1f°, écart-type=%.1f°",
+            aggregate.count,
+            average,
+            minimum,
+            maximum,
+            dispersion
+        )
     }
 }
 

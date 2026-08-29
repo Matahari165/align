@@ -2,6 +2,16 @@
 
 Ce fichier conserve uniquement des mesures agrégées. Aucune image, vidéo ou coordonnée faciale n’est enregistrée.
 
+Le benchmark conserve aussi, uniquement en mémoire, les angles `roll`, `yaw`
+et `pitch` issus de l’observation faciale primaire déjà produite par
+`VNDetectFaceLandmarksRequest`. Le rapport copiable donne par phase le nombre
+d’échantillons présents, la moyenne, les bornes et l’écart-type en degrés.
+Ces valeurs décrivent une observation d’orientation et ne constituent pas un
+verdict de posture. Sur le SDK utilisé, `VNFaceObservation.pitch` peut rester
+`nil` : `VNDetectFaceLandmarksRequest` ne garantit pas le calcul du pitch,
+contrairement à une requête de rectangles faciaux adaptée ; Align expose donc
+`nil` sans lancer de requête Vision supplémentaire.
+
 ## 29 août 2026 — Reconnaissance Vision et ressources
 
 ### Machine et version
@@ -12,7 +22,15 @@ Ce fichier conserve uniquement des mesures agrégées. Aucune image, vidéo ou c
 - Caméra intégrée, capture 720p à 15 images/s.
 - Visage analysé jusqu’à 5 fois/s ; corps environ 1 fois/s, avec accélération temporaire possible à 2 fois/s.
 
-### Benchmark guidé de 50 secondes
+### Séquence guidée actuelle — 60 secondes
+
+La séquence actuelle comporte 11 phases : position neutre (10 s), tête à
+gauche (5 s), tête à droite (5 s), regard vers le haut (5 s), regard vers le
+bas (5 s), visage rapproché (5 s), visage éloigné (5 s), écran légèrement
+incliné vers soi sans bouger la tête (5 s), écran légèrement éloigné sans
+bouger la tête (5 s), visage masqué (5 s), puis retour neutre (5 s).
+
+### Mesure historique — benchmark guidé de 50 secondes
 
 - Visage : 230 tentatives, 214 succès, soit 93,0 % globalement.
 - Landmarks : présents lors des 214 détections réussies.
@@ -81,3 +99,22 @@ Mesure réelle en arrière-plan, une seule instance, 10 échantillons espacés d
 - Objectif CPU arrière-plan inférieur ou égal à 15 % : atteint sur cette mesure courte de 20 secondes.
 
 Limites : cette mesure courte ne remplace pas encore le contrôle de 10 minutes ni le test de dérive mémoire sur 30 minutes. La consommation en pause complète reste à mesurer après arrêt manuel de la caméra.
+
+## 29 août 2026 — Orientation faciale native Vision
+
+Séquence guidée de 60 secondes, 11 phases. Les angles proviennent de la même `VNFaceObservation` que les landmarks ; aucune requête Vision supplémentaire.
+
+- Visage : 265 succès sur 281 tentatives, soit 94,3 % globalement.
+- Toutes les neuf phases où le visage devait rester visible : conformité 100 %.
+- Durée visage : moyenne 27,2 ms ; maximum 85,0 ms.
+- Corps complet : 0 succès sur 57 tentatives dans le cadrage utilisé.
+- Récupération après masquage : 1,87 s.
+
+Résultats d’orientation :
+
+- `pitch` : jamais fourni, sur aucune phase.
+- `yaw` : réagit à gauche/droite, mais de façon grossière et instable. Gauche : moyenne +37,2°, plage 0–90°. Droite : moyenne -15,0°, plage -45–90°.
+- `roll` : généralement bloqué à 0°. Une valeur aberrante de -180° est apparue pendant la récupération après masquage.
+- Inclinaison de l’écran vers soi puis loin de soi : `roll` et `yaw` sont restés à 0°, `pitch` absent.
+
+Décision : ne pas utiliser directement ces propriétés natives pour produire un verdict de posture. Elles restent utiles comme diagnostic de développement. La prochaine expérimentation doit dériver des mesures géométriques depuis les landmarks visage déjà fiables et vérifier séparément leur sensibilité aux mouvements de tête et de l’écran.
