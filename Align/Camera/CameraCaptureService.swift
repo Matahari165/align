@@ -10,6 +10,7 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
         candidateOrientation: "—",
         lockedOrientation: nil,
         faceOrientation: nil,
+        faceGeometry: nil,
         faceResults: 0,
         facesWithLandmarks: 0,
         facePoints: 0,
@@ -22,6 +23,7 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
     let candidateOrientation: String
     let lockedOrientation: String?
     let faceOrientation: FaceOrientationSignal?
+    let faceGeometry: FaceGeometrySignal?
     let faceResults: Int
     let facesWithLandmarks: Int
     let facePoints: Int
@@ -33,7 +35,8 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
             ?? candidateOrientation
         let error = lastVisionError.map { " · erreur: \($0)" } ?? ""
         let faceOrientationSummary = faceOrientation.map { " · visage \($0.summary)" } ?? ""
-        return "Frames \(frameCallbacks) · analyses \(analyses) · orientation \(orientation) · faces \(faceResults) / landmarks \(facesWithLandmarks) / points \(facePoints) · corps \(bodyResults)\(faceOrientationSummary)\(error)"
+        let faceGeometrySummary = faceGeometry.map { " · géométrie \($0.summary)" } ?? ""
+        return "Frames \(frameCallbacks) · analyses \(analyses) · orientation \(orientation) · faces \(faceResults) / landmarks \(facesWithLandmarks) / points \(facePoints) · corps \(bodyResults)\(faceOrientationSummary)\(faceGeometrySummary)\(error)"
     }
 }
 
@@ -641,6 +644,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                     faceSucceeded: face.resultCount > 0,
                     faceHadLandmarks: face.facesWithLandmarksCount > 0,
                     faceOrientation: face.primaryOrientation,
+                    faceGeometry: output.diagnostics.faceGeometry,
                     bodyDuration: bodyDuration,
                     bodySucceeded: body?.hasUpperBody == true,
                     overlayVisible: isOverlayVisible
@@ -656,6 +660,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                     faceSucceeded: false,
                     faceHadLandmarks: false,
                     faceOrientation: nil,
+                    faceGeometry: nil,
                     bodyDuration: nil,
                     bodySucceeded: false,
                     overlayVisible: false
@@ -715,6 +720,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             candidateOrientation: inference?.candidateOrientation ?? "—",
             lockedOrientation: inference?.lockedOrientation,
             faceOrientation: inference?.faceOrientation,
+            faceGeometry: inference?.faceGeometry,
             faceResults: inference?.faceResultCount ?? 0,
             facesWithLandmarks: inference?.facesWithLandmarksCount ?? 0,
             facePoints: inference?.facePointCount ?? 0,

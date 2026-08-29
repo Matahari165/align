@@ -95,6 +95,114 @@ private enum FaceOrientationHarness {
         let report = session.finish(at: 119)
         expect(report.contains("Orientation (degrés)"), "le rapport doit exposer l’orientation")
         expect(report.contains("pitch n=0"), "le rapport doit exposer honnêtement pitch absent")
+
+        func polyline(_ name: String, _ points: [(Double, Double)]) -> PosePolyline {
+            PosePolyline(
+                name: name,
+                locations: points.map { CGPoint(x: $0.0, y: $0.1) },
+                source: .face,
+                isClosed: false
+            )
+        }
+
+        let basePolylines = [
+            polyline("leftEye", [(0.20, 0.40), (0.20, 0.42), (0.22, 0.41)]),
+            polyline("rightEye", [(0.60, 0.60), (0.60, 0.62), (0.62, 0.61)]),
+            polyline("nose", [(0.46, 0.70), (0.48, 0.72), (0.47, 0.71)]),
+            polyline("medianLine", [(0.40, 0.10), (0.40, 0.90)])
+        ]
+        let geometry = FaceGeometrySignal.from(polylines: basePolylines)
+        expect(geometry != nil, "des landmarks valides doivent produire une géométrie")
+        expect(approximately(geometry?.eyeLineRollDegrees, 26.565051177), "roll géométrique incorrect")
+        expect(approximately(geometry?.yawProxy, 0.156524758, tolerance: 0.000_001), "le yaw proxy doit être positif et normalisé")
+        expect(approximately(geometry?.pitchProxy, 0.25, tolerance: 0.000_001), "le pitch proxy doit suivre y capture")
+
+        let invertedEyes = [
+            polyline("leftEye", [(0.60, 0.60), (0.60, 0.62), (0.62, 0.61)]),
+            polyline("rightEye", [(0.20, 0.40), (0.20, 0.42), (0.22, 0.41)]),
+            polyline("nose", [(0.46, 0.70), (0.48, 0.72), (0.47, 0.71)]),
+            polyline("medianLine", [(0.40, 0.10), (0.40, 0.90)])
+        ]
+        let invertedGeometry = FaceGeometrySignal.from(polylines: invertedEyes)
+        expect(approximately(invertedGeometry?.eyeLineRollDegrees, geometry?.eyeLineRollDegrees), "le roll axial doit ignorer l’ordre des yeux")
+
+        let contourFallback = FaceGeometrySignal.from(polylines: basePolylines
+            .filter { $0.name != "medianLine" }
+            + [polyline("faceContour", [(0.40, 0.10), (0.40, 0.90)])])
+        expect(approximately(contourFallback?.pitchProxy, geometry?.pitchProxy), "le contour doit être le fallback de la longueur faciale")
+
+        let translatedAndScaled = basePolylines.map { line in
+            PosePolyline(
+                name: line.name,
+                locations: line.locations.map {
+                    CGPoint(x: $0.x * 2 + 7, y: $0.y * 2 - 3)
+                },
+                source: line.source,
+                isClosed: line.isClosed
+            )
+        }
+        let transformedGeometry = FaceGeometrySignal.from(polylines: translatedAndScaled)
+        expect(approximately(transformedGeometry?.eyeLineRollDegrees, geometry?.eyeLineRollDegrees), "roll doit être invariant par translation/échelle")
+        expect(approximately(transformedGeometry?.yawProxy, geometry?.yawProxy), "yaw doit être invariant par translation/échelle")
+        expect(approximately(transformedGeometry?.pitchProxy, geometry?.pitchProxy), "pitch doit être invariant par translation/échelle")
+        expect(approximately(transformedGeometry?.interocularDistance, geometry?.interocularDistance.map { $0 * 2 }), "distance interoculaire doit suivre l'échelle")
+
+        let oppositeNose = basePolylines.map { line in
+            guard line.name == "nose" else { return line }
+            return polyline("nose", [(0.30, 0.70), (0.32, 0.72)])
+        }
+        expect((FaceGeometrySignal.from(polylines: oppositeNose)?.yawProxy ?? 0) < 0, "un nez à gauche doit donner un yaw négatif")
+
+        let missing = FaceGeometrySignal.from(polylines: [polyline("nose", [(0.4, 0.6), (0.4, 0.7)])])
+        expect(missing == nil, "sans yeux ni longueur faciale, la géométrie doit être absente")
+        let degenerate = FaceGeometrySignal.from(polylines: [
+            polyline("leftEye", [(0.4, 0.4), (0.4, 0.4)]),
+            polyline("rightEye", [(0.4, 0.4), (0.4, 0.4)]),
+            polyline("nose", [(0.4, 0.6), (0.4, 0.6)]),
+            polyline("medianLine", [(0.4, 0.4), (0.4, 0.4)])
+        ])
+        expect(degenerate == nil, "des distances dégénérées doivent être ignorées")
+        let nonFinite = FaceGeometrySignal.from(polylines: [
+            polyline("leftEye", [(Double.nan, 0.4), (Double.nan, 0.4)]),
+            polyline("rightEye", [(0.6, 0.4), (0.6, 0.4)]),
+            polyline("nose", [(0.5, 0.6), (0.5, 0.6)]),
+            polyline("medianLine", [(0.4, 0.1), (0.4, 0.9)])
+        ])
+        expect(nonFinite?.yawProxy == nil && nonFinite?.interocularDistance == nil, "les coordonnées non finies doivent être ignorées")
+
+        var geometrySession = BenchmarkSession(phases: [
+            BenchmarkPhase(instruction: "phase géométrie", duration: 10, expectation: .faceVisible)
+        ])
+        geometrySession.start(at: 300)
+        let geometryMeasurement = BenchmarkMeasurement(
+            faceDuration: 0.01,
+            faceSucceeded: true,
+            faceHadLandmarks: true,
+            faceOrientation: nil,
+            faceGeometry: geometry,
+            bodyDuration: nil,
+            bodySucceeded: false,
+            overlayVisible: true
+        )
+        geometrySession.record(geometryMeasurement, at: 301)
+        geometrySession.record(geometryMeasurement, at: 302)
+        expect(geometrySession.phaseMetrics[0].yawProxy.count == 2, "le yaw proxy doit être agrégé par phase")
+        expect(approximately(geometrySession.phaseMetrics[0].pitchProxy.average, geometry?.pitchProxy), "la moyenne géométrique de phase est incorrecte")
+        expect(geometrySession.phaseMetrics[0].pitchProxy.minimum == geometrySession.phaseMetrics[0].pitchProxy.maximum, "min/max géométriques doivent être conservés")
+
+        var comparisonSession = BenchmarkSession()
+        comparisonSession.start(at: 400)
+        for uptime in [421.0, 426.0, 431.0, 436.0, 441.0, 446.0] {
+            comparisonSession.record(geometryMeasurement, at: uptime)
+        }
+        let comparisonReport = comparisonSession.finish(at: 459)
+        expect(comparisonReport.contains("Tête haut/bas"), "le rapport doit comparer haut et bas")
+        expect(comparisonReport.contains("Tête gauche/droite"), "le rapport doit comparer gauche et droite")
+        expect(comparisonReport.contains("Écran vers/loin"), "le rapport doit comparer l’écran vers et loin")
+        expect(comparisonReport.contains("Visage près/loin"), "le rapport doit comparer près et loin")
+        expect(comparisonReport.contains("interoculaire"), "le rapport doit exposer l’échelle interoculaire")
+        expect(comparisonReport.contains("longueur faciale"), "le rapport doit exposer la longueur faciale")
+
         print("FaceOrientationHarness: OK")
     }
 }

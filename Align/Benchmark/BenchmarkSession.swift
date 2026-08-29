@@ -1,5 +1,22 @@
 import Foundation
 
+nonisolated private func benchmarkScalarReport(_ aggregate: ScalarAggregate) -> String {
+    guard let average = aggregate.average,
+          let minimum = aggregate.minimum,
+          let maximum = aggregate.maximum,
+          let dispersion = aggregate.standardDeviation else {
+        return "n=0, moy=—, min=—, max=—, écart-type=—"
+    }
+    return String(
+        format: "n=%d, moy=%+.3f, min=%+.3f, max=%+.3f, écart-type=%.3f",
+        aggregate.count,
+        average,
+        minimum,
+        maximum,
+        dispersion
+    )
+}
+
 nonisolated struct BenchmarkPhase: Equatable, Sendable {
     enum Expectation: Equatable, Sendable {
         case faceVisible
@@ -39,9 +56,59 @@ nonisolated struct BenchmarkMeasurement: Sendable {
     let faceSucceeded: Bool
     let faceHadLandmarks: Bool
     let faceOrientation: FaceOrientationSignal?
+    let faceGeometry: FaceGeometrySignal?
     let bodyDuration: TimeInterval?
     let bodySucceeded: Bool
     let overlayVisible: Bool
+
+    init(
+        faceDuration: TimeInterval,
+        faceSucceeded: Bool,
+        faceHadLandmarks: Bool,
+        faceOrientation: FaceOrientationSignal?,
+        faceGeometry: FaceGeometrySignal? = nil,
+        bodyDuration: TimeInterval?,
+        bodySucceeded: Bool,
+        overlayVisible: Bool
+    ) {
+        self.faceDuration = faceDuration
+        self.faceSucceeded = faceSucceeded
+        self.faceHadLandmarks = faceHadLandmarks
+        self.faceOrientation = faceOrientation
+        self.faceGeometry = faceGeometry
+        self.bodyDuration = bodyDuration
+        self.bodySucceeded = bodySucceeded
+        self.overlayVisible = overlayVisible
+    }
+}
+
+/// Agrégat en mémoire d'une mesure géométrique sans unité imposée.
+nonisolated struct ScalarAggregate: Sendable, Equatable {
+    private(set) var count = 0
+    private(set) var total: Double = 0
+    private(set) var minimum: Double?
+    private(set) var maximum: Double?
+    private var sumOfSquares: Double = 0
+
+    var average: Double? {
+        guard count > 0 else { return nil }
+        return total / Double(count)
+    }
+
+    var standardDeviation: Double? {
+        guard count > 0, let average else { return nil }
+        let variance = max(0, sumOfSquares / Double(count) - average * average)
+        return variance.squareRoot()
+    }
+
+    mutating func record(_ value: Double?) {
+        guard let value, value.isFinite else { return }
+        count += 1
+        total += value
+        sumOfSquares += value * value
+        minimum = minimum.map { min($0, value) } ?? value
+        maximum = maximum.map { max($0, value) } ?? value
+    }
 }
 
 nonisolated struct BenchmarkProgress: Sendable {
@@ -107,6 +174,11 @@ nonisolated struct BenchmarkMetrics: Sendable {
     private(set) var overlayDropouts = 0
     private(set) var longestInterruption: TimeInterval = 0
     private(set) var recoveryDurations = DurationAggregate()
+    private(set) var geometryEyeLineRoll = ScalarAggregate()
+    private(set) var geometryYawProxy = ScalarAggregate()
+    private(set) var geometryPitchProxy = ScalarAggregate()
+    private(set) var geometryInterocularDistance = ScalarAggregate()
+    private(set) var geometryFaceLength = ScalarAggregate()
     private var interruptionStart: TimeInterval?
     private var hasSeenOverlay = false
 
@@ -115,6 +187,11 @@ nonisolated struct BenchmarkMetrics: Sendable {
         faceDurations.record(measurement.faceDuration)
         if measurement.faceSucceeded { faceSuccesses += 1 }
         if measurement.faceHadLandmarks { facesWithLandmarks += 1 }
+        geometryEyeLineRoll.record(measurement.faceGeometry?.eyeLineRollDegrees)
+        geometryYawProxy.record(measurement.faceGeometry?.yawProxy)
+        geometryPitchProxy.record(measurement.faceGeometry?.pitchProxy)
+        geometryInterocularDistance.record(measurement.faceGeometry?.interocularDistance)
+        geometryFaceLength.record(measurement.faceGeometry?.faceLength)
 
         if let bodyDuration = measurement.bodyDuration {
             bodyAttempts += 1
@@ -160,6 +237,7 @@ nonisolated struct BenchmarkMetrics: Sendable {
             "Corps : \(bodyAttempts) tentatives, \(bodySuccesses) succès (\(rate(bodySuccesses, bodyAttempts)))",
             "Durée corps : moyenne \(milliseconds(bodyDurations.average)), max \(milliseconds(bodyDurations.maximum))",
             "Overlay : \(overlayDropouts) pertes, interruption max \(String(format: "%.2f s", longestInterruption)), récupération moyenne \(String(format: "%.2f s", recoveryDurations.average))",
+            "Géométrie globale : eye-roll \(benchmarkScalarReport(geometryEyeLineRoll)), yaw-proxy \(benchmarkScalarReport(geometryYawProxy)), pitch-proxy \(benchmarkScalarReport(geometryPitchProxy)), interoculaire \(benchmarkScalarReport(geometryInterocularDistance)), longueur \(benchmarkScalarReport(geometryFaceLength))",
             "CPU/RSS : à mesurer séparément via CLI"
         ].joined(separator: "\n")
     }
@@ -172,6 +250,11 @@ nonisolated struct BenchmarkPhaseMetrics: Sendable {
     private(set) var roll = AngleAggregate()
     private(set) var yaw = AngleAggregate()
     private(set) var pitch = AngleAggregate()
+    private(set) var eyeLineRoll = ScalarAggregate()
+    private(set) var yawProxy = ScalarAggregate()
+    private(set) var pitchProxy = ScalarAggregate()
+    private(set) var interocularDistance = ScalarAggregate()
+    private(set) var faceLength = ScalarAggregate()
 
     mutating func record(_ measurement: BenchmarkMeasurement) {
         attempts += 1
@@ -180,6 +263,11 @@ nonisolated struct BenchmarkPhaseMetrics: Sendable {
         roll.record(measurement.faceOrientation?.rollDegrees)
         yaw.record(measurement.faceOrientation?.yawDegrees)
         pitch.record(measurement.faceOrientation?.pitchDegrees)
+        eyeLineRoll.record(measurement.faceGeometry?.eyeLineRollDegrees)
+        yawProxy.record(measurement.faceGeometry?.yawProxy)
+        pitchProxy.record(measurement.faceGeometry?.pitchProxy)
+        interocularDistance.record(measurement.faceGeometry?.interocularDistance)
+        faceLength.record(measurement.faceGeometry?.faceLength)
     }
 
     func report(for phase: BenchmarkPhase, index: Int) -> String {
@@ -197,7 +285,9 @@ nonisolated struct BenchmarkPhaseMetrics: Sendable {
 
         return [
             "Étape \(index + 1) · \(phase.instruction) : \(phase.expectation.reportLabel), conformité \(rate(conforming)), overlay visible \(rate(visibleOverlays))",
-            "  Orientation (degrés) : roll \(angleReport(roll)), yaw \(angleReport(yaw)), pitch \(angleReport(pitch))"
+            "  Orientation (degrés) : roll \(angleReport(roll)), yaw \(angleReport(yaw)), pitch \(angleReport(pitch))",
+            "  Géométrie (repères normalisés) : eye-roll \(benchmarkScalarReport(eyeLineRoll)), yaw-proxy \(benchmarkScalarReport(yawProxy)), pitch-proxy \(benchmarkScalarReport(pitchProxy))",
+            "  Échelles : interoculaire \(benchmarkScalarReport(interocularDistance)), longueur faciale \(benchmarkScalarReport(faceLength))"
         ].joined(separator: "\n")
     }
 
@@ -277,9 +367,44 @@ nonisolated struct BenchmarkSession: Sendable {
 
     mutating func finish(at uptime: TimeInterval) -> String {
         metrics.finish(at: uptime)
-        return ([metrics.report, "", "Résultats par étape"] + phases.enumerated().map { index, phase in
+        let phaseReports = phases.enumerated().map { index, phase in
             phaseMetrics[index].report(for: phase, index: index)
-        }).joined(separator: "\n")
+        }
+        return ([metrics.report, "", "Résultats par étape"]
+            + phaseReports
+            + comparisonReport())
+            .joined(separator: "\n")
+    }
+
+    private func comparisonReport() -> [String] {
+        let comparisons: [(String, String, String, String, String)] = [
+            ("Tête gauche/droite", "tête à gauche", "tête à droite", "gauche", "droite"),
+            ("Tête haut/bas", "vers le haut", "vers le bas", "haut", "bas"),
+            ("Écran vers/loin", "écran vers toi", "écran de toi", "vers", "loin"),
+            ("Visage près/loin", "Rapproche ton visage", "Éloigne le visage", "près", "loin")
+        ]
+        let lines: [String] = comparisons.compactMap { label, firstNeedle, secondNeedle, firstLabel, secondLabel in
+            guard let first = phaseIndex(containing: firstNeedle),
+                  let second = phaseIndex(containing: secondNeedle) else {
+                return nil
+            }
+            return "  \(label) : \(comparisonValue(phaseMetrics[first], label: firstLabel)) · \(comparisonValue(phaseMetrics[second], label: secondLabel))"
+        }
+        guard !lines.isEmpty else { return [] }
+        return ["", "Comparaisons géométriques par phase"] + lines
+    }
+
+    private func phaseIndex(containing text: String) -> Int? {
+        phases.firstIndex {
+            $0.instruction.range(of: text, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+    }
+
+    private func comparisonValue(_ metrics: BenchmarkPhaseMetrics, label: String) -> String {
+        func average(_ aggregate: ScalarAggregate) -> String {
+            aggregate.average.map { String(format: "%+.3f", $0) } ?? "—"
+        }
+        return "\(label) eye-roll \(average(metrics.eyeLineRoll)), yaw \(average(metrics.yawProxy)), pitch \(average(metrics.pitchProxy)), interoculaire \(average(metrics.interocularDistance)), longueur \(average(metrics.faceLength))"
     }
 
     private func phaseIndex(at uptime: TimeInterval) -> Int? {

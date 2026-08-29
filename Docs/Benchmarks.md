@@ -118,3 +118,38 @@ Résultats d’orientation :
 - Inclinaison de l’écran vers soi puis loin de soi : `roll` et `yaw` sont restés à 0°, `pitch` absent.
 
 Décision : ne pas utiliser directement ces propriétés natives pour produire un verdict de posture. Elles restent utiles comme diagnostic de développement. La prochaine expérimentation doit dériver des mesures géométriques depuis les landmarks visage déjà fiables et vérifier séparément leur sensibilité aux mouvements de tête et de l’écran.
+
+## Instrumentation géométrique dérivée des landmarks
+
+Cette expérimentation ajoute FaceGeometrySignal, calculé uniquement à partir
+des polylines faciales déjà extraites par la même requête
+VNDetectFaceLandmarksRequest. Elle ne lance aucune requête Vision
+supplémentaire et ne produit aucun verdict de posture.
+
+Les métriques transportées sont des scalaires optionnels et finis :
+
+- eyeLineRollDegrees est l’angle de l’axe joignant les centres médians des
+  deux yeux. Comme cet axe n’a pas de sens d’orientation, il est ramené dans
+  [-90°, 90°). Le repère de capture actuel a y vers le bas.
+- yawProxy est le déplacement horizontal médian du nez par rapport au milieu
+  des yeux, divisé par la distance interoculaire. Un déplacement vers la droite
+  est positif.
+- pitchProxy est le déplacement vertical médian du nez par rapport au milieu
+  des yeux, divisé par une longueur faciale. Un déplacement vers le bas est
+  positif dans le repère actuel.
+- interocularDistance et faceLength sont conservées pour contrôler les
+  changements de distance à l’écran et la qualité de la normalisation ; elles
+  ne sont pas des verdicts.
+
+La longueur faciale privilégie la longueur du chemin medianLine, plus proche
+de l’axe central du visage. Si cette région manque, le fallback faceContour
+utilise une étendue verticale robuste (quantiles 10–90 % pour les contours
+denses), plutôt qu’une longueur d’arc dépendante du nombre de points et de la
+forme de la mâchoire. Une distance inférieure au seuil minimal est ignorée.
+
+Le benchmark ne persiste aucune image, coordonnée ou polyligne. Les agrégats
+restent en mémoire et exposent, par phase, n, moyenne, minimum, maximum et
+écart-type. Le rapport compare explicitement tête gauche/droite, tête
+haut/bas, écran vers/loin et visage près/loin, avec les échelles
+interoculaire et faciale pour distinguer mouvement de tête et simple
+rapprochement de l’écran.

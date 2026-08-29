@@ -65,6 +65,7 @@ nonisolated struct PoseInferenceDiagnostics: Sendable {
     let candidateOrientation: String
     let lockedOrientation: String?
     let faceOrientation: FaceOrientationSignal?
+    let faceGeometry: FaceGeometrySignal?
     let faceResultCount: Int
     let facesWithLandmarksCount: Int
     let facePointCount: Int
@@ -229,6 +230,7 @@ nonisolated final class PoseDetector: @unchecked Sendable {
     ) -> PoseDetectionOutput {
         let bodyPoints = body?.points ?? []
         let hasUpperBody = bodyStatusAvailable
+        let faceGeometry = FaceGeometrySignal.from(polylines: face.polylines)
         let facePointCount = face.polylines.reduce(0) { $0 + $1.locations.count }
         let observation = !face.polylines.isEmpty || hasUpperBody
             ? PoseObservation(
@@ -243,6 +245,7 @@ nonisolated final class PoseDetector: @unchecked Sendable {
                 candidateOrientation: "up",
                 lockedOrientation: "up",
                 faceOrientation: face.primaryOrientation,
+                faceGeometry: faceGeometry,
                 faceResultCount: face.resultCount,
                 facesWithLandmarksCount: face.facesWithLandmarksCount,
                 facePointCount: facePointCount,
