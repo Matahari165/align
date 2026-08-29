@@ -13,5 +13,6 @@ struct AlignApp: App {
         WindowGroup {
             ContentView()
         }
+        .defaultSize(width: 760, height: 560)
     }
 }
