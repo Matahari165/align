@@ -72,6 +72,8 @@
 ## Délégation, coût et revue
 
 - L’agent principal reste responsable du plan, de l’architecture, des décisions finales, de l’intégration, des conflits, des vérifications et de la synthèse.
+- `CHEF ORCHESTRE` délègue d’abord chaque sujet spécialisé à l’agent permanent correspondant (`ARCHITECTE`, `COMPUTER VISION`, `PRODUCT / UX DESIGNER`, `PERFORMANCE` ou `REVIEWER`) au lieu de réaliser lui-même le travail spécialisé. Le spécialiste devient responsable de l’analyse ou de l’implémentation déléguée, coordonne ses propres sous-agents et rend son résultat au chef d’orchestre.
+- `CHEF ORCHESTRE` conserve directement seulement le cadrage produit, l’ordre des travaux, l’arbitrage entre spécialistes, l’intégration finale, la vérification globale, Git et la restitution à Jeremy.
 - Utilise au moins un sous-agent dès qu’une tâche comporte une étape qui peut utilement être analysée, recherchée, exécutée ou vérifiée séparément, même si cette étape est relativement petite.
 - N’utilise pas de sous-agent uniquement lorsqu’une tâche est réellement triviale et que la délégation n’apporterait aucune valeur pratique.
 - Lorsque le choix du modèle est disponible, tous les sous-agents doivent utiliser exclusivement Luna `high` ou Luna `xhigh`. N’utilise jamais Sol ni un autre modèle comme sous-agent.
