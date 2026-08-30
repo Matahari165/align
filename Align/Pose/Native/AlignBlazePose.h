@@ -4,13 +4,31 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "blazepose_geometry.h"
+
 typedef struct AlignBlazePoseRunner AlignBlazePoseRunner;
 
 typedef enum {
   AlignBlazePoseTechnicalError = 0,
   AlignBlazePoseNoPerson = 1,
   AlignBlazePoseDetected = 2,
+  AlignBlazePoseStale = 3,
 } AlignBlazePoseStatus;
+
+static inline AlignBlazePoseStatus AlignBlazePoseMapShoulderFilterStatus(
+    BlazePoseShoulderFilterStatus status) {
+  switch (status) {
+    case BLAZEPOSE_SHOULDER_FILTER_NO_PERSON:
+      return AlignBlazePoseNoPerson;
+    case BLAZEPOSE_SHOULDER_FILTER_FILTERED:
+      return AlignBlazePoseDetected;
+    case BLAZEPOSE_SHOULDER_FILTER_STALE:
+      return AlignBlazePoseStale;
+    case BLAZEPOSE_SHOULDER_FILTER_TECHNICAL_ERROR:
+    default:
+      return AlignBlazePoseTechnicalError;
+  }
+}
 
 typedef struct {
   AlignBlazePoseStatus status;

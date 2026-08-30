@@ -74,6 +74,13 @@ typedef struct {
   uint64_t generation;
 } BlazePoseShoulderFilter;
 
+typedef enum {
+  BLAZEPOSE_SHOULDER_FILTER_TECHNICAL_ERROR = -1,
+  BLAZEPOSE_SHOULDER_FILTER_NO_PERSON = 0,
+  BLAZEPOSE_SHOULDER_FILTER_FILTERED = 1,
+  BLAZEPOSE_SHOULDER_FILTER_STALE = 2,
+} BlazePoseShoulderFilterStatus;
+
 size_t BlazePoseGenerateAnchors(BlazePoseAnchor *anchors, size_t capacity);
 
 BlazePoseDetection BlazePoseDecodeDetection(const float raw[12], float logit,
@@ -117,7 +124,8 @@ void BlazePoseResetShoulderFilter(BlazePoseShoulderFilter *filter);
 // taille moyenne de la ROI en pixels. La rotation ne change pas cette taille.
 // Un timestamp non croissant ou un trou superieur a maximum_gap_seconds reset
 // les quatre axes avant de traiter le nouvel echantillon.
-int BlazePoseFilterShoulders(BlazePoseShoulderFilter *filter,
+BlazePoseShoulderFilterStatus BlazePoseFilterShoulders(
+                             BlazePoseShoulderFilter *filter,
                              int has_left,
                              BlazePoseLandmark left,
                              int has_right,

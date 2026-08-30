@@ -358,23 +358,73 @@ int main(void) {
          !large_filter.right_y.initialized);
   assert(BlazePoseFilterShoulders(&large_filter, 0, left, 0, right, large_roi,
                                   640, 480, 23.0, 1.0, 8, &filtered_left,
-                                  &filtered_right));
-  assert(!large_filter.has_timestamp && large_filter.has_generation &&
-         large_filter.generation == 8);
+                                  &filtered_right) ==
+         BLAZEPOSE_SHOULDER_FILTER_NO_PERSON);
+  assert(large_filter.has_timestamp && near((float)large_filter.last_timestamp, 23.0f) &&
+         large_filter.has_generation && large_filter.generation == 8);
+  assert(BlazePoseFilterShoulders(&large_filter, 1, left, 1, right, large_roi,
+                                  640, 480, 22.9, 1.0, 8, &filtered_left,
+                                  &filtered_right) ==
+         BLAZEPOSE_SHOULDER_FILTER_STALE);
+  assert(large_filter.has_timestamp && near((float)large_filter.last_timestamp, 23.0f));
 
   // Une ancienne generation et un timestamp non croissant sont inertes.
   assert(BlazePoseFilterShoulders(&large_filter, 1, left, 1, right, large_roi,
                                   640, 480, 30.0, 1.0, 9, &filtered_left,
                                   &filtered_right));
-  assert(!BlazePoseFilterShoulders(&large_filter, 1, left, 1, right, large_roi,
-                                   640, 480, 30.5, 1.0, 8, &filtered_left,
-                                   &filtered_right));
+  assert(BlazePoseFilterShoulders(&large_filter, 1, left, 1, right, large_roi,
+                                  640, 480, 30.5, 1.0, 8, &filtered_left,
+                                  &filtered_right) ==
+         BLAZEPOSE_SHOULDER_FILTER_STALE);
   assert(large_filter.generation == 9 && large_filter.has_timestamp);
-  assert(!BlazePoseFilterShoulders(&large_filter, 1, left, 1, right, large_roi,
-                                   640, 480, 30.0, 1.0, 9, &filtered_left,
-                                   &filtered_right));
-  assert(!large_filter.has_timestamp && large_filter.has_generation &&
-         large_filter.generation == 9);
+  BlazePoseLandmark invalid_left = left;
+  invalid_left.x = NAN;
+  assert(BlazePoseFilterShoulders(&large_filter, 1, invalid_left, 1, right,
+                                  large_roi, 640, 480, 31.0, 1.0, 8,
+                                  &filtered_left, &filtered_right) ==
+         BLAZEPOSE_SHOULDER_FILTER_STALE);
+  assert(large_filter.generation == 9 && large_filter.has_timestamp);
+  assert(BlazePoseFilterShoulders(&large_filter, 1, left, 1, right, large_roi,
+                                  640, 480, 30.0, 1.0, 9, &filtered_left,
+                                  &filtered_right) ==
+         BLAZEPOSE_SHOULDER_FILTER_STALE);
+  assert(large_filter.has_timestamp && near((float)large_filter.last_timestamp, 30.0f) &&
+         large_filter.has_generation && large_filter.generation == 9);
+  assert(BlazePoseFilterShoulders(&large_filter, 1, invalid_left, 1, right,
+                                  large_roi, 640, 480, 31.0, 1.0, 9,
+                                  &filtered_left, &filtered_right) ==
+         BLAZEPOSE_SHOULDER_FILTER_TECHNICAL_ERROR);
+  assert(large_filter.has_timestamp && near((float)large_filter.last_timestamp, 30.0f));
+  assert(BlazePoseFilterShoulders(&large_filter, 1, left, 1, right, large_roi,
+                                  640, 480, 29.9, 1.0, 9, &filtered_left,
+                                  &filtered_right) ==
+         BLAZEPOSE_SHOULDER_FILTER_STALE);
+
+  // Une generation superieure invalide reste autoritaire.
+  assert(BlazePoseFilterShoulders(&large_filter, 1, invalid_left, 1, right,
+                                  large_roi, 640, 480, 40.0, 1.0, 10,
+                                  &filtered_left, &filtered_right) ==
+         BLAZEPOSE_SHOULDER_FILTER_TECHNICAL_ERROR);
+  assert(large_filter.generation == 10 && !large_filter.has_timestamp);
+
+  assert(BlazePoseFilterShoulders(&large_filter, 0, left, 0, right,
+                                  (BlazePoseRoi){0}, 640, 480, 41.0, 1.0, 11,
+                                  &filtered_left, &filtered_right) ==
+         BLAZEPOSE_SHOULDER_FILTER_NO_PERSON);
+  assert(large_filter.generation == 11 && large_filter.has_timestamp &&
+         near((float)large_filter.last_timestamp, 41.0f));
+  assert(BlazePoseFilterShoulders(&large_filter, 1, left, 1, right, large_roi,
+                                  640, 480, 41.2, 1.0, 10, &filtered_left,
+                                  &filtered_right) ==
+         BLAZEPOSE_SHOULDER_FILTER_STALE);
+  assert(large_filter.generation == 11 &&
+         near((float)large_filter.last_timestamp, 41.0f));
+  assert(BlazePoseFilterShoulders(&large_filter, 1, left, 1, right, large_roi,
+                                  640, 480, 40.2, 1.0, 9, &filtered_left,
+                                  &filtered_right) ==
+         BLAZEPOSE_SHOULDER_FILTER_STALE);
+  assert(large_filter.generation == 11 && large_filter.has_timestamp &&
+         near((float)large_filter.last_timestamp, 41.0f));
   BlazePoseResetShoulderFilter(&large_filter);
   assert(!large_filter.has_timestamp && !large_filter.left_x.initialized &&
          !large_filter.left_y.initialized && !large_filter.right_x.initialized &&

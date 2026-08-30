@@ -348,12 +348,17 @@ void BlazePoseResetShoulderFilter(BlazePoseShoulderFilter *filter) {
 static void reset_shoulder_samples(BlazePoseShoulderFilter *filter) {
   const int has_generation = filter->has_generation;
   const uint64_t generation = filter->generation;
+  const int has_timestamp = filter->has_timestamp;
+  const double last_timestamp = filter->last_timestamp;
   BlazePoseResetShoulderFilter(filter);
   filter->has_generation = has_generation;
   filter->generation = generation;
+  filter->has_timestamp = has_timestamp;
+  filter->last_timestamp = last_timestamp;
 }
 
-int BlazePoseFilterShoulders(BlazePoseShoulderFilter *filter,
+BlazePoseShoulderFilterStatus BlazePoseFilterShoulders(
+                             BlazePoseShoulderFilter *filter,
                              int has_left,
                              BlazePoseLandmark left,
                              int has_right,
@@ -366,34 +371,52 @@ int BlazePoseFilterShoulders(BlazePoseShoulderFilter *filter,
                              uint64_t generation,
                              BlazePoseLandmark *filtered_left,
                              BlazePoseLandmark *filtered_right) {
-  if (filter == NULL || filtered_left == NULL || filtered_right == NULL ||
-      image_width == 0 || image_height == 0 || !isfinite(timestamp_seconds) ||
-      !isfinite(maximum_gap_seconds) || maximum_gap_seconds <= 0.0 ||
-      !isfinite(roi.width) || !isfinite(roi.height) || roi.width <= 0.0f ||
-      roi.height <= 0.0f ||
-      (has_left && (!isfinite(left.x) || !isfinite(left.y))) ||
-      (has_right && (!isfinite(right.x) || !isfinite(right.y)))) {
-    if (filter != NULL) reset_shoulder_samples(filter);
-    return 0;
+  if (filter == NULL) return BLAZEPOSE_SHOULDER_FILTER_TECHNICAL_ERROR;
+  // Un callback ancien est totalement inerte, meme si son payload est invalide.
+  if (filter->has_generation && generation < filter->generation) {
+    return BLAZEPOSE_SHOULDER_FILTER_STALE;
   }
-
-  if (filter->has_generation && generation < filter->generation) return 0;
+  if (filter->has_generation && generation > filter->generation &&
+      filter->has_timestamp && timestamp_seconds <= filter->last_timestamp) {
+    return BLAZEPOSE_SHOULDER_FILTER_STALE;
+  }
+  // Une generation superieure devient autoritaire des sa reception. Son
+  // payload peut echouer ensuite, sans permettre a l'ancienne de revenir.
   if (!filter->has_generation || generation > filter->generation) {
     BlazePoseResetShoulderFilter(filter);
     filter->has_generation = 1;
     filter->generation = generation;
   }
-
-  if (!has_left && !has_right) {
+  if (filtered_left == NULL || filtered_right == NULL ||
+      !isfinite(timestamp_seconds) || !isfinite(maximum_gap_seconds) ||
+      maximum_gap_seconds <= 0.0) {
     reset_shoulder_samples(filter);
-    *filtered_left = left;
-    *filtered_right = right;
-    return 1;
+    return BLAZEPOSE_SHOULDER_FILTER_TECHNICAL_ERROR;
+  }
+  if (!has_left && !has_right) {
+    if (filter->has_timestamp && timestamp_seconds <= filter->last_timestamp) {
+      return BLAZEPOSE_SHOULDER_FILTER_STALE;
+    }
+    reset_shoulder_samples(filter);
+    filter->has_timestamp = 1;
+    filter->last_timestamp = timestamp_seconds;
+    *filtered_left = (BlazePoseLandmark){0};
+    *filtered_right = (BlazePoseLandmark){0};
+    return BLAZEPOSE_SHOULDER_FILTER_NO_PERSON;
+  }
+
+  if (image_width == 0 || image_height == 0 ||
+      !isfinite(roi.width) || !isfinite(roi.height) || roi.width <= 0.0f ||
+      roi.height <= 0.0f ||
+      (has_left && (!isfinite(left.x) || !isfinite(left.y))) ||
+      (has_right && (!isfinite(right.x) || !isfinite(right.y)))) {
+    reset_shoulder_samples(filter);
+    return BLAZEPOSE_SHOULDER_FILTER_TECHNICAL_ERROR;
   }
 
   if (filter->has_timestamp && timestamp_seconds <= filter->last_timestamp) {
     reset_shoulder_samples(filter);
-    return 0;
+    return BLAZEPOSE_SHOULDER_FILTER_STALE;
   }
   if (filter->has_timestamp &&
       timestamp_seconds - filter->last_timestamp > maximum_gap_seconds) {
@@ -403,7 +426,10 @@ int BlazePoseFilterShoulders(BlazePoseShoulderFilter *filter,
   const float object_scale =
       (roi.width * (float)image_width + roi.height * (float)image_height) *
       0.5f;
-  if (!isfinite(object_scale) || object_scale <= 0.0f) return 0;
+  if (!isfinite(object_scale) || object_scale <= 0.0f) {
+    reset_shoulder_samples(filter);
+    return BLAZEPOSE_SHOULDER_FILTER_TECHNICAL_ERROR;
+  }
   const float x_value_scale = (float)image_width / object_scale;
   const float y_value_scale = (float)image_height / object_scale;
 
@@ -429,5 +455,5 @@ int BlazePoseFilterShoulders(BlazePoseShoulderFilter *filter,
   }
   filter->has_timestamp = 1;
   filter->last_timestamp = timestamp_seconds;
-  return 1;
+  return BLAZEPOSE_SHOULDER_FILTER_FILTERED;
 }

@@ -63,7 +63,7 @@ nonisolated final class BlazePoseLiveEngine: @unchecked Sendable {
         _ pixelBuffer: CVPixelBuffer,
         at uptime: TimeInterval,
         generation: UInt64
-    ) -> BlazePoseLiveResult {
+    ) -> BlazePoseLiveResult? {
         guard CVPixelBufferGetPixelFormatType(pixelBuffer) == kCVPixelFormatType_32BGRA,
               let runner = ensureRunner() else {
             return BlazePoseLiveResult(state: .technicalError, leftShoulder: nil, rightShoulder: nil)
@@ -79,6 +79,7 @@ nonisolated final class BlazePoseLiveEngine: @unchecked Sendable {
             CVPixelBufferGetBytesPerRow(pixelBuffer), uptime,
             Self.maximumFilterGap, generation
         )
+        guard native.status != AlignBlazePoseStale else { return nil }
         guard native.status != AlignBlazePoseTechnicalError else {
             return BlazePoseLiveResult(state: .technicalError, leftShoulder: nil, rightShoulder: nil)
         }

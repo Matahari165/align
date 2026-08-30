@@ -772,11 +772,11 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                 clearBlazePose(state: .technicalError)
                 break
             }
-            let result = blazePoseEngine.analyze(
+            guard let result = blazePoseEngine.analyze(
                 pixelBuffer,
                 at: uptime,
                 generation: UInt64(generation.activationID)
-            )
+            ) else { break }
             if result.state == .detected || result.state == .partial {
                 latestBlazePoseOverlay = result.overlay
                 blazePoseFreshness.record(at: uptime, generation: generation.activationID)

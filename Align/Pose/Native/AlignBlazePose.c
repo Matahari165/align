@@ -177,8 +177,13 @@ AlignBlazePoseResult AlignBlazePoseAnalyzeBGRA(AlignBlazePoseRunner *runner,
   if (boxes != NULL) LiteRtUnlockTensorBuffer(runner->detector.outputs[0]);
   if (scores != NULL) LiteRtUnlockTensorBuffer(runner->detector.outputs[1]);
   if (prepared == BLAZEPOSE_PIPELINE_NO_PERSON) {
-    BlazePoseResetShoulderFilter(&runner->shoulder_filter);
-    result.status = AlignBlazePoseNoPerson;
+    BlazePoseLandmark empty_left = {0};
+    BlazePoseLandmark empty_right = {0};
+    result.status = AlignBlazePoseMapShoulderFilterStatus(
+        BlazePoseFilterShoulders(&runner->shoulder_filter, 0, empty_left, 0,
+                                 empty_right, roi, width, height,
+                                 timestamp_seconds, maximum_gap_seconds,
+                                 generation, &empty_left, &empty_right));
     return result;
   }
   if (prepared != BLAZEPOSE_PIPELINE_OK ||
@@ -194,8 +199,13 @@ AlignBlazePoseResult AlignBlazePoseAnalyzeBGRA(AlignBlazePoseRunner *runner,
   if (pose_score != NULL) LiteRtUnlockTensorBuffer(runner->landmarks.outputs[1]);
   if (heatmap != NULL) LiteRtUnlockTensorBuffer(runner->landmarks.outputs[3]);
   if (decoded == BLAZEPOSE_PIPELINE_NO_PERSON) {
-    BlazePoseResetShoulderFilter(&runner->shoulder_filter);
-    result.status = AlignBlazePoseNoPerson;
+    BlazePoseLandmark empty_left = {0};
+    BlazePoseLandmark empty_right = {0};
+    result.status = AlignBlazePoseMapShoulderFilterStatus(
+        BlazePoseFilterShoulders(&runner->shoulder_filter, 0, empty_left, 0,
+                                 empty_right, roi, width, height,
+                                 timestamp_seconds, maximum_gap_seconds,
+                                 generation, &empty_left, &empty_right));
     return result;
   }
   if (decoded != BLAZEPOSE_PIPELINE_OK) return result;
@@ -207,18 +217,12 @@ AlignBlazePoseResult AlignBlazePoseAnalyzeBGRA(AlignBlazePoseRunner *runner,
   const int has_right = right_confidence >= 0.5f;
   BlazePoseLandmark filtered_left = upper.left_shoulder;
   BlazePoseLandmark filtered_right = upper.right_shoulder;
-  const int filtered = BlazePoseFilterShoulders(
+  const BlazePoseShoulderFilterStatus filtered = BlazePoseFilterShoulders(
       &runner->shoulder_filter, has_left, upper.left_shoulder, has_right,
       upper.right_shoulder, roi, width, height, timestamp_seconds,
       maximum_gap_seconds, generation, &filtered_left, &filtered_right);
-  if (!has_left && !has_right) {
-    result.status = AlignBlazePoseNoPerson;
-    return result;
-  }
-  if (!filtered) {
-    return result;
-  }
-  result.status = AlignBlazePoseDetected;
+  result.status = AlignBlazePoseMapShoulderFilterStatus(filtered);
+  if (result.status != AlignBlazePoseDetected) return result;
   result.left_x = filtered_left.x;
   result.left_y = filtered_left.y;
   result.left_confidence = has_left ? left_confidence : 0.0f;
