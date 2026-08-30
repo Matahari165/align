@@ -214,3 +214,33 @@ un Mac à distance normale. Cette piste reste utile comme signal opportuniste
 quand le cadrage le permet, mais ne peut pas être la seule base du suivi
 quotidien. Ne pas augmenter la cadence ou la résolution sans preuve : cela
 répéterait surtout plus souvent une requête vide et augmenterait le coût.
+
+## 30 août 2026 — Spike MediaPipe Pose Landmarker Lite
+
+Prototype Python isolé, exécuté localement avec MediaPipe `0.10.35` et le
+modèle officiel `pose_landmarker_lite.task`. Le pipeline Swift d'Align n'a pas
+été modifié. La caméra a fourni 1 745 frames en 1280×720 à 30 images/s ; le
+modèle n'en a analysé que 60, à 1 Hz, sans enregistrer d'image, de vidéo ou de
+coordonnée.
+
+Résultats, 20 analyses par cadrage :
+
+- assis à distance normale : deux épaules reconnues 20/20 (100 %), aucune
+  perte, jitter médian 1,9 % de la largeur des épaules, latence p95 23,1 ms ;
+- assis plus loin : 20/20 (100 %), aucune perte, jitter 2,3 %, latence p95
+  20,0 ms ;
+- debout avec le Mac plus bas : 20/20 (100 %), aucune perte, jitter 2,2 %,
+  latence p95 19,9 ms.
+
+Comparaison indicative avec Apple sur le benchmark précédent : Apple Body Pose
+avait fourni les trois repères cou-épaules 3/26 fois en plein cadre et 0/26 dans
+la ROI. Les populations ne sont pas appariées image par image, mais l'écart est
+suffisamment important pour poursuivre MediaPipe comme candidat principal.
+
+Limites : le test MediaPipe mesure deux épaules ; son « milieu du cou » est une
+estimation entre elles, pas une articulation observée. La précision visuelle du
+tracé doit encore être confirmée par Jeremy. Le journal a aussi montré une
+tentative de télémétrie technique `portable_clearcut_uploader` ; l'envoi a
+échoué pendant ce test, mais MediaPipe Tasks ne peut pas être considéré comme
+strictement sans réseau tant que cette télémétrie n'est pas désactivée ou que
+les modèles ne sont pas exécutés par un autre runtime local.
