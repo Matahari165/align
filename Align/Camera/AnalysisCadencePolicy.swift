@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 
 nonisolated enum VisionAnalysisUnit: String, Sendable {
+    case blazePose
     case face
     case body
     case silhouette
@@ -129,6 +130,48 @@ nonisolated struct VisionCallbackBudget: Sendable {
         guard claimedUnit == nil else { return false }
         claimedUnit = unit
         return true
+    }
+}
+
+nonisolated struct BlazePoseCadenceController: Sendable {
+    static let interval: TimeInterval = 0.5
+    private(set) var lastAttemptUptime: TimeInterval?
+
+    func isDue(at uptime: TimeInterval) -> Bool {
+        guard let lastAttemptUptime else { return true }
+        return uptime - lastAttemptUptime >= Self.interval
+    }
+
+    func overdue(at uptime: TimeInterval) -> TimeInterval {
+        guard let lastAttemptUptime else { return 1 }
+        return max(0, uptime - lastAttemptUptime - Self.interval)
+    }
+
+    mutating func recordAttempt(at uptime: TimeInterval) {
+        lastAttemptUptime = uptime
+    }
+
+    mutating func reset() { lastAttemptUptime = nil }
+}
+
+nonisolated struct BlazePoseOverlayFreshness: Sendable {
+    static let maxAge: TimeInterval = 1.2
+    private(set) var observedAt: TimeInterval?
+    private(set) var generation: Int?
+
+    mutating func record(at uptime: TimeInterval, generation: Int) {
+        observedAt = uptime
+        self.generation = generation
+    }
+
+    mutating func clear() {
+        observedAt = nil
+        generation = nil
+    }
+
+    func shouldExpire(at uptime: TimeInterval, generation: Int) -> Bool {
+        guard self.generation == generation, let observedAt else { return false }
+        return uptime - observedAt >= Self.maxAge
     }
 }
 

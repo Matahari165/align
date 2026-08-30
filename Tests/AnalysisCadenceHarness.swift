@@ -78,6 +78,25 @@ private enum AnalysisCadenceHarness {
         cadence.reset()
         expect(cadence.shouldAnalyze(at: 20), "la reprise après pause doit accepter la première frame")
 
+        var blazeCadence = BlazePoseCadenceController()
+        expect(blazeCadence.isDue(at: 30), "BlazePose doit accepter la première frame")
+        blazeCadence.recordAttempt(at: 30)
+        expect(!blazeCadence.isDue(at: 30.49), "BlazePose ne doit pas dépasser 2 Hz")
+        expect(blazeCadence.isDue(at: 30.5), "BlazePose doit reprendre à 2 Hz")
+        let selected = VisionAnalysisSelector.select([
+            VisionAnalysisCandidate(unit: .face, overdue: 0.02, priority: 3),
+            VisionAnalysisCandidate(unit: .blazePose, overdue: 0.2, priority: 4)
+        ])
+        expect(selected == .blazePose, "une épaule en retard ne doit pas être affamée par le visage")
+
+        var freshness = BlazePoseOverlayFreshness()
+        freshness.record(at: 40, generation: 7)
+        expect(!freshness.shouldExpire(at: 41.19, generation: 7), "l’overlay frais doit survivre aux misses courts")
+        expect(freshness.shouldExpire(at: 41.2, generation: 7), "l’overlay doit expirer à 1,2 s")
+        expect(!freshness.shouldExpire(at: 50, generation: 8), "une ancienne génération ne doit pas expirer la nouvelle")
+        freshness.clear()
+        expect(!freshness.shouldExpire(at: 50, generation: 7), "un reset doit purger la fraîcheur")
+
         print("AnalysisCadenceHarness: OK")
     }
 }

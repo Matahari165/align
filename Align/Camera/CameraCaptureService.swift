@@ -114,6 +114,7 @@ final class CameraCaptureService: ObservableObject {
     @Published private(set) var trackingMode: PoseTrackingMode?
     @Published private(set) var recognizedPointCount = 0
     @Published private(set) var overlay = PoseOverlay.empty
+    @Published private(set) var blazePoseState: BlazePoseLiveState = .lost
     @Published private(set) var diagnostics = CameraAnalysisDiagnostics.empty
     @Published private(set) var benchmarkState: BenchmarkViewState = .idle
 
@@ -157,6 +158,8 @@ final class CameraCaptureService: ObservableObject {
                 if self.currentAnalysisPresentation.publishesVisualUpdates {
                     self.overlay = overlay
                 }
+            case .blazePoseState(let state):
+                self.blazePoseState = state
             case .silhouetteOverlay(let overlay, let token):
                 guard self.benchmarkSegmentationEpoch.accepts(
                     token,
@@ -255,6 +258,7 @@ final class CameraCaptureService: ObservableObject {
         recognizedPointCount = 0
         trackingMode = nil
         overlay = .empty
+        blazePoseState = .lost
         state = .idle
         sessionRuntime.stop(operationID: operationID) {
             guard let completion else { return }
@@ -403,6 +407,7 @@ final class CameraCaptureService: ObservableObject {
         )
         activePoseGeneration = isActive ? generation : nil
         overlay = .empty
+        blazePoseState = .lost
         if resetDiagnostics {
             diagnostics = .empty
         }
@@ -423,6 +428,7 @@ nonisolated private enum PoseProcessingEvent: Sendable {
     case analysisFailed
     case diagnostics(CameraAnalysisDiagnostics)
     case overlay(PoseOverlay)
+    case blazePoseState(BlazePoseLiveState)
     case silhouetteOverlay(PoseOverlay, UInt64)
     case benchmarkMeasurement(BenchmarkMeasurement, TimeInterval)
     case benchmarkOverlayVisibility(Bool, TimeInterval)
@@ -586,6 +592,7 @@ private enum CameraError: LocalizedError {
 
 nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let detector = PoseDetector()
+    private let blazePoseEngine = BlazePoseLiveEngine()
     private let humanRectangleDetector = HumanRectangleDetector()
     private let segmentationDetector = PersonSegmentationDetector()
     private let segmentationCancellation: BenchmarkSegmentationCancellationBox
@@ -615,6 +622,10 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     private var latestBodyDetection: BodyDetectionOutput?
     private var faceInvisibleSince: TimeInterval?
     private var latestSilhouetteOverlay = PoseOverlay.empty
+    private var latestBlazePoseOverlay = PoseOverlay.empty
+    private var blazePoseCadence = BlazePoseCadenceController()
+    private var blazePoseFreshness = BlazePoseOverlayFreshness()
+    private var blazePoseExpirationWorkItem: DispatchWorkItem?
     private var segmentationAttempts = 0
     private var segmentationVisionPerforms = 0
     private var segmentationResults = 0
@@ -679,6 +690,12 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         latestBodyDetection = nil
         faceInvisibleSince = nil
         latestSilhouetteOverlay = .empty
+        latestBlazePoseOverlay = .empty
+        blazePoseCadence.reset()
+        blazePoseFreshness.clear()
+        blazePoseExpirationWorkItem?.cancel()
+        blazePoseExpirationWorkItem = nil
+        blazePoseEngine.reset()
         segmentationAttempts = 0
         segmentationVisionPerforms = 0
         segmentationResults = 0
@@ -749,6 +766,31 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         var roiSpikeMeasurement: UpperBodyROISpikeMeasurement?
 
         switch unit {
+        case .blazePose:
+            blazePoseCadence.recordAttempt(at: uptime)
+            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+                clearBlazePose(state: .technicalError)
+                break
+            }
+            let result = blazePoseEngine.analyze(
+                pixelBuffer,
+                at: uptime,
+                generation: UInt64(generation.activationID)
+            )
+            if result.state == .detected || result.state == .partial {
+                latestBlazePoseOverlay = result.overlay
+                blazePoseFreshness.record(at: uptime, generation: generation.activationID)
+                scheduleBlazePoseExpiration(at: uptime)
+                onEvent(.blazePoseState(result.state), generation)
+            } else if result.state == .technicalError {
+                clearBlazePose(state: .technicalError)
+            } else if blazePoseFreshness.observedAt == nil {
+                clearBlazePose(state: .lost)
+            }
+            if analysisCadence.presentation.publishesVisualUpdates {
+                onEvent(.overlay(combinedOverlay()), generation)
+            }
+
         case .face:
             analysisCadence.recordAnalysis(at: uptime)
             faceAttempted = true
@@ -1033,6 +1075,8 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         let fusedOverlay = combinedOverlay()
         if analysisCadence.presentation.publishesVisualUpdates {
             switch unit {
+            case .blazePose:
+                break
             case .face:
                 if !latestFaceDetection.polylines.isEmpty { publishFreshOverlay(fusedOverlay, at: uptime) }
             case .body:
@@ -1084,8 +1128,10 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             ? (latestBodyDetection?.points ?? [])
             : []
         return PoseOverlay(
-            points: bodyPoints,
-            polylines: latestFaceDetection.polylines + latestSilhouetteOverlay.polylines
+            points: bodyPoints + latestBlazePoseOverlay.points,
+            polylines: latestFaceDetection.polylines
+                + latestSilhouetteOverlay.polylines
+                + latestBlazePoseOverlay.polylines
         )
     }
 
@@ -1137,6 +1183,9 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     private func nextVisionUnit(at uptime: TimeInterval) -> VisionAnalysisUnit? {
         let presentation = analysisCadence.presentation
         let candidates: [VisionAnalysisCandidate] = [
+            blazePoseCadence.isDue(at: uptime)
+                ? VisionAnalysisCandidate(unit: .blazePose, overdue: blazePoseCadence.overdue(at: uptime), priority: 4)
+                : nil,
             analysisCadence.isDue(at: uptime)
                 ? VisionAnalysisCandidate(unit: .face, overdue: analysisCadence.lastAnalysisUptime == nil ? 1 : analysisCadence.overdue(at: uptime), priority: 3)
                 : nil,
@@ -1151,6 +1200,42 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                 : nil
         ].compactMap { $0 }
         return VisionAnalysisSelector.select(candidates)
+    }
+
+    private func scheduleBlazePoseExpiration(at uptime: TimeInterval) {
+        blazePoseExpirationWorkItem?.cancel()
+        let scheduledGeneration = generation
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.isActive,
+                  self.generation == scheduledGeneration else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            guard self.blazePoseFreshness.shouldExpire(
+                at: now,
+                generation: scheduledGeneration.activationID
+            ) else { return }
+            self.clearBlazePose(state: .lost)
+        }
+        blazePoseExpirationWorkItem = workItem
+        sampleQueue.asyncAfter(
+            deadline: .now() + BlazePoseOverlayFreshness.maxAge,
+            execute: workItem
+        )
+    }
+
+    private func clearBlazePose(
+        state: BlazePoseLiveState,
+        publishesState: Bool = true
+    ) {
+        blazePoseExpirationWorkItem?.cancel()
+        blazePoseExpirationWorkItem = nil
+        blazePoseFreshness.clear()
+        latestBlazePoseOverlay = .empty
+        blazePoseEngine.resetTracking()
+        if publishesState { onEvent(.blazePoseState(state), generation) }
+        if analysisCadence.presentation.publishesVisualUpdates {
+            onEvent(.overlay(combinedOverlay()), generation)
+        }
     }
 
     private func faceAnchor(from face: FaceDetectionOutput) -> PersonSegmentationFaceAnchor? {

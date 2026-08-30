@@ -7,6 +7,7 @@ nonisolated enum PosePointSource: String, Sendable {
     case face
     case body
     case silhouette
+    case blazePose
 }
 
 nonisolated struct PosePoint: Identifiable, Sendable {

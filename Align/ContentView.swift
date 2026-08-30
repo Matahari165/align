@@ -9,6 +9,23 @@ struct ContentView: View {
             ZStack {
                 CameraPreviewView(session: camera.session, overlay: camera.overlay)
 
+                if camera.state == .running {
+                    VStack {
+                        HStack {
+                            Text(camera.blazePoseState.displayName)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 5)
+                                .background(.black.opacity(0.68), in: Capsule())
+                            Spacer()
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                    .allowsHitTesting(false)
+                }
+
                 if camera.state != .running {
                     Rectangle()
                         .fill(.black.opacity(0.78))

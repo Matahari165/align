@@ -22,6 +22,8 @@ final class CameraPreviewNSView: NSView {
     private let faceShapeLayer = CAShapeLayer()
     private let bodyShapeLayer = CAShapeLayer()
     private let silhouetteShapeLayer = CAShapeLayer()
+    private let blazePoseShapeLayer = CAShapeLayer()
+    private var blazePoseLabelLayers: [CATextLayer] = []
 
     init(session: AVCaptureSession) {
         previewLayer = AVCaptureVideoPreviewLayer(session: session)
@@ -48,9 +50,14 @@ final class CameraPreviewNSView: NSView {
         silhouetteShapeLayer.lineDashPattern = [6, 4]
         silhouetteShapeLayer.lineJoin = .round
         silhouetteShapeLayer.lineCap = .round
+        blazePoseShapeLayer.fillColor = NSColor.systemYellow.cgColor
+        blazePoseShapeLayer.strokeColor = NSColor.systemYellow.cgColor
+        blazePoseShapeLayer.lineWidth = 3
+        blazePoseShapeLayer.lineCap = .round
         jointLayer.addSublayer(faceShapeLayer)
         jointLayer.addSublayer(bodyShapeLayer)
         jointLayer.addSublayer(silhouetteShapeLayer)
+        jointLayer.addSublayer(blazePoseShapeLayer)
         mirroredContentLayer.addSublayer(previewLayer)
         mirroredContentLayer.addSublayer(jointLayer)
         layer?.addSublayer(mirroredContentLayer)
@@ -70,6 +77,7 @@ final class CameraPreviewNSView: NSView {
         faceShapeLayer.frame = mirroredContentLayer.bounds
         bodyShapeLayer.frame = mirroredContentLayer.bounds
         silhouetteShapeLayer.frame = mirroredContentLayer.bounds
+        blazePoseShapeLayer.frame = mirroredContentLayer.bounds
         mirroredContentLayer.setAffineTransform(
             PreviewMirrorTransform.layerTransform(width: bounds.width)
         )
@@ -115,7 +123,51 @@ final class CameraPreviewNSView: NSView {
         }
         silhouetteShapeLayer.path = silhouettePath
 
+        let blazePosePath = CGMutablePath()
+        for polyline in overlay.polylines where polyline.source == .blazePose {
+            let positions = polyline.locations.map { layerPosition(for: $0) }
+            guard let first = positions.first else { continue }
+            blazePosePath.move(to: first)
+            positions.dropFirst().forEach { blazePosePath.addLine(to: $0) }
+        }
+        for point in overlay.points where point.source == .blazePose {
+            let position = layerPosition(for: point.location)
+            let radius: CGFloat = point.name == "CENTRE ESTIMÉ" ? 4 : 6
+            blazePosePath.addEllipse(in: CGRect(
+                x: position.x - radius,
+                y: position.y - radius,
+                width: radius * 2,
+                height: radius * 2
+            ))
+        }
+        blazePoseShapeLayer.path = blazePosePath
+        updateBlazePoseLabels(for: overlay)
+
         CATransaction.commit()
+    }
+
+    private func updateBlazePoseLabels(for overlay: PoseOverlay) {
+        blazePoseLabelLayers.forEach { $0.removeFromSuperlayer() }
+        blazePoseLabelLayers.removeAll(keepingCapacity: true)
+        for point in overlay.points where point.source == .blazePose {
+            let position = layerPosition(for: point.location)
+            let label = CATextLayer()
+            label.string = point.name
+            label.fontSize = point.name == "CENTRE ESTIMÉ" ? 10 : 13
+            label.font = NSFont.systemFont(ofSize: label.fontSize, weight: .bold)
+            label.foregroundColor = NSColor.white.cgColor
+            label.backgroundColor = NSColor.black.withAlphaComponent(0.65).cgColor
+            label.alignmentMode = .center
+            label.cornerRadius = 4
+            label.contentsScale = window?.backingScaleFactor ?? 2
+            let width: CGFloat = point.name == "CENTRE ESTIMÉ" ? 100 : 92
+            label.frame = CGRect(x: position.x - width / 2, y: position.y + 8, width: width, height: 18)
+            // Le contenu caméra est miroir ; cette contre-transformation garde
+            // les lettres lisibles tout en conservant leur position anatomique.
+            label.setAffineTransform(CGAffineTransform(scaleX: -1, y: 1))
+            jointLayer.addSublayer(label)
+            blazePoseLabelLayers.append(label)
+        }
     }
 
     private func layerPosition(for canonicalPoint: CGPoint) -> CGPoint {

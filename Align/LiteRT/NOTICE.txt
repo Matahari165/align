@@ -1,0 +1,20 @@
+Align embarque LiteRT 2.2.0 et les modèles BlazePose Lite pour une inférence
+strictement locale sur macOS arm64.
+
+LiteRT
+Copyright 2024 The LiteRT Authors
+Licence Apache License 2.0, reproduite dans LICENSE-Apache-2.0.txt.
+Runtime officiel ai-edge-litert 2.2.0 (wheel macOS arm64).
+SHA-256 libLiteRt.runtime (nom de ressource du libLiteRt.dylib officiel) :
+131344a928e6ad56317f8a828d54c11c54c800aa140952f9b9f980af88260b20
+
+Modèles BlazePose
+Extraits sans conversion de l'archive officielle MediaPipe
+pose_landmarker_lite.task.
+SHA-256 pose_detector.tflite :
+46837eb883e6ec75b52c5f5ff6a9b78bd35e66c13f95e8c3566c582d146cb1d9
+SHA-256 pose_landmarks_detector.tflite :
+ad6cfd3c903eb31a4ee788b809e45ecf9fa69923b69b9f3f2d9ae616ff433e58
+
+Le flux caméra, les images et les coordonnées ne sont ni écrits sur disque ni
+envoyés sur le réseau.
