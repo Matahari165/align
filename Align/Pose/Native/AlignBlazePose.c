@@ -207,10 +207,15 @@ AlignBlazePoseResult AlignBlazePoseAnalyzeBGRA(AlignBlazePoseRunner *runner,
   const int has_right = right_confidence >= 0.5f;
   BlazePoseLandmark filtered_left = upper.left_shoulder;
   BlazePoseLandmark filtered_right = upper.right_shoulder;
-  if (!BlazePoseFilterShoulders(
-          &runner->shoulder_filter, has_left, upper.left_shoulder, has_right,
-          upper.right_shoulder, roi, width, height, timestamp_seconds,
-          maximum_gap_seconds, generation, &filtered_left, &filtered_right)) {
+  const int filtered = BlazePoseFilterShoulders(
+      &runner->shoulder_filter, has_left, upper.left_shoulder, has_right,
+      upper.right_shoulder, roi, width, height, timestamp_seconds,
+      maximum_gap_seconds, generation, &filtered_left, &filtered_right);
+  if (!has_left && !has_right) {
+    result.status = AlignBlazePoseNoPerson;
+    return result;
+  }
+  if (!filtered) {
     return result;
   }
   result.status = AlignBlazePoseDetected;

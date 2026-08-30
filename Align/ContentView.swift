@@ -9,10 +9,10 @@ struct ContentView: View {
             ZStack {
                 CameraPreviewView(session: camera.session, overlay: camera.overlay)
 
-                if camera.state == .running {
+                if camera.state == .running, let blazePoseState = camera.blazePoseState {
                     VStack {
                         HStack {
-                            Text(camera.blazePoseState.displayName)
+                            Text(blazePoseState.displayName)
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 9)
@@ -83,7 +83,7 @@ struct ContentView: View {
     }
 
     private var statusBand: some View {
-        let presentation = CameraStatusPresentation.make(for: camera)
+        let presentation = activePresentation
         return HStack(spacing: 12) {
             Image(systemName: presentation.symbolName)
                 .font(.title3)
@@ -136,7 +136,19 @@ struct ContentView: View {
     }
 
     private var accessibilitySummary: String {
-        CameraStatusPresentation.make(for: camera).explanation
+        activePresentation.explanation
+    }
+
+    private var activePresentation: CameraStatusPresentation {
+        guard camera.state == .running else {
+            return CameraStatusPresentation.make(for: camera)
+        }
+        let shoulders = ShoulderStatusPresentation.make(for: camera.blazePoseState)
+        return CameraStatusPresentation(
+            title: shoulders.title,
+            explanation: shoulders.explanation,
+            symbolName: shoulders.symbolName
+        )
     }
 
     private var cameraPrivacySettingsURL: URL {

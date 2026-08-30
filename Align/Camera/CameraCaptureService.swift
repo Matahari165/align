@@ -114,7 +114,7 @@ final class CameraCaptureService: ObservableObject {
     @Published private(set) var trackingMode: PoseTrackingMode?
     @Published private(set) var recognizedPointCount = 0
     @Published private(set) var overlay = PoseOverlay.empty
-    @Published private(set) var blazePoseState: BlazePoseLiveState = .lost
+    @Published private(set) var blazePoseState: BlazePoseLiveState?
     @Published private(set) var diagnostics = CameraAnalysisDiagnostics.empty
     @Published private(set) var benchmarkState: BenchmarkViewState = .idle
 
@@ -258,7 +258,7 @@ final class CameraCaptureService: ObservableObject {
         recognizedPointCount = 0
         trackingMode = nil
         overlay = .empty
-        blazePoseState = .lost
+        blazePoseState = nil
         state = .idle
         sessionRuntime.stop(operationID: operationID) {
             guard let completion else { return }
@@ -407,7 +407,7 @@ final class CameraCaptureService: ObservableObject {
         )
         activePoseGeneration = isActive ? generation : nil
         overlay = .empty
-        blazePoseState = .lost
+        blazePoseState = nil
         if resetDiagnostics {
             diagnostics = .empty
         }

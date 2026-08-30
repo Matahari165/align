@@ -366,18 +366,19 @@ int BlazePoseFilterShoulders(BlazePoseShoulderFilter *filter,
                              uint64_t generation,
                              BlazePoseLandmark *filtered_left,
                              BlazePoseLandmark *filtered_right) {
-  if (filter == NULL || filtered_left == NULL || filtered_right == NULL ||
+  if (filter == NULL) return 0;
+  // Un callback ancien est totalement inerte, meme si son payload est invalide.
+  if (filter->has_generation && generation < filter->generation) return 0;
+  if (filtered_left == NULL || filtered_right == NULL ||
       image_width == 0 || image_height == 0 || !isfinite(timestamp_seconds) ||
       !isfinite(maximum_gap_seconds) || maximum_gap_seconds <= 0.0 ||
       !isfinite(roi.width) || !isfinite(roi.height) || roi.width <= 0.0f ||
       roi.height <= 0.0f ||
       (has_left && (!isfinite(left.x) || !isfinite(left.y))) ||
       (has_right && (!isfinite(right.x) || !isfinite(right.y)))) {
-    if (filter != NULL) reset_shoulder_samples(filter);
+    reset_shoulder_samples(filter);
     return 0;
   }
-
-  if (filter->has_generation && generation < filter->generation) return 0;
   if (!filter->has_generation || generation > filter->generation) {
     BlazePoseResetShoulderFilter(filter);
     filter->has_generation = 1;
@@ -386,9 +387,9 @@ int BlazePoseFilterShoulders(BlazePoseShoulderFilter *filter,
 
   if (!has_left && !has_right) {
     reset_shoulder_samples(filter);
-    *filtered_left = left;
-    *filtered_right = right;
-    return 1;
+    *filtered_left = (BlazePoseLandmark){0};
+    *filtered_right = (BlazePoseLandmark){0};
+    return 0;
   }
 
   if (filter->has_timestamp && timestamp_seconds <= filter->last_timestamp) {
