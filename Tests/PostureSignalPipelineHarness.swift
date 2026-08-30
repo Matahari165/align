@@ -4,6 +4,7 @@ import Foundation
     static func input(_ t: Double, _ id: UInt64, generation: UInt64 = 4) -> PostureSnapshot {
         .init(faceGeneration: generation, faceTimestamp: t, faceSampleID: id, facePointCount: 80,
               interocularDistance: 0.20, faceLength: 0.30, pitchProxy: 0.25, yawProxy: 0,
+              eyeLineRollDegrees: 0,
               leftEyeOpeningRatio: 0.30, rightEyeOpeningRatio: 0.30,
               innerBrowDistanceRatio: 0.25, faceCenter: nil, leftShoulder: nil,
               rightShoulder: nil, bodyGeneration: nil, bodyTimestamp: nil, bodySampleID: nil)

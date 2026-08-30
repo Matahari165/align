@@ -25,13 +25,15 @@ private enum BlazePoseBridgeHarness {
         )
         let complete = BlazePoseLiveEngine.liveResult(from: native)
         expect(complete?.state == .detected, "deux épaules valides doivent être détectées")
-        expect(complete?.overlay.points.count == 10,
-               "les neuf repères et le centre estimé doivent traverser l’ABI")
+        expect(complete?.overlay.points.count == 8,
+               "l’overlay proche doit privilégier sept repères hauts et le centre estimé")
         expect(complete?.overlay.polylines.count == 8,
-               "les huit segments complets doivent être publiés")
+               "le contour haut et l’axe estimé doivent être publiés sans les hanches")
         expect(abs((complete?.nose?.location.x ?? 0) - 0.50) < 0.000_001 &&
                abs((complete?.leftHip?.location.y ?? 0) - 0.88) < 0.000_001,
-               "les champs ABI éloignés doivent conserver leurs valeurs distinctes")
+               "les neuf champs ABI, dont les hanches non dessinées, restent disponibles")
+        expect(complete?.overlay.points.contains { $0.name.contains("Hanche") } == false,
+               "les hanches ne doivent pas dominer le cadrage proche")
 
         var partialNative = native
         partialNative.right_shoulder.valid = 0

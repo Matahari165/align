@@ -147,6 +147,8 @@ private enum FaceOrientationHarness {
         expect(approximately(transformedGeometry?.yawProxy, geometry?.yawProxy), "yaw doit être invariant par translation/échelle")
         expect(approximately(transformedGeometry?.pitchProxy, geometry?.pitchProxy), "pitch doit être invariant par translation/échelle")
         expect(approximately(transformedGeometry?.interocularDistance, geometry?.interocularDistance.map { $0 * 2 }), "distance interoculaire doit suivre l'échelle")
+        expect(approximately(transformedGeometry?.faceLength, geometry?.faceLength.map { $0 * 2 }),
+               "longueur faciale doit suivre la même échelle morphologique")
         expect(approximately(transformedGeometry?.faceCenter.map { Double($0.x) },
                              geometry?.faceCenter.map { Double($0.x) * 2 + 7 }),
                "centre facial doit suivre translation et échelle")

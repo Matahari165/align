@@ -3,6 +3,8 @@ import SwiftUI
 struct PostureIndicatorsView: View {
     let snapshot: PostureIndicatorsSnapshot
     let cameraIsRunning: Bool
+    let notificationAuthorization: LocalPostureNotificationService.Authorization
+    let onRequestNotifications: () -> Void
     let onCalibrate: () -> Void
 
     private let columns = [
@@ -17,6 +19,16 @@ struct PostureIndicatorsView: View {
                 Text("Repères de posture")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
+                if notificationAuthorization != .authorized {
+                    Button(action: onRequestNotifications) {
+                        Label("Activer les alertes", systemImage: "bell.badge")
+                            .labelStyle(.iconOnly)
+                    }
+                    .controlSize(.small)
+                    .help(notificationAuthorization == .denied
+                          ? "Ouvrir les Réglages Système pour autoriser les alertes"
+                          : "Autoriser les alertes lorsque Align est en arrière-plan")
+                }
                 Button(snapshot.isCalibrating ? "Calibration…" : "Calibrer (8 s)") {
                     onCalibrate()
                 }

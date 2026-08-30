@@ -1,4 +1,5 @@
 @preconcurrency import AVFoundation
+import AppKit
 import Combine
 import CoreMedia
 import Foundation
@@ -116,6 +117,8 @@ final class CameraCaptureService: ObservableObject {
     @Published private(set) var overlay = PoseOverlay.empty
     @Published private(set) var blazePoseState: BlazePoseLiveState?
     @Published private(set) var postureIndicators = PostureIndicatorsSnapshot.initial
+    @Published private(set) var proximityAlertBanner: String?
+    @Published private(set) var proximityNotificationAuthorization: LocalPostureNotificationService.Authorization = .unknown
     @Published private(set) var diagnostics = CameraAnalysisDiagnostics.empty
     @Published private(set) var benchmarkState: BenchmarkViewState = .idle
 
@@ -130,7 +133,12 @@ final class CameraCaptureService: ObservableObject {
     private let benchmarkSegmentationCancellation = BenchmarkSegmentationCancellationBox()
     private var benchmarkProgressTask: Task<Void, Never>?
     private var isApplicationActive = true
+    private var isSystemApplicationActive = NSApplication.shared.isActive
     private var isWindowMiniaturized = false
+    private let proximityNotificationService = LocalPostureNotificationService()
+    private let proximityAlertHistoryStore = PostureProximityAlertHistoryStore()
+    private var proximityAlertPolicy = PostureProximityAlertPolicy()
+    private var proximityBannerWorkItem: DispatchWorkItem?
     private lazy var sampleDelegate = PoseSampleBufferDelegate(
         sampleQueue: sampleQueue,
         segmentationCancellation: benchmarkSegmentationCancellation
@@ -163,6 +171,7 @@ final class CameraCaptureService: ObservableObject {
                 self.blazePoseState = state
             case .postureIndicators(let snapshot):
                 self.postureIndicators = snapshot
+                self.evaluateProximityAlert(snapshot)
             case .silhouetteOverlay(let overlay, let token):
                 guard self.benchmarkSegmentationEpoch.accepts(
                     token,
@@ -185,6 +194,29 @@ final class CameraCaptureService: ObservableObject {
     )
 
     init() {
+        proximityAlertPolicy = PostureProximityAlertPolicy(
+            restoredDeliveries: PostureProximityAlertHistoryStore().load()
+        )
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.proximityNotificationAuthorization = await self.proximityNotificationService.authorization()
+        }
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.isSystemApplicationActive = true
+                Task { @MainActor in
+                    self.proximityNotificationAuthorization = await self.proximityNotificationService.authorization()
+                }
+            }
+            .store(in: &notificationCancellables)
+
+        NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.isSystemApplicationActive = false }
+            .store(in: &notificationCancellables)
+
         NotificationCenter.default.publisher(for: AVCaptureSession.wasInterruptedNotification, object: session)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
@@ -225,6 +257,52 @@ final class CameraCaptureService: ObservableObject {
             .store(in: &notificationCancellables)
     }
 
+    func requestProximityNotificationAuthorization() {
+        if proximityNotificationAuthorization == .denied {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") {
+                NSWorkspace.shared.open(url)
+            }
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.proximityNotificationAuthorization = await self.proximityNotificationService.requestAuthorization()
+        }
+    }
+
+    private func evaluateProximityAlert(_ snapshot: PostureIndicatorsSnapshot) {
+        let distance = snapshot.result(for: .headDistance)
+        let isForeground = isSystemApplicationActive && isApplicationActive && !isWindowMiniaturized
+        let deliveryTime = Date().timeIntervalSince1970
+        let delivery = proximityAlertPolicy.consume(
+            isProbablyTooClose: distance.state == .attention,
+            isEligible: !snapshot.isCalibrating && distance.observedAt != nil &&
+                (isForeground || proximityNotificationAuthorization == .authorized),
+            isForeground: isForeground,
+            now: deliveryTime
+        )
+        guard delivery != .none else { return }
+        switch delivery {
+        case .foregroundBanner:
+            proximityAlertHistoryStore.save(proximityAlertPolicy.deliveries)
+            proximityAlertBanner = "Vous êtes probablement trop proche de votre repère confortable."
+            proximityBannerWorkItem?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.proximityAlertBanner = nil }
+            proximityBannerWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: work)
+        case .backgroundNotification:
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if await self.proximityNotificationService.deliverProbablyTooClose() {
+                    self.proximityAlertHistoryStore.save(self.proximityAlertPolicy.deliveries)
+                } else {
+                    self.proximityAlertPolicy.rollbackDelivery(at: deliveryTime)
+                }
+            }
+        case .none: break
+        }
+    }
+
     func start() {
         guard state != .running, state != .configuring, state != .requestingPermission else {
             return
@@ -263,6 +341,10 @@ final class CameraCaptureService: ObservableObject {
         overlay = .empty
         blazePoseState = nil
         postureIndicators = .initial
+        proximityAlertPolicy.resetTracking()
+        proximityBannerWorkItem?.cancel()
+        proximityBannerWorkItem = nil
+        proximityAlertBanner = nil
         state = .idle
         sessionRuntime.stop(operationID: operationID) {
             guard let completion else { return }
@@ -342,6 +424,12 @@ final class CameraCaptureService: ObservableObject {
                 || self.isWindowMiniaturized != isWindowMiniaturized else { return }
         self.isApplicationActive = isApplicationActive
         self.isWindowMiniaturized = isWindowMiniaturized
+        if isApplicationActive {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.proximityNotificationAuthorization = await self.proximityNotificationService.authorization()
+            }
+        }
         if benchmarkSession != nil,
            (!isApplicationActive || isWindowMiniaturized) {
             invalidateBenchmark(
@@ -386,6 +474,7 @@ final class CameraCaptureService: ObservableObject {
 
     private func configureAndStart(operationID currentOperationID: Int) {
         guard operationID == currentOperationID else { return }
+        proximityAlertPolicy.resetTracking()
         setPoseProcessingActive(false)
         state = .configuring
 
@@ -412,6 +501,12 @@ final class CameraCaptureService: ObservableObject {
         _ isActive: Bool,
         resetDiagnostics: Bool = true
     ) {
+        if !isActive {
+            proximityAlertPolicy.resetTracking()
+            proximityBannerWorkItem?.cancel()
+            proximityBannerWorkItem = nil
+            proximityAlertBanner = nil
+        }
         activationID += 1
         let generation = PoseProcessingGeneration(
             operationID: operationID,
@@ -782,6 +877,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             facePointCount: face.polylines.reduce(0) { $0 + $1.locations.count },
             interocularDistance: geometry?.interocularDistance, faceLength: geometry?.faceLength,
             pitchProxy: geometry?.pitchProxy, yawProxy: geometry?.yawProxy,
+            eyeLineRollDegrees: geometry?.eyeLineRollDegrees,
             leftEyeOpeningRatio: geometry?.leftEyeOpeningRatio,
             rightEyeOpeningRatio: geometry?.rightEyeOpeningRatio,
             innerBrowDistanceRatio: geometry?.innerBrowDistanceRatio, faceCenter: center,

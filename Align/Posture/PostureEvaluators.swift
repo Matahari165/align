@@ -6,7 +6,10 @@ nonisolated struct PostureEvaluatorConfiguration: Equatable, Sendable {
     var requiredDuration: TimeInterval = 1.5
     var minimumFacePointCount = 40
     var maximumAbsoluteYawProxy = 0.35
-    var maximumFaceScaleDisagreement = 0.18
+    var maximumAbsoluteYawForProximity = 0.20
+    var maximumAbsoluteRollForProximityDegrees = 20.0
+    var maximumFaceScaleDisagreement = 0.12
+    var proximityRequiredDuration: TimeInterval = 2.0
     var maximumBodySkew: TimeInterval = 0.30
     var bodyTTL: TimeInterval = 1.20
     var maximumBodySampleGap: TimeInterval = 1.50
@@ -18,7 +21,13 @@ nonisolated struct PostureEvaluatorConfiguration: Equatable, Sendable {
         ttl.isFinite && ttl > 0 && maximumSampleGap.isFinite && maximumSampleGap > 0 &&
             requiredDuration.isFinite && requiredDuration >= 0 && minimumFacePointCount > 0 &&
             maximumAbsoluteYawProxy.isFinite && maximumAbsoluteYawProxy >= 0 &&
+            maximumAbsoluteYawForProximity.isFinite &&
+            maximumAbsoluteYawForProximity >= 0 &&
+            maximumAbsoluteYawForProximity <= maximumAbsoluteYawProxy &&
+            maximumAbsoluteRollForProximityDegrees.isFinite &&
+            maximumAbsoluteRollForProximityDegrees >= 0 &&
             maximumFaceScaleDisagreement.isFinite && maximumFaceScaleDisagreement >= 0 &&
+            proximityRequiredDuration.isFinite && proximityRequiredDuration >= 0 &&
             maximumBodySkew.isFinite && maximumBodySkew >= 0 &&
             bodyTTL.isFinite && bodyTTL > 0 && maximumBodySampleGap.isFinite &&
             maximumBodySampleGap > 0 && browEnterContraction.isFinite &&
@@ -37,7 +46,7 @@ nonisolated struct PostureEvaluatorSuite: Sendable {
     private var lastBodySampleID: UInt64?
     private var faceCache: FaceEvaluationCache?
     private var bodyCache: BodyEvaluationCache?
-    private var headProximity = SustainedMetric(enter: 1.20, exit: 1.12)
+    private var headProximity = SustainedMetric(enter: 1.25, exit: 1.15)
     private var relativeHeadPosition = SustainedMetric(enter: 0.10, exit: 0.06)
     private var forwardHead = SustainedMetric(enter: 1.12, exit: 1.07)
     private var elevatedShoulders = SustainedMetric(enter: 0.08, exit: 0.04)
@@ -101,10 +110,15 @@ nonisolated struct PostureEvaluatorSuite: Sendable {
             faceCache = FaceEvaluationCache(
                 proximity: Self.evaluate(
                     metric: coherentFaceScaleRatio(snapshot, calibration),
-                    usable: faceIsUsable, channel: &headProximity,
+                    usable: faceIsUsable && snapshot.yawProxy.map {
+                        abs($0) <= configuration.maximumAbsoluteYawForProximity
+                    } == true && snapshot.eyeLineRollDegrees.map {
+                        abs($0) <= configuration.maximumAbsoluteRollForProximityDegrees
+                    } == true,
+                    channel: &headProximity,
                     timestamp: snapshot.faceTimestamp, attentionState: .attention,
-                    requiredDuration: configuration.requiredDuration,
-                    detail: "Distance apparente relative au repère"
+                    requiredDuration: configuration.proximityRequiredDuration,
+                    detail: "Taille apparente du visage durablement supérieure au repère personnel"
                 ),
                 position: Self.evaluate(
                     metric: absoluteDelta(snapshot.pitchProxy, calibration.pitchProxy),

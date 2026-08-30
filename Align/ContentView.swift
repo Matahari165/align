@@ -31,6 +31,21 @@ struct ContentView: View {
                         .fill(.black.opacity(0.78))
                     inactiveCameraMessage
                 }
+
+                if let banner = camera.proximityAlertBanner {
+                    VStack {
+                        Spacer()
+                        Label(banner, systemImage: "exclamationmark.circle.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 7)
+                            .background(.black.opacity(0.76), in: Capsule())
+                            .padding(12)
+                    }
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+                }
             }
             .clipped()
             .accessibilityElement(children: .ignore)
@@ -40,6 +55,8 @@ struct ContentView: View {
             PostureIndicatorsView(
                 snapshot: camera.postureIndicators,
                 cameraIsRunning: camera.state == .running,
+                notificationAuthorization: camera.proximityNotificationAuthorization,
+                onRequestNotifications: camera.requestProximityNotificationAuthorization,
                 onCalibrate: camera.calibratePosture
             )
 

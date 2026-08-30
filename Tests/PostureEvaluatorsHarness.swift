@@ -13,10 +13,14 @@ enum PostureEvaluatorsHarness {
         time: Double,
         generation: UInt64 = 1,
         scale: Double = 1,
+        interocularScale: Double? = nil,
+        faceLengthScale: Double? = nil,
         pitch: Double = 0,
         eye: Double = 0.30,
         brow: Double = 0.40,
         shoulderY: Double = 0.70,
+        yaw: Double = 0,
+        roll: Double = 0,
         includeBody: Bool = true,
         includeLeftEye: Bool = true,
         includeLeftShoulder: Bool = true,
@@ -33,10 +37,11 @@ enum PostureEvaluatorsHarness {
             faceTimestamp: time,
             faceSampleID: id,
             facePointCount: 50,
-            interocularDistance: 0.20 * scale,
-            faceLength: 0.32 * scale,
+            interocularDistance: 0.20 * (interocularScale ?? scale),
+            faceLength: 0.32 * (faceLengthScale ?? scale),
             pitchProxy: pitch,
-            yawProxy: 0,
+            yawProxy: yaw,
+            eyeLineRollDegrees: roll,
             leftEyeOpeningRatio: includeLeftEye ? eye : nil,
             rightEyeOpeningRatio: eye,
             innerBrowDistanceRatio: brow,
@@ -192,7 +197,8 @@ enum PostureEvaluatorsHarness {
             maximumSampleGap: 0.75,
             requiredDuration: 0.4,
             minimumFacePointCount: 40,
-            maximumAbsoluteYawProxy: 0.35
+            maximumAbsoluteYawProxy: 0.35,
+            proximityRequiredDuration: 0.4
         )
         var suite = PostureEvaluatorSuite(configuration: config)
         let absentCalibration = suite.consume(snapshot(time: 8.2), calibration: nil, now: 8.2)
@@ -237,6 +243,70 @@ enum PostureEvaluatorsHarness {
                "maturité expérimentale distincte de l'alerte")
         expect(attention.elevatedShoulders.state == .attention, "épaules élevées")
         expect(attention.narrowedBrows.state == .attention, "sourcils rapprochés")
+
+        suite.reset()
+        _ = suite.consume(snapshot(time: 9.6, scale: 1.30, yaw: 0.21),
+                          calibration: calibration, now: 9.6)
+        expect(suite.consume(snapshot(time: 10.0, scale: 1.30, yaw: 0.21),
+                             calibration: calibration, now: 10.0)
+               .headProximity.state == .unavailable,
+               "un visage trop tourné ne doit pas simuler une proximité")
+        suite.reset()
+        _ = suite.consume(snapshot(time: 10.1, scale: 1.30, yaw: -0.21),
+                          calibration: calibration, now: 10.1)
+        expect(suite.consume(snapshot(time: 10.5, scale: 1.30, yaw: -0.21),
+                             calibration: calibration, now: 10.5)
+               .headProximity.state == .unavailable,
+               "la garde yaw doit être symétrique")
+        suite.reset()
+        _ = suite.consume(snapshot(time: 10.6, scale: 1.30, roll: 20.1),
+                          calibration: calibration, now: 10.6)
+        expect(suite.consume(snapshot(time: 11.0, scale: 1.30, roll: 20.1),
+                             calibration: calibration, now: 11.0)
+               .headProximity.state == .unavailable,
+               "un roll supérieur à vingt degrés invalide la distance")
+        suite.reset()
+        _ = suite.consume(snapshot(time: 11.1, scale: 1.25, yaw: 0.20, roll: 20),
+                          calibration: calibration, now: 11.1)
+        expect(suite.consume(snapshot(time: 11.5, scale: 1.25, yaw: 0.20, roll: 20),
+                             calibration: calibration, now: 11.5)
+               .headProximity.state == .attention,
+               "les frontières yaw et roll inclusives restent acceptées")
+        suite.reset()
+        _ = suite.consume(snapshot(time: 11.6, scale: 1.25, yaw: -0.20, roll: -20),
+                          calibration: calibration, now: 11.6)
+        expect(suite.consume(snapshot(time: 12.0, scale: 1.25, yaw: -0.20, roll: -20),
+                             calibration: calibration, now: 12.0)
+               .headProximity.state == .attention,
+               "les frontières négatives sont symétriques")
+        suite.reset()
+        _ = suite.consume(snapshot(time: 12.1, interocularScale: 1.30,
+                                   faceLengthScale: 1.0),
+                          calibration: calibration, now: 12.1)
+        expect(suite.consume(snapshot(time: 12.5, interocularScale: 1.30,
+                                     faceLengthScale: 1.0),
+                             calibration: calibration, now: 12.5)
+               .headProximity.state == .unavailable,
+               "une transformation non uniforme du visage doit être refusée")
+        suite.reset()
+        _ = suite.consume(snapshot(time: 10.3, scale: 1.24),
+                          calibration: calibration, now: 10.3)
+        expect(suite.consume(snapshot(time: 10.7, scale: 1.24),
+                             calibration: calibration, now: 10.7)
+               .headProximity.state == .neutral,
+               "une hausse de 24 % reste sous le seuil conservateur")
+
+        var conservativeSuite = PostureEvaluatorSuite()
+        for time in stride(from: 30.0, through: 31.5, by: 0.5) {
+            let result = conservativeSuite.consume(snapshot(time: time, scale: 1.25),
+                                                   calibration: calibration, now: time)
+            expect(result.headProximity.state != .attention,
+                   "la proximité ne doit pas alerter avant deux secondes continues")
+        }
+        expect(conservativeSuite.consume(snapshot(time: 32.0, scale: 1.25),
+                                         calibration: calibration, now: 32.0)
+               .headProximity.state == .attention,
+               "deux secondes continues au seuil conservateur déclenchent l’attention")
 
         suite.reset()
         _ = suite.consume(snapshot(time: 10.0), calibration: calibration, now: 10.0)

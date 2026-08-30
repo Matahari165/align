@@ -47,8 +47,11 @@ nonisolated enum BlazePoseOverlayBuilder {
         leftElbow: PosePoint?, rightElbow: PosePoint?,
         leftHip: PosePoint?, rightHip: PosePoint?
     ) -> PoseOverlay {
+        // Le cadrage proche privilégie les repères réellement susceptibles de
+        // rester visibles. Les hanches restent dans le contrat de mesure mais
+        // ne structurent pas l'overlay principal.
         var points = [nose, leftEar, rightEar, leftShoulder, rightShoulder,
-                      leftElbow, rightElbow, leftHip, rightHip].compactMap { $0 }
+                      leftElbow, rightElbow].compactMap { $0 }
         var lines: [PosePolyline] = []
         func connect(_ name: String, _ first: PosePoint?, _ second: PosePoint?) {
             guard let first, let second else { return }
@@ -58,20 +61,21 @@ nonisolated enum BlazePoseOverlayBuilder {
         }
         connect("visage-gauche", leftEar, nose)
         connect("visage-droit", nose, rightEar)
+        connect("contour-haut-gauche", leftEar, leftShoulder)
+        connect("contour-haut-droit", rightEar, rightShoulder)
         connect("épaule-gauche", leftShoulder, leftElbow)
         connect("ligne-épaules", leftShoulder, rightShoulder)
         connect("épaule-droite", rightShoulder, rightElbow)
-        connect("flanc-gauche", leftShoulder, leftHip)
-        connect("bassin", leftHip, rightHip)
-        connect("flanc-droit", rightShoulder, rightHip)
         if let leftShoulder, let rightShoulder {
-            points.append(PosePoint(
+            let center = PosePoint(
                 name: "CENTRE ESTIMÉ",
                 location: CGPoint(x: (leftShoulder.location.x + rightShoulder.location.x) / 2,
                                   y: (leftShoulder.location.y + rightShoulder.location.y) / 2),
                 confidence: min(leftShoulder.confidence, rightShoulder.confidence),
                 source: .blazePose
-            ))
+            )
+            points.append(center)
+            connect("axe-tête-épaules", nose, center)
         }
         return PoseOverlay(points: points, polylines: lines)
     }

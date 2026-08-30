@@ -34,6 +34,7 @@ nonisolated struct PostureSnapshot: Equatable, Sendable {
     let faceLength: Double?
     let pitchProxy: Double?
     let yawProxy: Double?
+    let eyeLineRollDegrees: Double?
     let leftEyeOpeningRatio: Double?
     let rightEyeOpeningRatio: Double?
     let innerBrowDistanceRatio: Double?
@@ -69,6 +70,7 @@ nonisolated struct PostureSnapshot: Equatable, Sendable {
             faceSampleID == other.faceSampleID && facePointCount == other.facePointCount &&
             interocularDistance == other.interocularDistance && faceLength == other.faceLength &&
             pitchProxy == other.pitchProxy && yawProxy == other.yawProxy &&
+            eyeLineRollDegrees == other.eyeLineRollDegrees &&
             leftEyeOpeningRatio == other.leftEyeOpeningRatio &&
             rightEyeOpeningRatio == other.rightEyeOpeningRatio &&
             innerBrowDistanceRatio == other.innerBrowDistanceRatio &&
@@ -105,6 +107,7 @@ nonisolated struct PostureSnapshot: Equatable, Sendable {
             faceLength: faceLength,
             pitchProxy: pitchProxy,
             yawProxy: yawProxy,
+            eyeLineRollDegrees: eyeLineRollDegrees,
             leftEyeOpeningRatio: leftEyeOpeningRatio,
             rightEyeOpeningRatio: rightEyeOpeningRatio,
             innerBrowDistanceRatio: innerBrowDistanceRatio,
