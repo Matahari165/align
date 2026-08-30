@@ -18,6 +18,13 @@ nonisolated struct FaceGeometrySignal: Equatable, Sendable {
     let pitchProxy: Double?
     let interocularDistance: Double?
     let faceLength: Double?
+    /// Ouverture verticale normalisée par la largeur de chaque œil.
+    let leftEyeOpeningRatio: Double?
+    let rightEyeOpeningRatio: Double?
+    /// Distance minimale entre sourcils, normalisée par la distance interoculaire.
+    let innerBrowDistanceRatio: Double?
+    /// Centre géométrique du visage dans le repère capture normalisé.
+    let faceCenter: CGPoint?
 
     /// Seuil en coordonnées normalisées Vision : évite les divisions par une
     /// distance nulle ou par un visage dégénéré.
@@ -33,13 +40,21 @@ nonisolated struct FaceGeometrySignal: Equatable, Sendable {
         yawProxy: Double?,
         pitchProxy: Double?,
         interocularDistance: Double?,
-        faceLength: Double?
+        faceLength: Double?,
+        leftEyeOpeningRatio: Double? = nil,
+        rightEyeOpeningRatio: Double? = nil,
+        innerBrowDistanceRatio: Double? = nil,
+        faceCenter: CGPoint? = nil
     ) {
         self.eyeLineRollDegrees = Self.finite(eyeLineRollDegrees)
         self.yawProxy = Self.finite(yawProxy)
         self.pitchProxy = Self.finite(pitchProxy)
         self.interocularDistance = Self.finite(interocularDistance)
         self.faceLength = Self.finite(faceLength)
+        self.leftEyeOpeningRatio = Self.nonnegativeFinite(leftEyeOpeningRatio)
+        self.rightEyeOpeningRatio = Self.nonnegativeFinite(rightEyeOpeningRatio)
+        self.innerBrowDistanceRatio = Self.nonnegativeFinite(innerBrowDistanceRatio)
+        self.faceCenter = Self.finitePoint(faceCenter)
     }
 
     /// Construit un signal à partir des polylines nommées par `PoseDetector`.
@@ -52,6 +67,10 @@ nonisolated struct FaceGeometrySignal: Equatable, Sendable {
         let leftEye = medianPoint(in: regions["leftEye"] ?? [])
         let rightEye = medianPoint(in: regions["rightEye"] ?? [])
         let nose = medianPoint(in: regions["nose"] ?? [])
+        let leftEyeLocations = regions["leftEye"] ?? []
+        let rightEyeLocations = regions["rightEye"] ?? []
+        let leftEyebrow = regions["leftEyebrow"] ?? []
+        let rightEyebrow = regions["rightEyebrow"] ?? []
 
         let interocularDistance: Double?
         let eyeLineRollDegrees: Double?
@@ -96,13 +115,20 @@ nonisolated struct FaceGeometrySignal: Equatable, Sendable {
             yawProxy = nil
             pitchProxy = nil
         }
+        let faceCenter = medianPoint(in: regions["faceContour"] ?? []) ?? eyeMidpoint
 
         let signal = FaceGeometrySignal(
             eyeLineRollDegrees: eyeLineRollDegrees,
             yawProxy: yawProxy,
             pitchProxy: pitchProxy,
             interocularDistance: interocularDistance,
-            faceLength: faceLength
+            faceLength: faceLength,
+            leftEyeOpeningRatio: openingRatio(leftEyeLocations),
+            rightEyeOpeningRatio: openingRatio(rightEyeLocations),
+            innerBrowDistanceRatio: interocularDistance.flatMap {
+                normalizedMinimumDistance(leftEyebrow, rightEyebrow, scale: $0)
+            },
+            faceCenter: faceCenter
         )
         return signal.hasValue ? signal : nil
     }
@@ -113,6 +139,10 @@ nonisolated struct FaceGeometrySignal: Equatable, Sendable {
             || pitchProxy != nil
             || interocularDistance != nil
             || faceLength != nil
+            || leftEyeOpeningRatio != nil
+            || rightEyeOpeningRatio != nil
+            || innerBrowDistanceRatio != nil
+            || faceCenter != nil
     }
 
     var summary: String {
@@ -120,7 +150,9 @@ nonisolated struct FaceGeometrySignal: Equatable, Sendable {
             + "yaw \(formatted(yawProxy)) · "
             + "pitch \(formatted(pitchProxy)) · "
             + "interoculaire \(formatted(interocularDistance)) · "
-            + "longueur \(formatted(faceLength))"
+            + "longueur \(formatted(faceLength)) · "
+            + "yeux \(formatted(leftEyeOpeningRatio))/\(formatted(rightEyeOpeningRatio)) · "
+            + "sourcils \(formatted(innerBrowDistanceRatio))"
     }
 
     private static func medianPoint(in locations: [CGPoint]) -> CGPoint? {
@@ -149,6 +181,53 @@ nonisolated struct FaceGeometrySignal: Equatable, Sendable {
         // la longueur d'arc varie avec le nombre de points ou la courbure.
         if let length = polylineLength(medianLine) { return length }
         return robustVerticalExtent(contour)
+    }
+
+    private static func openingRatio(_ locations: [CGPoint]) -> Double? {
+        let finiteLocations = locations.filter { $0.x.isFinite && $0.y.isFinite }
+        guard finiteLocations.count >= 4 else { return nil }
+        // Le segment le plus long définit l'axe local de l'œil. L'ouverture est
+        // ensuite mesurée perpendiculairement : incliner la tête ne simule donc
+        // pas une fermeture.
+        var endpoints: (CGPoint, CGPoint)?
+        var width = 0.0
+        for index in finiteLocations.indices {
+            for otherIndex in finiteLocations.indices where otherIndex > index {
+                let first = finiteLocations[index]
+                let second = finiteLocations[otherIndex]
+                let distance = hypot(Double(second.x - first.x), Double(second.y - first.y))
+                if distance > width { width = distance; endpoints = (first, second) }
+            }
+        }
+        guard let endpoints, width >= minimumDistance, width.isFinite else { return nil }
+        let axisX = Double(endpoints.1.x - endpoints.0.x) / width
+        let axisY = Double(endpoints.1.y - endpoints.0.y) / width
+        let perpendicular = finiteLocations.map { point in
+            -Double(point.x) * axisY + Double(point.y) * axisX
+        }
+        guard let minimum = perpendicular.min(), let maximum = perpendicular.max() else { return nil }
+        let height = maximum - minimum
+        guard height >= 0, height.isFinite else { return nil }
+        return nonnegativeFinite(height / width)
+    }
+
+    private static func normalizedMinimumDistance(
+        _ first: [CGPoint],
+        _ second: [CGPoint],
+        scale: Double
+    ) -> Double? {
+        let lhs = first.filter { $0.x.isFinite && $0.y.isFinite }
+        let rhs = second.filter { $0.x.isFinite && $0.y.isFinite }
+        guard !lhs.isEmpty, !rhs.isEmpty, scale.isFinite, scale >= minimumDistance else {
+            return nil
+        }
+        var minimum = Double.greatestFiniteMagnitude
+        for left in lhs {
+            for right in rhs {
+                minimum = min(minimum, hypot(Double(right.x - left.x), Double(right.y - left.y)))
+            }
+        }
+        return nonnegativeFinite(minimum / scale)
     }
 
     private static func polylineLength(_ locations: [CGPoint]) -> Double? {
@@ -212,6 +291,16 @@ nonisolated struct FaceGeometrySignal: Equatable, Sendable {
     private static func finite(_ value: Double?) -> Double? {
         guard let value, value.isFinite else { return nil }
         return value
+    }
+
+    private static func nonnegativeFinite(_ value: Double?) -> Double? {
+        guard let value = finite(value), value >= 0 else { return nil }
+        return value
+    }
+
+    private static func finitePoint(_ point: CGPoint?) -> CGPoint? {
+        guard let point, point.x.isFinite, point.y.isFinite else { return nil }
+        return point
     }
 
     private func formatted(_ value: Double?, suffix: String = "") -> String {

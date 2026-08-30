@@ -115,6 +115,7 @@ final class CameraCaptureService: ObservableObject {
     @Published private(set) var recognizedPointCount = 0
     @Published private(set) var overlay = PoseOverlay.empty
     @Published private(set) var blazePoseState: BlazePoseLiveState?
+    @Published private(set) var postureIndicators = PostureIndicatorsSnapshot.initial
     @Published private(set) var diagnostics = CameraAnalysisDiagnostics.empty
     @Published private(set) var benchmarkState: BenchmarkViewState = .idle
 
@@ -160,6 +161,8 @@ final class CameraCaptureService: ObservableObject {
                 }
             case .blazePoseState(let state):
                 self.blazePoseState = state
+            case .postureIndicators(let snapshot):
+                self.postureIndicators = snapshot
             case .silhouetteOverlay(let overlay, let token):
                 guard self.benchmarkSegmentationEpoch.accepts(
                     token,
@@ -259,12 +262,21 @@ final class CameraCaptureService: ObservableObject {
         trackingMode = nil
         overlay = .empty
         blazePoseState = nil
+        postureIndicators = .initial
         state = .idle
         sessionRuntime.stop(operationID: operationID) {
             guard let completion else { return }
             Task { @MainActor in
                 completion()
             }
+        }
+    }
+
+    func calibratePosture() {
+        guard state == .running, let generation = activePoseGeneration else { return }
+        let delegate = sampleDelegate
+        sampleQueue.async {
+            delegate.beginPostureCalibration(generation: generation)
         }
     }
 
@@ -408,6 +420,7 @@ final class CameraCaptureService: ObservableObject {
         activePoseGeneration = isActive ? generation : nil
         overlay = .empty
         blazePoseState = nil
+        postureIndicators = .initial
         if resetDiagnostics {
             diagnostics = .empty
         }
@@ -429,6 +442,7 @@ nonisolated private enum PoseProcessingEvent: Sendable {
     case diagnostics(CameraAnalysisDiagnostics)
     case overlay(PoseOverlay)
     case blazePoseState(BlazePoseLiveState)
+    case postureIndicators(PostureIndicatorsSnapshot)
     case silhouetteOverlay(PoseOverlay, UInt64)
     case benchmarkMeasurement(BenchmarkMeasurement, TimeInterval)
     case benchmarkOverlayVisibility(Bool, TimeInterval)
@@ -641,6 +655,12 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     private var benchmarkSegmentationToken: UInt64?
     private var upperBodyROICadence = UpperBodyROISpikeCadence()
     private var upperBodyROISpike = UpperBodyROISpikeDiagnostics.empty
+    private var posturePipeline = PostureSignalPipeline()
+    private var postureSampleID: UInt64 = 0
+    private var postureBodySourceID: UInt64 = 0
+    private var postureFusion = PostureAsyncFusion(maximumSkew: 0.30)!
+    private var postureExpirationWorkItem: DispatchWorkItem?
+    private var postureCalibrationWorkItem: DispatchWorkItem?
 
     init(
         sampleQueue: DispatchQueue,
@@ -696,6 +716,15 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         blazePoseExpirationWorkItem?.cancel()
         blazePoseExpirationWorkItem = nil
         blazePoseEngine.reset()
+        postureSampleID = 0
+        postureBodySourceID = 0
+        postureFusion.reset()
+        postureExpirationWorkItem?.cancel()
+        postureExpirationWorkItem = nil
+        postureCalibrationWorkItem?.cancel()
+        postureCalibrationWorkItem = nil
+        let postureSnapshot = posturePipeline.reset(generation: UInt64(generation.activationID))
+        if isActive { onEvent(.postureIndicators(postureSnapshot), generation) }
         segmentationAttempts = 0
         segmentationVisionPerforms = 0
         segmentationResults = 0
@@ -708,6 +737,93 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         segmentationDurationMax = nil
         segmentationState = .notRequested
         lastUpperBodyLandmarks = .empty
+    }
+
+    func beginPostureCalibration(generation requestedGeneration: PoseProcessingGeneration) {
+        guard isActive, generation == requestedGeneration else { return }
+        let snapshot = posturePipeline.beginCalibration(
+            at: ProcessInfo.processInfo.systemUptime,
+            generation: UInt64(generation.activationID)
+        )
+        onEvent(.postureIndicators(snapshot), generation)
+        schedulePostureCalibrationFinish(after: PostureSignalPipeline.calibrationDuration,
+                                         generation: generation)
+    }
+
+    private func schedulePostureCalibrationFinish(
+        after delay: TimeInterval,
+        generation scheduledGeneration: PoseProcessingGeneration
+    ) {
+        postureCalibrationWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.isActive, self.generation == scheduledGeneration else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            let result = self.posturePipeline.expire(
+                at: now, generation: UInt64(scheduledGeneration.activationID)
+            )
+            self.onEvent(.postureIndicators(result), scheduledGeneration)
+            if result.isCalibrating {
+                self.schedulePostureCalibrationFinish(after: 2, generation: scheduledGeneration)
+            }
+        }
+        postureCalibrationWorkItem = work
+        sampleQueue.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    private func publishPosture(face: FaceDetectionOutput, at uptime: TimeInterval) {
+        postureSampleID &+= 1
+        let geometry = FaceGeometrySignal.from(polylines: face.polylines)
+        let center = geometry?.faceCenter.map { PostureMetricPoint(x: Double($0.x), y: Double($0.y)) }
+        let faceOnly = PostureSnapshot(
+            faceGeneration: UInt64(generation.activationID), faceTimestamp: uptime,
+            faceSampleID: postureSampleID,
+            facePointCount: face.polylines.reduce(0) { $0 + $1.locations.count },
+            interocularDistance: geometry?.interocularDistance, faceLength: geometry?.faceLength,
+            pitchProxy: geometry?.pitchProxy, yawProxy: geometry?.yawProxy,
+            leftEyeOpeningRatio: geometry?.leftEyeOpeningRatio,
+            rightEyeOpeningRatio: geometry?.rightEyeOpeningRatio,
+            innerBrowDistanceRatio: geometry?.innerBrowDistanceRatio, faceCenter: center,
+            leftShoulder: nil, rightShoulder: nil, bodyGeneration: nil,
+            bodyTimestamp: nil, bodySampleID: nil
+        )
+        guard let fused = postureFusion.ingestFace(faceOnly) else { return }
+        publishPosture(fused, at: uptime)
+    }
+
+    private func publishPosture(shoulders result: BlazePoseLiveResult, at uptime: TimeInterval) {
+        postureBodySourceID &+= 1
+        guard let left = result.leftShoulder, let right = result.rightShoulder else {
+            if let faceOnly = postureFusion.discardBody(
+                generation: UInt64(generation.activationID), timestamp: uptime,
+                sampleID: postureBodySourceID
+            ) { publishPosture(faceOnly, at: uptime) }
+            return
+        }
+        let body = PostureShoulderSnapshot(
+            generation: UInt64(generation.activationID), timestamp: uptime,
+            sampleID: postureBodySourceID,
+            leftShoulder: .init(x: Double(left.location.x), y: Double(left.location.y)),
+            rightShoulder: .init(x: Double(right.location.x), y: Double(right.location.y))
+        )
+        guard let fused = postureFusion.ingestBody(body) else { return }
+        publishPosture(fused, at: uptime)
+    }
+
+    private func publishPosture(_ input: PostureSnapshot, at uptime: TimeInterval) {
+        let result = posturePipeline.ingest(input, now: uptime)
+        onEvent(.postureIndicators(result), generation)
+        postureExpirationWorkItem?.cancel()
+        let scheduledGeneration = generation
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.isActive, self.generation == scheduledGeneration else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            let expired = self.posturePipeline.expire(
+                at: now, generation: UInt64(scheduledGeneration.activationID)
+            )
+            self.onEvent(.postureIndicators(expired), scheduledGeneration)
+        }
+        postureExpirationWorkItem = work
+        sampleQueue.asyncAfter(deadline: .now() + PostureSignalPipeline.ttl, execute: work)
     }
 
     func updatePresentation(
@@ -777,6 +893,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                 at: uptime,
                 generation: UInt64(generation.activationID)
             ) else { break }
+            publishPosture(shoulders: result, at: uptime)
             if result.state == .detected || result.state == .partial {
                 latestBlazePoseOverlay = result.overlay
                 blazePoseFreshness.record(at: uptime, generation: generation.activationID)
@@ -810,6 +927,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                 faceHadLandmarks = face.facesWithLandmarksCount > 0
                 faceOrientation = face.primaryOrientation
                 lastVisionError = nil
+                publishPosture(face: face, at: uptime)
                 handleFaceVisibility(face.polylines.isEmpty ? nil : uptime)
                 if face.polylines.isEmpty { clearFaceOverlay() }
             } catch {

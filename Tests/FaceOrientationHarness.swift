@@ -116,6 +116,7 @@ private enum FaceOrientationHarness {
         expect(approximately(geometry?.eyeLineRollDegrees, 26.565051177), "roll géométrique incorrect")
         expect(approximately(geometry?.yawProxy, 0.156524758, tolerance: 0.000_001), "le yaw proxy doit être positif et normalisé")
         expect(approximately(geometry?.pitchProxy, 0.25, tolerance: 0.000_001), "le pitch proxy doit suivre y capture")
+        expect(geometry?.faceCenter != nil, "le centre facial dérivé doit être disponible")
 
         let invertedEyes = [
             polyline("leftEye", [(0.60, 0.60), (0.60, 0.62), (0.62, 0.61)]),
@@ -146,6 +147,40 @@ private enum FaceOrientationHarness {
         expect(approximately(transformedGeometry?.yawProxy, geometry?.yawProxy), "yaw doit être invariant par translation/échelle")
         expect(approximately(transformedGeometry?.pitchProxy, geometry?.pitchProxy), "pitch doit être invariant par translation/échelle")
         expect(approximately(transformedGeometry?.interocularDistance, geometry?.interocularDistance.map { $0 * 2 }), "distance interoculaire doit suivre l'échelle")
+        expect(approximately(transformedGeometry?.faceCenter.map { Double($0.x) },
+                             geometry?.faceCenter.map { Double($0.x) * 2 + 7 }),
+               "centre facial doit suivre translation et échelle")
+
+        let expressionGeometry = FaceGeometrySignal.from(polylines: [
+            polyline("leftEye", [(0.20, 0.40), (0.30, 0.38), (0.40, 0.40), (0.30, 0.44)]),
+            polyline("rightEye", [(0.60, 0.40), (0.70, 0.38), (0.80, 0.40), (0.70, 0.44)]),
+            polyline("leftEyebrow", [(0.25, 0.30), (0.42, 0.32)]),
+            polyline("rightEyebrow", [(0.58, 0.32), (0.75, 0.30)]),
+            polyline("medianLine", [(0.50, 0.20), (0.50, 0.80)])
+        ])
+        expect(approximately(expressionGeometry?.leftEyeOpeningRatio, 0.30),
+               "ouverture œil gauche normalisée")
+        expect(approximately(expressionGeometry?.rightEyeOpeningRatio, 0.30),
+               "ouverture œil droit normalisée")
+        expect(approximately(expressionGeometry?.innerBrowDistanceRatio, 0.40),
+               "écart inter-sourcils normalisé")
+        let angle = Double.pi / 4
+        let rotatedExpression = expressionGeometry == nil ? [] : [
+            polyline("leftEye", [(0.20, 0.40), (0.30, 0.38), (0.40, 0.40), (0.30, 0.44)]),
+            polyline("rightEye", [(0.60, 0.40), (0.70, 0.38), (0.80, 0.40), (0.70, 0.44)]),
+            polyline("medianLine", [(0.50, 0.20), (0.50, 0.80)])
+        ].map { line in
+            PosePolyline(name: line.name, locations: line.locations.map { point in
+                let dx = Double(point.x) - 0.5
+                let dy = Double(point.y) - 0.5
+                return CGPoint(x: 0.5 + dx * cos(angle) - dy * sin(angle),
+                               y: 0.5 + dx * sin(angle) + dy * cos(angle))
+            }, source: line.source, isClosed: line.isClosed)
+        }
+        let rolledGeometry = FaceGeometrySignal.from(polylines: rotatedExpression)
+        expect(approximately(rolledGeometry?.leftEyeOpeningRatio,
+                             expressionGeometry?.leftEyeOpeningRatio),
+               "ouverture œil invariante au roll")
 
         let oppositeNose = basePolylines.map { line in
             guard line.name == "nose" else { return line }

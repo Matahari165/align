@@ -37,6 +37,12 @@ struct ContentView: View {
             .accessibilityLabel("Aperçu de la caméra")
             .accessibilityValue(accessibilitySummary)
 
+            PostureIndicatorsView(
+                snapshot: camera.postureIndicators,
+                cameraIsRunning: camera.state == .running,
+                onCalibrate: camera.calibratePosture
+            )
+
             statusBand
         }
         .frame(minWidth: 560, minHeight: 430)

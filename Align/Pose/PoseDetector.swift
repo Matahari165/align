@@ -368,6 +368,8 @@ nonisolated final class PoseDetector: @unchecked Sendable {
             polyline(from: landmarks.faceContour, name: "faceContour", boundingBox: boundingBox, orientation: orientation, isClosed: false),
             polyline(from: landmarks.leftEye, name: "leftEye", boundingBox: boundingBox, orientation: orientation, isClosed: true),
             polyline(from: landmarks.rightEye, name: "rightEye", boundingBox: boundingBox, orientation: orientation, isClosed: true),
+            polyline(from: landmarks.leftEyebrow, name: "leftEyebrow", boundingBox: boundingBox, orientation: orientation, isClosed: false),
+            polyline(from: landmarks.rightEyebrow, name: "rightEyebrow", boundingBox: boundingBox, orientation: orientation, isClosed: false),
             polyline(from: landmarks.nose, name: "nose", boundingBox: boundingBox, orientation: orientation, isClosed: false),
             polyline(from: landmarks.medianLine, name: "medianLine", boundingBox: boundingBox, orientation: orientation, isClosed: false)
         ].compactMap { $0 }
