@@ -40,6 +40,43 @@ nonisolated struct PoseOverlay: Sendable {
     var isEmpty: Bool { points.isEmpty && polylines.isEmpty }
 }
 
+nonisolated enum BlazePoseOverlayBuilder {
+    static func make(
+        nose: PosePoint?, leftEar: PosePoint?, rightEar: PosePoint?,
+        leftShoulder: PosePoint?, rightShoulder: PosePoint?,
+        leftElbow: PosePoint?, rightElbow: PosePoint?,
+        leftHip: PosePoint?, rightHip: PosePoint?
+    ) -> PoseOverlay {
+        var points = [nose, leftEar, rightEar, leftShoulder, rightShoulder,
+                      leftElbow, rightElbow, leftHip, rightHip].compactMap { $0 }
+        var lines: [PosePolyline] = []
+        func connect(_ name: String, _ first: PosePoint?, _ second: PosePoint?) {
+            guard let first, let second else { return }
+            lines.append(PosePolyline(name: name,
+                                      locations: [first.location, second.location],
+                                      source: .blazePose, isClosed: false))
+        }
+        connect("visage-gauche", leftEar, nose)
+        connect("visage-droit", nose, rightEar)
+        connect("épaule-gauche", leftShoulder, leftElbow)
+        connect("ligne-épaules", leftShoulder, rightShoulder)
+        connect("épaule-droite", rightShoulder, rightElbow)
+        connect("flanc-gauche", leftShoulder, leftHip)
+        connect("bassin", leftHip, rightHip)
+        connect("flanc-droit", rightShoulder, rightHip)
+        if let leftShoulder, let rightShoulder {
+            points.append(PosePoint(
+                name: "CENTRE ESTIMÉ",
+                location: CGPoint(x: (leftShoulder.location.x + rightShoulder.location.x) / 2,
+                                  y: (leftShoulder.location.y + rightShoulder.location.y) / 2),
+                confidence: min(leftShoulder.confidence, rightShoulder.confidence),
+                source: .blazePose
+            ))
+        }
+        return PoseOverlay(points: points, polylines: lines)
+    }
+}
+
 nonisolated enum PoseTrackingMode: Sendable {
     case faceOnly
     case bodyAvailable
@@ -179,6 +216,13 @@ nonisolated enum VisionCoordinateMapper {
     /// so the two contracts cannot be confused at call sites.
     static func previewDevicePoint(fromPoseOverlayPoint point: CGPoint) -> CGPoint {
         captureDevicePoint(fromTopLeftNormalized: point)
+    }
+
+    /// BlazePose is decoded in the unmirrored camera-buffer coordinate space,
+    /// already normalized from the top-left. Preview mirroring is owned by
+    /// `AVCaptureVideoPreviewLayer`; applying `1 - x` here would swap sides.
+    static func poseOverlayPoint(fromBlazePoseTopLeftPoint point: CGPoint) -> CGPoint {
+        point
     }
 
     /// Testable inverse of the preview conversion. No Vision or image data is

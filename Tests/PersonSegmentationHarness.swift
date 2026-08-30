@@ -13,6 +13,39 @@ private enum PersonSegmentationHarness {
     }
 
     static func main() {
+        let blazePoseLeft = CGPoint(x: 0.2, y: 0.35)
+        let blazePoseOverlay = VisionCoordinateMapper.poseOverlayPoint(
+            fromBlazePoseTopLeftPoint: blazePoseLeft
+        )
+        let blazePosePreview = VisionCoordinateMapper.previewDevicePoint(
+            fromPoseOverlayPoint: blazePoseOverlay
+        )
+        expect(blazePoseOverlay.x == 0.2,
+               "BlazePose ne doit pas recevoir un second miroir horizontal")
+        expect(abs(blazePosePreview.y - 0.65) < 0.000_001,
+               "BlazePose top-left doit subir une seule conversion verticale Preview")
+        let leftShoulder = PosePoint(name: "Épaule gauche",
+                                     location: CGPoint(x: 0.18, y: 0.42),
+                                     confidence: 0.8, source: .blazePose)
+        let rightShoulder = PosePoint(name: "Épaule droite",
+                                      location: CGPoint(x: 0.76, y: 0.55),
+                                      confidence: 0.9, source: .blazePose)
+        let partial = BlazePoseOverlayBuilder.make(
+            nose: nil, leftEar: nil, rightEar: nil,
+            leftShoulder: leftShoulder, rightShoulder: nil,
+            leftElbow: nil, rightElbow: nil, leftHip: nil, rightHip: nil
+        )
+        expect(partial.points.count == 1 && partial.polylines.isEmpty,
+               "un point partiel doit rester visible sans ligne inventée")
+        let asymmetric = BlazePoseOverlayBuilder.make(
+            nose: nil, leftEar: nil, rightEar: nil,
+            leftShoulder: leftShoulder, rightShoulder: rightShoulder,
+            leftElbow: nil, rightElbow: nil, leftHip: nil, rightHip: nil
+        )
+        let shoulderLine = asymmetric.polylines.first { $0.name == "ligne-épaules" }
+        expect(shoulderLine?.locations == [leftShoulder.location, rightShoulder.location],
+               "la paire asymétrique gauche/droite doit conserver ordre et coordonnées")
+
         let width = 100
         let height = 100
         let anchor = PersonSegmentationFaceAnchor(

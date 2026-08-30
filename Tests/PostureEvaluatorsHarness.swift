@@ -344,6 +344,73 @@ enum PostureEvaluatorsHarness {
         expect(recomputedPair.experimentalForwardHead.state == .pending,
                "nouvelle face recalcule la paire sans avancer le timestamp corps")
 
+        suite.reset()
+        _ = suite.consume(snapshot(time: 22.0, brow: 0.36),
+                          calibration: calibration, now: 22.0)
+        _ = suite.consume(snapshot(time: 22.2, brow: 0.36),
+                          calibration: calibration, now: 22.2)
+        let deliberateBrowContraction = suite.consume(
+            snapshot(time: 22.4, brow: 0.36), calibration: calibration, now: 22.4
+        )
+        expect(deliberateBrowContraction.narrowedBrows.state == .attention,
+               "rapprochement sourcils de 10 % détecté après 0,4 seconde")
+        let browRelease = suite.consume(snapshot(time: 22.6, brow: 0.385),
+                                        calibration: calibration, now: 22.6)
+        expect(browRelease.narrowedBrows.state == .neutral,
+               "hystérésis sourcils sort sous 4 %")
+
+        suite.reset()
+        _ = suite.consume(snapshot(time: 23.0, brow: 0.3684),
+                          calibration: calibration, now: 23.0)
+        _ = suite.consume(snapshot(time: 23.2, brow: 0.3684),
+                          calibration: calibration, now: 23.2)
+        expect(suite.consume(snapshot(time: 23.4, brow: 0.3684),
+                             calibration: calibration, now: 23.4).narrowedBrows.state == .neutral,
+               "contraction 7,9 % ne déclenche pas")
+        suite.reset()
+        _ = suite.consume(snapshot(time: 24.0, brow: 0.368),
+                          calibration: calibration, now: 24.0)
+        _ = suite.consume(snapshot(time: 24.2, brow: 0.368),
+                          calibration: calibration, now: 24.2)
+        expect(suite.consume(snapshot(time: 24.4, brow: 0.368),
+                             calibration: calibration, now: 24.4).narrowedBrows.state == .attention,
+               "frontière 8 % déclenche après trois mesures à 5 Hz")
+        expect(suite.consume(snapshot(time: 24.6, brow: 0.384),
+                             calibration: calibration, now: 24.6).narrowedBrows.state == .neutral,
+               "frontière de sortie 4 % libère l'attention")
+        suite.reset()
+        _ = suite.consume(snapshot(time: 25.0, brow: 0.36),
+                          calibration: calibration, now: 25.0)
+        _ = suite.consume(snapshot(time: 25.2, brow: 0.40),
+                          calibration: calibration, now: 25.2)
+        _ = suite.consume(snapshot(time: 25.4, brow: 0.36),
+                          calibration: calibration, now: 25.4)
+        expect(suite.consume(snapshot(time: 25.6, brow: 0.36),
+                             calibration: calibration, now: 25.6).narrowedBrows.state == .pending,
+               "une interruption avant 0,4 seconde remet la durée à zéro")
+
+        // Clignement de 100 ms : invisible aux instants 5 Hz, visible à 10 Hz.
+        suite.reset()
+        _ = suite.consume(snapshot(time: 30.0, eye: 0.30),
+                          calibration: calibration, now: 30.0)
+        let fiveHertz = suite.consume(snapshot(time: 30.2, eye: 0.30),
+                                      calibration: calibration, now: 30.2)
+        expect(fiveHertz.estimatedBlinks.value == 0,
+               "5 Hz manque un clignement entièrement entre deux analyses")
+        expect(fiveHertz.estimatedBlinks.quality == .limited,
+               "5 Hz reste marqué qualité limitée")
+        suite.reset()
+        _ = suite.consume(snapshot(time: 31.0, eye: 0.30),
+                          calibration: calibration, now: 31.0)
+        _ = suite.consume(snapshot(time: 31.1, eye: 0.15),
+                          calibration: calibration, now: 31.1)
+        let tenHertz = suite.consume(snapshot(time: 31.2, eye: 0.30),
+                                     calibration: calibration, now: 31.2)
+        expect(tenHertz.estimatedBlinks.value == 1,
+               "10 Hz observe le même clignement de 100 ms")
+        expect(tenHertz.estimatedBlinks.quality == .good,
+               "10 Hz atteint la qualité temporelle prévue")
+
         print("PostureEvaluatorsHarness: OK")
     }
 }

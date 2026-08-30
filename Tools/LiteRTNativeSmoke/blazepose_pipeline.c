@@ -59,8 +59,15 @@ BlazePosePipelineStatus BlazePoseDecodeUpperBody(
   BlazePoseLandmark landmarks[BLAZEPOSE_LANDMARK_COUNT];
   BlazePoseDecodeLandmarks(raw_landmarks, landmarks);
   BlazePoseRefineLandmarksFromHeatmap(landmarks, heatmap, 64, 64, 39);
+  BlazePoseLandmark nose = BlazePoseProjectLandmark(landmarks[0], roi);
+  BlazePoseLandmark left_ear = BlazePoseProjectLandmark(landmarks[7], roi);
+  BlazePoseLandmark right_ear = BlazePoseProjectLandmark(landmarks[8], roi);
   BlazePoseLandmark left = BlazePoseProjectLandmark(landmarks[11], roi);
   BlazePoseLandmark right = BlazePoseProjectLandmark(landmarks[12], roi);
+  BlazePoseLandmark left_elbow = BlazePoseProjectLandmark(landmarks[13], roi);
+  BlazePoseLandmark right_elbow = BlazePoseProjectLandmark(landmarks[14], roi);
+  BlazePoseLandmark left_hip = BlazePoseProjectLandmark(landmarks[23], roi);
+  BlazePoseLandmark right_hip = BlazePoseProjectLandmark(landmarks[24], roi);
   BlazePoseLandmark neck = {
       .x = (left.x + right.x) * 0.5f,
       .y = (left.y + right.y) * 0.5f,
@@ -72,8 +79,15 @@ BlazePosePipelineStatus BlazePoseDecodeUpperBody(
   };
   *upper_body = (BlazePoseUpperBody){
       .pose_score = pose_score,
+      .nose = nose,
+      .left_ear = left_ear,
+      .right_ear = right_ear,
       .left_shoulder = left,
       .right_shoulder = right,
+      .left_elbow = left_elbow,
+      .right_elbow = right_elbow,
+      .left_hip = left_hip,
+      .right_hip = right_hip,
       .estimated_neck = neck,
   };
   return BLAZEPOSE_PIPELINE_OK;

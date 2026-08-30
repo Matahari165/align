@@ -552,10 +552,12 @@ nonisolated private final class CameraSessionRuntime: @unchecked Sendable {
             addedInput = input
 
             try camera.lockForConfiguration()
-            if camera.activeFormat.videoSupportedFrameRateRanges.contains(where: {
-                $0.minFrameRate <= 15 && $0.maxFrameRate >= 15
-            }) {
-                let frameDuration = CMTime(value: 1, timescale: 15)
+            let supportedRanges = camera.activeFormat.videoSupportedFrameRateRanges.map {
+                (minimum: $0.minFrameRate, maximum: $0.maxFrameRate)
+            }
+            if let selectedRate = CameraCaptureRatePolicy.framesPerSecond(for: supportedRanges) {
+                let frameDuration = CMTime(seconds: 1 / selectedRate,
+                                           preferredTimescale: 60_000)
                 camera.activeVideoMinFrameDuration = frameDuration
                 camera.activeVideoMaxFrameDuration = frameDuration
             }

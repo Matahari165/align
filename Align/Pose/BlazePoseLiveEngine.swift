@@ -17,26 +17,46 @@ nonisolated enum BlazePoseLiveState: String, Sendable {
 nonisolated struct BlazePoseLiveResult: Sendable {
     static let lost = BlazePoseLiveResult(state: .lost, leftShoulder: nil, rightShoulder: nil)
     let state: BlazePoseLiveState
+    let nose: PosePoint?
+    let leftEar: PosePoint?
+    let rightEar: PosePoint?
     let leftShoulder: PosePoint?
     let rightShoulder: PosePoint?
+    let leftElbow: PosePoint?
+    let rightElbow: PosePoint?
+    let leftHip: PosePoint?
+    let rightHip: PosePoint?
+
+    init(
+        state: BlazePoseLiveState,
+        nose: PosePoint? = nil,
+        leftEar: PosePoint? = nil,
+        rightEar: PosePoint? = nil,
+        leftShoulder: PosePoint?,
+        rightShoulder: PosePoint?,
+        leftElbow: PosePoint? = nil,
+        rightElbow: PosePoint? = nil,
+        leftHip: PosePoint? = nil,
+        rightHip: PosePoint? = nil
+    ) {
+        self.state = state
+        self.nose = nose
+        self.leftEar = leftEar
+        self.rightEar = rightEar
+        self.leftShoulder = leftShoulder
+        self.rightShoulder = rightShoulder
+        self.leftElbow = leftElbow
+        self.rightElbow = rightElbow
+        self.leftHip = leftHip
+        self.rightHip = rightHip
+    }
 
     var overlay: PoseOverlay {
-        let shoulders = [leftShoulder, rightShoulder].compactMap { $0 }
-        guard let leftShoulder, let rightShoulder else {
-            return PoseOverlay(points: shoulders, polylines: [])
-        }
-        let center = PosePoint(
-            name: "CENTRE ESTIMÉ",
-            location: CGPoint(x: (leftShoulder.location.x + rightShoulder.location.x) / 2,
-                              y: (leftShoulder.location.y + rightShoulder.location.y) / 2),
-            confidence: min(leftShoulder.confidence, rightShoulder.confidence),
-            source: .blazePose
-        )
-        return PoseOverlay(
-            points: [leftShoulder, rightShoulder, center],
-            polylines: [PosePolyline(name: "ligne-épaules",
-                                    locations: [leftShoulder.location, rightShoulder.location],
-                                    source: .blazePose, isClosed: false)]
+        BlazePoseOverlayBuilder.make(
+            nose: nose, leftEar: leftEar, rightEar: rightEar,
+            leftShoulder: leftShoulder, rightShoulder: rightShoulder,
+            leftElbow: leftElbow, rightElbow: rightElbow,
+            leftHip: leftHip, rightHip: rightHip
         )
     }
 }
@@ -79,19 +99,35 @@ nonisolated final class BlazePoseLiveEngine: @unchecked Sendable {
             CVPixelBufferGetBytesPerRow(pixelBuffer), uptime,
             Self.maximumFilterGap, generation
         )
+        return Self.liveResult(from: native)
+    }
+
+    static func liveResult(from native: AlignBlazePoseResult) -> BlazePoseLiveResult? {
         guard native.status != AlignBlazePoseStale else { return nil }
         guard native.status != AlignBlazePoseTechnicalError else {
             return BlazePoseLiveResult(state: .technicalError, leftShoulder: nil, rightShoulder: nil)
         }
         guard native.status == AlignBlazePoseDetected else { return .lost }
-        let left = shoulder(name: "Épaule gauche", x: native.left_x, y: native.left_y, confidence: native.left_confidence)
-        let right = shoulder(name: "Épaule droite", x: native.right_x, y: native.right_y, confidence: native.right_confidence)
+        let nose = point(name: "Nez", native.nose)
+        let leftEar = point(name: "Oreille gauche", native.left_ear)
+        let rightEar = point(name: "Oreille droite", native.right_ear)
+        let left = point(name: "Épaule gauche", native.left_shoulder)
+        let right = point(name: "Épaule droite", native.right_shoulder)
+        let leftElbow = point(name: "Coude gauche", native.left_elbow)
+        let rightElbow = point(name: "Coude droit", native.right_elbow)
+        let leftHip = point(name: "Hanche gauche", native.left_hip)
+        let rightHip = point(name: "Hanche droite", native.right_hip)
         let state: BlazePoseLiveState = switch (left, right) {
         case (.some, .some): .detected
         case (.some, .none), (.none, .some): .partial
         case (.none, .none): .lost
         }
-        return BlazePoseLiveResult(state: state, leftShoulder: left, rightShoulder: right)
+        return BlazePoseLiveResult(
+            state: state, nose: nose, leftEar: leftEar, rightEar: rightEar,
+            leftShoulder: left, rightShoulder: right,
+            leftElbow: leftElbow, rightElbow: rightElbow,
+            leftHip: leftHip, rightHip: rightHip
+        )
     }
 
     private func ensureRunner() -> OpaquePointer? {
@@ -107,11 +143,15 @@ nonisolated final class BlazePoseLiveEngine: @unchecked Sendable {
         return runner
     }
 
-    private func shoulder(name: String, x: Float, y: Float, confidence: Float) -> PosePoint? {
-        guard x.isFinite, y.isFinite, confidence.isFinite,
-              confidence >= Self.shoulderThreshold,
-              (0...1).contains(x), (0...1).contains(y) else { return nil }
-        return PosePoint(name: name, location: CGPoint(x: CGFloat(x), y: CGFloat(y)),
-                         confidence: confidence, source: .blazePose)
+    private static func point(name: String, _ native: AlignBlazePosePoint) -> PosePoint? {
+        guard native.valid != 0,
+              native.x.isFinite, native.y.isFinite, native.confidence.isFinite,
+              native.confidence >= Self.shoulderThreshold,
+              (0...1).contains(native.x), (0...1).contains(native.y) else { return nil }
+        let location = VisionCoordinateMapper.poseOverlayPoint(
+            fromBlazePoseTopLeftPoint: CGPoint(x: CGFloat(native.x), y: CGFloat(native.y))
+        )
+        return PosePoint(name: name, location: location,
+                         confidence: native.confidence, source: .blazePose)
     }
 }

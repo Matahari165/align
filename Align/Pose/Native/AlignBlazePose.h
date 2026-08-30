@@ -31,13 +31,23 @@ static inline AlignBlazePoseStatus AlignBlazePoseMapShoulderFilterStatus(
 }
 
 typedef struct {
+  float x;
+  float y;
+  float confidence;
+  int valid;
+} AlignBlazePosePoint;
+
+typedef struct {
   AlignBlazePoseStatus status;
-  float left_x;
-  float left_y;
-  float left_confidence;
-  float right_x;
-  float right_y;
-  float right_confidence;
+  AlignBlazePosePoint nose;
+  AlignBlazePosePoint left_ear;
+  AlignBlazePosePoint right_ear;
+  AlignBlazePosePoint left_shoulder;
+  AlignBlazePosePoint right_shoulder;
+  AlignBlazePosePoint left_elbow;
+  AlignBlazePosePoint right_elbow;
+  AlignBlazePosePoint left_hip;
+  AlignBlazePosePoint right_hip;
 } AlignBlazePoseResult;
 
 AlignBlazePoseRunner *AlignBlazePoseCreate(const char *detector_path,

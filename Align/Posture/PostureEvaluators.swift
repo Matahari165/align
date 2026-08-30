@@ -10,6 +10,9 @@ nonisolated struct PostureEvaluatorConfiguration: Equatable, Sendable {
     var maximumBodySkew: TimeInterval = 0.30
     var bodyTTL: TimeInterval = 1.20
     var maximumBodySampleGap: TimeInterval = 1.50
+    var browEnterContraction = 0.08
+    var browExitContraction = 0.04
+    var browRequiredDuration: TimeInterval = 0.40
 
     var isValid: Bool {
         ttl.isFinite && ttl > 0 && maximumSampleGap.isFinite && maximumSampleGap > 0 &&
@@ -18,7 +21,10 @@ nonisolated struct PostureEvaluatorConfiguration: Equatable, Sendable {
             maximumFaceScaleDisagreement.isFinite && maximumFaceScaleDisagreement >= 0 &&
             maximumBodySkew.isFinite && maximumBodySkew >= 0 &&
             bodyTTL.isFinite && bodyTTL > 0 && maximumBodySampleGap.isFinite &&
-            maximumBodySampleGap > 0
+            maximumBodySampleGap > 0 && browEnterContraction.isFinite &&
+            browExitContraction.isFinite && browEnterContraction > browExitContraction &&
+            browExitContraction >= 0 && browRequiredDuration.isFinite &&
+            browRequiredDuration >= 0
     }
 }
 
@@ -35,11 +41,15 @@ nonisolated struct PostureEvaluatorSuite: Sendable {
     private var relativeHeadPosition = SustainedMetric(enter: 0.10, exit: 0.06)
     private var forwardHead = SustainedMetric(enter: 1.12, exit: 1.07)
     private var elevatedShoulders = SustainedMetric(enter: 0.08, exit: 0.04)
-    private var narrowedBrows = SustainedMetric(enter: 0.15, exit: 0.08)
+    private var narrowedBrows: SustainedMetric
     private var blinks = BlinkMetric()
 
     init(configuration: PostureEvaluatorConfiguration = .init()) {
         self.configuration = configuration
+        narrowedBrows = SustainedMetric(
+            enter: configuration.browEnterContraction,
+            exit: configuration.browExitContraction
+        )
     }
 
     mutating func reset() {
@@ -113,8 +123,8 @@ nonisolated struct PostureEvaluatorSuite: Sendable {
                                         calibration.innerBrowDistanceRatio),
                     usable: faceIsUsable, channel: &narrowedBrows,
                     timestamp: snapshot.faceTimestamp, attentionState: .attention,
-                    requiredDuration: configuration.requiredDuration,
-                    detail: "Rapprochement géométrique des sourcils"
+                    requiredDuration: configuration.browRequiredDuration,
+                    detail: "Rapprochement géométrique durable des sourcils"
                 )
             )
         }
@@ -367,12 +377,13 @@ private nonisolated struct SustainedMetric: Sendable {
         attentionState: PostureSignalState
     ) -> PostureSignalState {
         if active {
-            if value <= exit { reset(); return .neutral }
+            if value <= exit + 1e-9 { reset(); return .neutral }
             return attentionState
         }
         guard value >= enter else { pendingSince = nil; return .neutral }
         if pendingSince == nil { pendingSince = timestamp }
-        guard let pendingSince, timestamp - pendingSince >= duration else { return .pending }
+        guard let pendingSince,
+              timestamp - pendingSince + 1e-9 >= duration else { return .pending }
         active = true
         return attentionState
     }
@@ -401,7 +412,7 @@ private nonisolated struct BlinkMetric: Sendable {
         }
         let interval = lastTimestamp.map { timestamp - $0 }
         lastTimestamp = timestamp
-        let quality: PostureSignalQuality = interval.map { $0 > 0 && $0 <= 0.10 }
+        let quality: PostureSignalQuality = interval.map { $0 > 0 && $0 <= 0.10 + 1e-9 }
             == true ? .good : .limited
         let ratio = opening / baseline
         guard ratio.isFinite else { return unavailable(detail: "Ouverture invalide") }

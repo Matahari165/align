@@ -34,6 +34,20 @@ struct AlignBlazePoseRunner {
   BlazePoseShoulderFilter shoulder_filter;
 };
 
+static AlignBlazePosePoint overlay_point(BlazePoseLandmark landmark) {
+  const float confidence = fminf(landmark.visibility, landmark.presence);
+  const int valid = isfinite(landmark.x) && isfinite(landmark.y) &&
+                    isfinite(confidence) && confidence >= 0.5f &&
+                    landmark.x >= 0.0f && landmark.x <= 1.0f &&
+                    landmark.y >= 0.0f && landmark.y <= 1.0f;
+  return (AlignBlazePosePoint){
+      .x = valid ? landmark.x : 0.0f,
+      .y = valid ? landmark.y : 0.0f,
+      .confidence = valid ? confidence : 0.0f,
+      .valid = valid,
+  };
+}
+
 #define REQUIRE_OR_GOTO(call, label) do { if ((call) != kLiteRtStatusOk) goto label; } while (0)
 
 static void native_destroy(NativeRunner *runner) {
@@ -223,12 +237,15 @@ AlignBlazePoseResult AlignBlazePoseAnalyzeBGRA(AlignBlazePoseRunner *runner,
       maximum_gap_seconds, generation, &filtered_left, &filtered_right);
   result.status = AlignBlazePoseMapShoulderFilterStatus(filtered);
   if (result.status != AlignBlazePoseDetected) return result;
-  result.left_x = filtered_left.x;
-  result.left_y = filtered_left.y;
-  result.left_confidence = has_left ? left_confidence : 0.0f;
-  result.right_x = filtered_right.x;
-  result.right_y = filtered_right.y;
-  result.right_confidence = has_right ? right_confidence : 0.0f;
+  result.nose = overlay_point(upper.nose);
+  result.left_ear = overlay_point(upper.left_ear);
+  result.right_ear = overlay_point(upper.right_ear);
+  result.left_shoulder = overlay_point(filtered_left);
+  result.right_shoulder = overlay_point(filtered_right);
+  result.left_elbow = overlay_point(upper.left_elbow);
+  result.right_elbow = overlay_point(upper.right_elbow);
+  result.left_hip = overlay_point(upper.left_hip);
+  result.right_hip = overlay_point(upper.right_hip);
   return result;
 }
 

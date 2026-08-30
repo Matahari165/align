@@ -1,6 +1,33 @@
 import CoreGraphics
 import Foundation
 
+nonisolated enum CameraCaptureRatePolicy {
+    static let targetFramesPerSecond = 30.0
+    static let preferredFallbackFramesPerSecond = 15.0
+
+    /// Chooses a rate supported by the active camera format. Thirty fps is the
+    /// target; 15 fps is the explicit compatibility fallback. Unusual formats
+    /// use their highest supported rate capped as close as possible to 30 fps.
+    static func framesPerSecond(for ranges: [(minimum: Double, maximum: Double)]) -> Double? {
+        func supports(_ rate: Double) -> Bool {
+            ranges.contains { $0.minimum <= rate && $0.maximum >= rate }
+        }
+        if supports(targetFramesPerSecond) { return targetFramesPerSecond }
+        if supports(preferredFallbackFramesPerSecond) { return preferredFallbackFramesPerSecond }
+        return ranges.compactMap { range -> Double? in
+            guard range.minimum.isFinite, range.maximum.isFinite,
+                  range.minimum > 0, range.maximum >= range.minimum else { return nil }
+            return min(targetFramesPerSecond, range.maximum) >= range.minimum
+                ? min(targetFramesPerSecond, range.maximum)
+                : range.minimum
+        }.min {
+            let leftDistance = abs($0 - targetFramesPerSecond)
+            let rightDistance = abs($1 - targetFramesPerSecond)
+            return leftDistance == rightDistance ? $0 < $1 : leftDistance < rightDistance
+        }
+    }
+}
+
 nonisolated enum VisionAnalysisUnit: String, Sendable {
     case blazePose
     case face
@@ -246,7 +273,8 @@ nonisolated struct AnalysisPresentationState: Equatable, Sendable {
     )
 
     var faceInterval: TimeInterval {
-        isForegroundVisible || isBenchmarkRunning ? 0.2 : 0.5
+        if isBenchmarkRunning { return 0.2 }
+        return isForegroundVisible ? 0.1 : 0.5
     }
 
     var publishesVisualUpdates: Bool {

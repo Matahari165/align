@@ -40,7 +40,16 @@ int main(void) {
          BLAZEPOSE_PIPELINE_OK);
 
   float raw_landmarks[195] = {0};
-  float heatmap[64 * 64 * 39] = {0};
+  float heatmap[64 * 64 * 39];
+  for (size_t index = 0; index < 64 * 64 * 39; ++index) heatmap[index] = -100.0f;
+  const size_t upper_indices[] = {0, 7, 8, 11, 12, 13, 14, 23, 24};
+  for (size_t index = 0; index < sizeof(upper_indices) / sizeof(upper_indices[0]); ++index) {
+    const size_t landmark = upper_indices[index];
+    raw_landmarks[landmark * 5] = 32.0f + (float)landmark * 4.0f;
+    raw_landmarks[landmark * 5 + 1] = 128.0f;
+    raw_landmarks[landmark * 5 + 3] = 4.0f;
+    raw_landmarks[landmark * 5 + 4] = 4.0f;
+  }
   raw_landmarks[11 * 5] = 96.0f;
   raw_landmarks[11 * 5 + 1] = 128.0f;
   raw_landmarks[11 * 5 + 3] = 4.0f;
@@ -68,6 +77,26 @@ int main(void) {
               (upper_body.left_shoulder.y + upper_body.right_shoulder.y) /
                   2.0f));
   assert(upper_body.estimated_neck.visibility > 0.98f);
+  const BlazePoseLandmark *decoded[] = {
+      &upper_body.nose, &upper_body.left_ear, &upper_body.right_ear,
+      &upper_body.left_shoulder, &upper_body.right_shoulder,
+      &upper_body.left_elbow, &upper_body.right_elbow,
+      &upper_body.left_hip, &upper_body.right_hip,
+  };
+  for (size_t index = 0; index < sizeof(upper_indices) / sizeof(upper_indices[0]); ++index) {
+    const size_t landmark = upper_indices[index];
+    BlazePoseLandmark model = {
+        .x = raw_landmarks[landmark * 5] / 256.0f,
+        .y = raw_landmarks[landmark * 5 + 1] / 256.0f,
+        .z = raw_landmarks[landmark * 5 + 2] / 256.0f,
+        .visibility = 1.0f / (1.0f + expf(-raw_landmarks[landmark * 5 + 3])),
+        .presence = 1.0f / (1.0f + expf(-raw_landmarks[landmark * 5 + 4])),
+    };
+    BlazePoseLandmark expected = BlazePoseProjectLandmark(model, roi);
+    assert(near(decoded[index]->x, expected.x));
+    assert(near(decoded[index]->y, expected.y));
+    assert(near(decoded[index]->visibility, expected.visibility));
+  }
 
   free(boxes);
   free(scores);

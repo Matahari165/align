@@ -7,8 +7,15 @@
 
 typedef struct {
   float pose_score;
+  BlazePoseLandmark nose;
+  BlazePoseLandmark left_ear;
+  BlazePoseLandmark right_ear;
   BlazePoseLandmark left_shoulder;
   BlazePoseLandmark right_shoulder;
+  BlazePoseLandmark left_elbow;
+  BlazePoseLandmark right_elbow;
+  BlazePoseLandmark left_hip;
+  BlazePoseLandmark right_hip;
   BlazePoseLandmark estimated_neck;
 } BlazePoseUpperBody;
 
@@ -27,8 +34,9 @@ BlazePosePipelineStatus BlazePosePrepareLandmarkInput(
     BlazePoseRoi *roi);
 
 // Consomme les sorties Identity, Identity_1 et Identity_3 du modèle de
-// repères. Le cou est explicitement estimé comme milieu des deux épaules : ce
-// n'est pas un repère natif BlazePose.
+// repères. Les neuf repères natifs utiles à l'overlay haut du corps sont
+// projetés individuellement. Le cou reste explicitement estimé comme milieu
+// des deux épaules : ce n'est pas un repère natif BlazePose.
 BlazePosePipelineStatus BlazePoseDecodeUpperBody(
     const float raw_landmarks[195], float pose_score,
     const float heatmap[64 * 64 * 39], BlazePoseRoi roi,
