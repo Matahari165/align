@@ -12,7 +12,7 @@ private enum PostureGuidedValidationHarness {
     static func record(
         _ session: inout PostureValidationSession,
         timestamp: TimeInterval,
-        visible: Bool,
+        attention: PostureValidationAttention?,
         availability: PostureValidationAvailability,
         direction: PostureValidationDirection? = nil,
         latency: Double? = 10,
@@ -20,122 +20,145 @@ private enum PostureGuidedValidationHarness {
     ) {
         let result = session.record(
             timestamp: timestamp,
-            predictedVisible: visible,
+            predictedAttention: attention,
             availability: availability,
             predictedDirection: direction,
             latencyMilliseconds: latency,
-            scalarValues: scalar.map { ["neutralScale": $0] } ?? [:]
+            scalarValues: scalar.map { ["torsoScale": $0] } ?? [:]
         )
         expect(result == .accepted, "échantillon refusé à t=\(timestamp)")
     }
 
     static func testPlansAndBoundaries() {
-        let short = PostureValidationPlan.short20s
-        expect(short.totalDuration == 20, "le protocole court dure 20 secondes")
-        expect(short.phases.map(\.id) == ["neutral", "absent", "recovery"],
-               "les trois phases courtes sont dans l'ordre")
-        expect(short.phase(at: 0)?.id == "neutral", "t=0 commence par neutre")
-        expect(short.phase(at: 10)?.id == "absent", "la borne 10 s passe à absent")
-        expect(short.phase(at: 15)?.id == "recovery", "la borne 15 s passe à recovery")
-        expect(short.phase(at: 20) == nil, "la borne finale est hors protocole")
+        let expected: [PostureValidationExpectation] = [
+            .neutral, .leftShoulderRaised, .neutral, .rightShoulderRaised, .neutral,
+            .bothShouldersRaised, .shouldersClosed, .shouldersOpen,
+            .torsoLeanLeft, .torsoLeanRight, .recovery
+        ]
 
-        let guided = PostureValidationPlan.guided60s
-        expect(guided.totalDuration == 60, "le protocole guidé dure 60 secondes")
-        expect(guided.phases.count == 11, "le protocole guidé contient 11 phases")
-        expect(guided.phases[1].expectation.expectedDirection == .yawLeft,
-               "la phase gauche porte son attente de direction")
-        expect(guided.phases[5].expectation.expectedDirection == .scaleIncrease,
-               "la phase proche porte son attente de variation d'échelle")
-        expect(guided.phases[7].expectation.expectedDirection == nil,
-               "l'inclinaison d'écran ne devient pas une direction faciale")
+        let measurement = PostureValidationPlan.measurement20s
+        expect(measurement.mode == .measurement20s, "le mode court est measurement20s")
+        expect(measurement.phases.map(\.expectation) == expected,
+               "measurement20s respecte l'ordre exact des 11 phases")
+        expect(measurement.phases.allSatisfy { $0.duration == 20 },
+               "measurement20s dure 20 secondes par phase")
+        expect(measurement.totalDuration == 220,
+               "measurement20s totalise 11 phases de 20 secondes")
+        expect(measurement.phase(at: 0)?.id == "neutral-1", "t=0 commence par neutral")
+        expect(measurement.phase(at: 20)?.id == "left-shoulder-raised",
+               "la borne 20 s passe à l'attention épaule gauche")
+        expect(measurement.phase(at: 220) == nil, "la borne finale est hors protocole")
+
+        let notification = PostureValidationPlan.notification60s
+        expect(notification.mode == .notification60s, "le mode long est notification60s")
+        expect(notification.phases.map(\.expectation) == expected,
+               "notification60s respecte le même ordre exact")
+        expect(notification.phases.allSatisfy { $0.duration == 60 },
+               "notification60s dure 60 secondes par phase")
+        expect(notification.totalDuration == 660,
+               "notification60s totalise 11 phases de 60 secondes")
+        expect(notification.phases[0].expectedAttention == nil &&
+               notification.phases[7].expectedAttention == nil &&
+               notification.phases[10].expectedAttention == nil,
+               "neutral, shouldersOpen et recovery ne demandent aucune attention")
+        expect(notification.phases[1].expectedAttention == .leftShoulderRaised &&
+               notification.phases[8].expectedDirection == .left &&
+               notification.phases[9].expectedDirection == .right,
+               "les phases portent l'attention et la direction G/D attendues")
     }
 
     static func testRecordingContract() {
-        var session = PostureValidationSession(plan: .short20s)
-        record(&session, timestamp: 0, visible: true, availability: .reliable, scalar: 1)
-        expect(session.record(timestamp: 0, predictedVisible: true, availability: .reliable)
+        var session = PostureValidationSession(plan: .measurement20s)
+        record(&session, timestamp: 0, attention: nil, availability: .reliable, scalar: 1)
+        expect(session.record(timestamp: 0, predictedAttention: nil, availability: .reliable)
                == .rejected(.nonMonotonicTimestamp), "les timestamps dupliqués sont refusés")
-        expect(session.record(timestamp: -1, predictedVisible: true, availability: .reliable)
+        expect(session.record(timestamp: -1, predictedAttention: nil, availability: .reliable)
                == .rejected(.invalidTimestamp), "un timestamp négatif est refusé")
-        expect(session.record(timestamp: 20, predictedVisible: true, availability: .reliable)
+        expect(session.record(timestamp: 220, predictedAttention: nil, availability: .reliable)
                == .rejected(.outsidePlan), "un timestamp hors protocole est refusé")
 
         let report = session.finish()
         expect(session.isFinished, "finish verrouille la session")
-        expect(session.record(timestamp: 1, predictedVisible: true, availability: .reliable)
+        expect(session.record(timestamp: 1, predictedAttention: nil, availability: .reliable)
                == .rejected(.finished), "aucun échantillon ne suit finish")
-        expect(report.protocolVersion == "guided-validation-v1",
-               "le rapport est versionné")
+        expect(report.protocolVersion == "guided-validation-v1", "le rapport est versionné")
     }
 
-    static func testShortMetrics() {
-        var session = PostureValidationSession(plan: .short20s)
+    static func testMeasurementMetrics() {
+        var session = PostureValidationSession(plan: .measurement20s)
 
-        // Neutre : un signal fiable sur deux, dont un résultat détecté mais limité.
-        record(&session, timestamp: 0, visible: true, availability: .reliable, latency: 10, scalar: 1.0)
-        record(&session, timestamp: 6, visible: true, availability: .limited, latency: 20, scalar: 1.1)
-        // Absent : une détection sur deux est un faux positif.
-        record(&session, timestamp: 10, visible: true, availability: .reliable, latency: 30)
-        record(&session, timestamp: 11, visible: false, availability: .unavailable, latency: nil)
-        // Recovery : le premier résultat fiable apparaît 2 secondes après le retour.
-        record(&session, timestamp: 15, visible: false, availability: .unavailable, latency: nil)
-        record(&session, timestamp: 17, visible: true, availability: .reliable, latency: 40)
+        // Les cinq phases sans attention servent de contrôle des faux positifs.
+        record(&session, timestamp: 0, attention: nil, availability: .reliable, scalar: 1.0)
+        record(&session, timestamp: 20, attention: .leftShoulderRaised,
+               availability: .reliable, latency: 20)
+        record(&session, timestamp: 40, attention: .leftShoulderRaised,
+               availability: .reliable, latency: 30, scalar: 1.1)
+        record(&session, timestamp: 60, attention: .rightShoulderRaised,
+               availability: .limited, latency: 40)
+        record(&session, timestamp: 80, attention: nil, availability: .reliable,
+               latency: 50, scalar: 0.9)
+        record(&session, timestamp: 100, attention: nil, availability: .reliable, latency: 60)
+        record(&session, timestamp: 120, attention: .shouldersClosed,
+               availability: .reliable, latency: 70)
+        record(&session, timestamp: 140, attention: .shouldersClosed,
+               availability: .reliable, latency: 80)
+        record(&session, timestamp: 160, attention: .torsoLeanLeft,
+               availability: .reliable, direction: .left, latency: 90)
+        record(&session, timestamp: 180, attention: .torsoLeanRight,
+               availability: .reliable, direction: .right, latency: 100)
+        record(&session, timestamp: 200, attention: nil, availability: .reliable, latency: 110)
 
         let report = session.finish()
-        expect(report.visibleAttemptCount == 4, "les phases visibles comptent neutre et recovery")
-        expect(report.absentAttemptCount == 2, "la phase absente a deux tentatives")
-        expect(report.coverage.numerator == 2 && report.coverage.denominator == 4,
-               "coverage = sorties fiables / tentatives visibles")
-        expect(report.recall.numerator == 3 && report.recall.denominator == 4,
-               "recall = détections / tentatives visibles")
-        expect(report.falsePositiveShare.numerator == 1 && report.falsePositiveShare.denominator == 2,
-               "false-positive share = détections / tentatives absentes")
-        expect(report.recoveryAttemptCount == 1 && report.recoverySuccessCount == 1,
-               "la récupération est comptée par phase")
-        expect(report.recoveryLatency.p50 == 2 && report.recoveryLatency.p95 == 2,
-               "la latence de récupération part du début de la phase")
-        expect(report.latency.p95 == 40, "p95 utilise le nearest-rank déterministe")
-        expect(report.stability["neutralScale"]?.sampleCount == 2,
-               "la stabilité n'utilise que les scalaires neutres")
-        expect(report.repeatability["neutralScale"]?.firstMedian == 1.0,
-               "la première moitié neutre est conservée sous forme de médiane")
-        expect(report.repeatability["neutralScale"]?.secondMedian == 1.1,
-               "la seconde moitié neutre est conservée sous forme de médiane")
+        expect(report.attentionAttemptCount == 6 && report.noAttentionAttemptCount == 5,
+               "les dénominateurs séparent attention et absence d'attention")
+        expect(report.predictedAttentionCount == 7, "les attentions prédites sont comptées sans notion de visibilité")
+        expect(report.coverage.numerator == 10 && report.coverage.denominator == 11,
+               "coverage = disponibilités fiables / échantillons")
+        expect(report.recall.numerator == 5 && report.recall.denominator == 6,
+               "recall = attention correctement prédite / phases avec attention")
+        expect(report.falsePositiveShare.numerator == 2 && report.falsePositiveShare.denominator == 5,
+               "false-positive share = attention prédite hors attention attendue")
+        expect(report.directionAttemptCount == 2 && report.directionEligibleCount == 2 &&
+               report.directionAccuracy.numerator == 2 && report.directionAccuracy.denominator == 2,
+               "direction G/D ne compte que les torse fiables correctement identifiés")
+        expect(report.directionUnknownCount == 0, "aucune direction G/D n'est inconnue")
+        expect(report.recoveryAttemptCount == 1 && report.recoverySuccessCount == 1 &&
+               report.recoveryLatency.p50 == 0,
+               "recovery exige une disponibilité fiable sans attention")
+        expect(report.latency.p95 == 110, "p95 de latence est déterministe")
+        expect(report.stability["torsoScale"]?.sampleCount == 3 &&
+               report.stability["torsoScale"]?.median == 1.0 &&
+               abs((report.stability["torsoScale"]?.medianAbsoluteDeviation ?? 0) - 0.1) < 0.0001,
+               "stabilité utilise les scalaires fiables des trois phases neutres")
+        expect(report.repeatability["torsoScale"]?.firstMedian == 1.0 &&
+               report.repeatability["torsoScale"]?.secondMedian == 1.0,
+               "répétabilité compare les échantillons neutres du début et de la fin")
     }
 
-    static func testGuidedDirectionMetrics() {
-        var session = PostureValidationSession(plan: .guided60s)
-        let directionalPhases = session.plan.phases.filter { $0.expectation.expectedDirection != nil }
-        expect(directionalPhases.count == 6, "six phases portent une direction mesurable")
-
-        for phase in directionalPhases {
+    static func testDirectionAndSignalSeparation() {
+        var session = PostureValidationSession(plan: .notification60s)
+        let phases = session.plan.phases
+        for phase in phases {
+            let attention = phase.expectation.expectedAttention
             let direction = phase.expectation.expectedDirection
             record(&session, timestamp: phase.startTime + 0.1,
-                   visible: true, availability: .reliable,
-                   direction: direction, latency: 12)
+                   attention: attention, availability: .reliable, direction: direction)
         }
-        // Une phase screen-tilt reste visible, mais ne participe pas à l'accuracy de direction.
-        record(&session, timestamp: 40, visible: true, availability: .reliable,
-               direction: .yawLeft, latency: 12)
-        // Absent et recovery alimentent les métriques correspondantes sans contaminer la direction.
-        record(&session, timestamp: 50, visible: false, availability: .unavailable, latency: nil)
-        record(&session, timestamp: 55, visible: true, availability: .reliable, latency: 12)
 
         let report = session.finish()
-        expect(report.directionAttemptCount == 6 && report.directionEligibleCount == 6,
-               "les six directions fiables sont éligibles")
-        expect(report.directionAccuracy.numerator == 6 && report.directionAccuracy.denominator == 6,
-               "les directions correctement prédites donnent 100 pour cent dans ce scénario synthétique")
-        expect(report.directionUnknownCount == 0, "aucune direction synthétique n'est inconnue")
-        expect(report.phases.first(where: { $0.phaseID == "screen-tilt-toward" })?.directionAccuracy == nil,
-               "l'inclinaison d'écran ne devient pas une vérité terrain faciale")
+        expect(report.directionAttemptCount == 2 && report.directionAccuracy.value == 1,
+               "les deux phases torse donnent une accuracy direction synthétique complète")
+        expect(report.phases.first(where: { $0.phaseID == "shoulders-open" })?.recall == nil,
+               "shouldersOpen n'est pas interprété comme un signal attendu")
+        expect(report.phases.first(where: { $0.phaseID == "recovery" })?.falsePositiveShare?.numerator == 0,
+               "recovery sans attention n'est pas un objectif de détection")
     }
 
     static func main() {
         testPlansAndBoundaries()
         testRecordingContract()
-        testShortMetrics()
-        testGuidedDirectionMetrics()
+        testMeasurementMetrics()
+        testDirectionAndSignalSeparation()
         print("PostureGuidedValidationHarness: OK")
     }
 }
