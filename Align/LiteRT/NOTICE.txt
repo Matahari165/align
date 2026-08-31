@@ -8,13 +8,29 @@ Runtime officiel ai-edge-litert 2.2.0 (wheel macOS arm64).
 SHA-256 libLiteRt.runtime (nom de ressource du libLiteRt.dylib officiel) :
 131344a928e6ad56317f8a828d54c11c54c800aa140952f9b9f980af88260b20
 
-Modèles BlazePose
-Extraits sans conversion de l'archive officielle MediaPipe
-pose_landmarker_lite.task.
+Modèles BlazePose Lite et Full
+Extraits sans conversion des archives officielles MediaPipe suivantes :
+https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task
+https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task
+Licence Apache 2.0 ; la licence est reproduite dans LICENSE-Apache-2.0.txt.
+
+SHA-256 pose_landmarker_full.task :
+5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1
+Taille pose_landmarker_full.task : 9 398 198 octets.
+
+Modèles Lite
 SHA-256 pose_detector.tflite :
 46837eb883e6ec75b52c5f5ff6a9b78bd35e66c13f95e8c3566c582d146cb1d9
 SHA-256 pose_landmarks_detector.tflite :
 ad6cfd3c903eb31a4ee788b809e45ecf9fa69923b69b9f3f2d9ae616ff433e58
+
+Modèles Full
+SHA-256 pose_detector_full.tflite :
+04f5a96483f8ce5913f8730ad2aa0c4c999c80a4b75653bc0e4712de18e104b2
+Taille pose_detector_full.tflite : 2 959 046 octets.
+SHA-256 pose_landmarks_detector_full.tflite :
+82be6d591b9dad7d29fe21dc9fd892bf8b9602c458fb05209283de8282a0c488
+Taille pose_landmarks_detector_full.tflite : 6 438 874 octets.
 
 Le flux caméra, les images et les coordonnées ne sont ni écrits sur disque ni
 envoyés sur le réseau.

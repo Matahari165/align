@@ -25,15 +25,32 @@ private enum BlazePoseBridgeHarness {
         )
         let complete = BlazePoseLiveEngine.liveResult(from: native)
         expect(complete?.state == .detected, "deux épaules valides doivent être détectées")
-        expect(complete?.overlay.points.count == 8,
-               "l’overlay proche doit privilégier sept repères hauts et le centre estimé")
-        expect(complete?.overlay.polylines.count == 8,
-               "le contour haut et l’axe estimé doivent être publiés sans les hanches")
+        expect(complete?.overlay.points.count == 2,
+               "l’overlay normal doit afficher exclusivement les deux épaules")
+        expect(complete?.overlay.polylines.count == 1,
+               "une seule ligne doit relier les deux épaules")
+        expect(complete?.hasCoherentShoulderPair == true,
+               "la paire asymétrique plausible doit rester exploitable")
         expect(abs((complete?.nose?.location.x ?? 0) - 0.50) < 0.000_001 &&
                abs((complete?.leftHip?.location.y ?? 0) - 0.88) < 0.000_001,
                "les neuf champs ABI, dont les hanches non dessinées, restent disponibles")
-        expect(complete?.overlay.points.contains { $0.name.contains("Hanche") } == false,
-               "les hanches ne doivent pas dominer le cadrage proche")
+        expect(complete?.overlay.points.allSatisfy { $0.name.contains("Épaule") } == true,
+               "aucun nez, oreille, coude ou hanche ne doit charger l’overlay")
+
+        var incoherentNative = native
+        incoherentNative.right_shoulder = point(0.281, 0.381)
+        let incoherent = BlazePoseLiveEngine.liveResult(from: incoherentNative)
+        expect(incoherent?.overlay.points.count == 2 &&
+               incoherent?.overlay.polylines.isEmpty == true &&
+               incoherent?.hasCoherentShoulderPair == false,
+               "une paire dégénérée ne doit alimenter ni ligne ni signal posture")
+
+        var raisedNative = native
+        raisedNative.right_shoulder = point(0.34, 0.82)
+        let raised = BlazePoseLiveEngine.liveResult(from: raisedNative)
+        expect(raised?.hasCoherentShoulderPair == true &&
+               raised?.overlay.polylines.count == 1,
+               "une épaule fortement relevée ne doit pas être rejetée par sa pente")
 
         var partialNative = native
         partialNative.right_shoulder.valid = 0

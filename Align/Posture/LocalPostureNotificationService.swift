@@ -25,15 +25,33 @@ final class LocalPostureNotificationService {
         } catch { return .denied }
     }
 
-    func deliverProbablyTooClose() async -> Bool {
+    func deliver(candidate: PostureAlertCandidate) async -> Bool {
+        guard PostureObservationSignalID.alertableCases.contains(candidate.signalID) else {
+            return false
+        }
         guard await authorization() == .authorized else { return false }
         let content = UNMutableNotificationContent()
         content.title = "Align"
-        content.body = "Vous êtes probablement trop proche de votre repère confortable."
+        let body: String? = switch candidate.signalID {
+        case .proximity: "Tu sembles un peu près de l’écran. Recule légèrement si c’est confortable."
+        case .torsoInclination: "Ton torse reste incliné par rapport à ton repère. Recentre-toi si tu le souhaites."
+        case .raisedShoulders: "Tes épaules restent plus hautes que ton repère. Relâche-les si tu le peux."
+        case .estimatedBlinks: "Les clignements estimés restent sous ton repère depuis un moment. Regarde au loin quelques instants et cligne naturellement."
+        case .shoulderSlope, .closedShoulders: nil
+        }
+        guard let body else { return false }
+        content.body = body
         let request = UNNotificationRequest(
-            identifier: "posture.proximity.\(UUID().uuidString)", content: content, trigger: nil
+            identifier: candidate.identifier, content: content, trigger: nil
         )
         do { try await center.add(request); return true }
         catch { return false }
+    }
+
+    /// Removes a request if its activation became obsolete while delivery was
+    /// awaiting macOS. This keeps a late notification from surviving a reset.
+    func retract(identifier: String) async {
+        center.removePendingNotificationRequests(withIdentifiers: [identifier])
+        center.removeDeliveredNotifications(withIdentifiers: [identifier])
     }
 }

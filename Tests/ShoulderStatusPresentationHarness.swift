@@ -1,6 +1,6 @@
 import Foundation
 
-nonisolated enum BlazePoseLiveState: Sendable {
+nonisolated enum ShoulderTrackingState: Sendable {
     case detected, partial, lost, technicalError
 }
 
@@ -18,7 +18,7 @@ private enum ShoulderStatusPresentationHarness {
         expect(initial.title == "Recherche des épaules", "nil ne doit jamais être présenté comme Perdu")
         expect(initial.explanation == "Place le haut du corps face à la caméra.", "le premier état doit rester neutre")
 
-        let cases: [(BlazePoseLiveState, String, String)] = [
+        let cases: [(ShoulderTrackingState, String, String)] = [
             (.detected, "Épaules détectées", "Les deux épaules sont suivies localement."),
             (.partial, "Épaules partiellement détectées", "Une seule épaule est détectée. Ajuste ta position face à la caméra."),
             (.lost, "Épaules non détectées", "Aucune épaule n’est détectée. Place le haut du corps face à la caméra."),

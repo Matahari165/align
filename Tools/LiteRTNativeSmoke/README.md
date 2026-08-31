@@ -83,6 +83,31 @@ Cette invocation n'est pas encore un test de qualité : une image noire ne
 permet pas de vérifier les épaules. La preuve suivante doit reproduire le
 prétraitement, le décodage du détecteur et la ROI exigés par BlazePose.
 
+Le smoke refuse aussi tout modèle dont le contrat diffère du pipeline natif :
+détecteur `224×224×3` avec sorties `2254×12` et `2254`, puis landmarker
+`256×256×3` avec sorties `195`, `1`, `256×256`, `64×64×39` et `117`.
+La même commande doit réussir séparément avec la paire Lite, puis avec la paire
+Full ; les variantes ne sont jamais invoquées ensemble dans l'application.
+
+## Variante A/B BlazePose Full
+
+La variante est figée dans `Info.plist` à la construction. Lite reste la valeur
+par défaut. Le bundle Full séparé se construit sans lancer l'application :
+
+```sh
+env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  xcodebuild -project Align.xcodeproj -scheme Align -configuration Debug \
+  -derivedDataPath /private/tmp/AlignBlazePoseFullDerived \
+  CODE_SIGNING_ALLOWED=NO BLAZEPOSE_MODEL_VARIANT=full build
+```
+
+Le bundle attendu est
+`/private/tmp/AlignBlazePoseFullDerived/Build/Products/Debug/Align.app`.
+Sa clé `BlazePoseModelVariant` doit valoir `full`. Il charge exclusivement
+`pose_detector_full.tflite` et `pose_landmarks_detector_full.tflite` pendant
+la durée de vie du moteur. Une configuration inconnue échoue au lieu de revenir
+silencieusement à Lite et de fausser la comparaison.
+
 ## Géométrie BlazePose
 
 `blazepose_geometry.c` reproduit séparément les formules MediaPipe :

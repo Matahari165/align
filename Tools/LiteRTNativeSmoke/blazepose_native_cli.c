@@ -179,6 +179,7 @@ int main(int argc, char **argv) {
   BlazePosePipelineStatus decoded =
       raw != NULL && pose_score != NULL && heatmap != NULL
           ? BlazePoseDecodeUpperBody(raw, pose_score[0], heatmap, roi,
+                                     header.width, header.height,
                                      &upper_body)
           : BLAZEPOSE_PIPELINE_ERROR;
   if (raw != NULL) LiteRtUnlockTensorBuffer(landmarks.outputs[0]);

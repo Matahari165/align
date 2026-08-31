@@ -29,7 +29,7 @@ nonisolated enum CameraCaptureRatePolicy {
 }
 
 nonisolated enum VisionAnalysisUnit: String, Sendable {
-    case blazePose
+    case upperBody
     case face
     case body
     case silhouette
@@ -160,18 +160,17 @@ nonisolated struct VisionCallbackBudget: Sendable {
     }
 }
 
-nonisolated struct BlazePoseCadenceController: Sendable {
-    static let interval: TimeInterval = 0.5
+nonisolated struct UpperBodyCadenceController: Sendable {
     private(set) var lastAttemptUptime: TimeInterval?
 
-    func isDue(at uptime: TimeInterval) -> Bool {
+    func isDue(at uptime: TimeInterval, interval: TimeInterval) -> Bool {
         guard let lastAttemptUptime else { return true }
-        return uptime - lastAttemptUptime >= Self.interval
+        return uptime - lastAttemptUptime >= interval
     }
 
-    func overdue(at uptime: TimeInterval) -> TimeInterval {
+    func overdue(at uptime: TimeInterval, interval: TimeInterval) -> TimeInterval {
         guard let lastAttemptUptime else { return 1 }
-        return max(0, uptime - lastAttemptUptime - Self.interval)
+        return max(0, uptime - lastAttemptUptime - interval)
     }
 
     mutating func recordAttempt(at uptime: TimeInterval) {
@@ -179,27 +178,6 @@ nonisolated struct BlazePoseCadenceController: Sendable {
     }
 
     mutating func reset() { lastAttemptUptime = nil }
-}
-
-nonisolated struct BlazePoseOverlayFreshness: Sendable {
-    static let maxAge: TimeInterval = 1.2
-    private(set) var observedAt: TimeInterval?
-    private(set) var generation: Int?
-
-    mutating func record(at uptime: TimeInterval, generation: Int) {
-        observedAt = uptime
-        self.generation = generation
-    }
-
-    mutating func clear() {
-        observedAt = nil
-        generation = nil
-    }
-
-    func shouldExpire(at uptime: TimeInterval, generation: Int) -> Bool {
-        guard self.generation == generation, let observedAt else { return false }
-        return uptime - observedAt >= Self.maxAge
-    }
 }
 
 nonisolated enum UpperBodyROISpikeStage: Sendable, Equatable {
@@ -264,7 +242,10 @@ nonisolated struct AnalysisPresentationState: Equatable, Sendable {
     var isBenchmarkRunning: Bool { benchmarkExperiment != nil }
     var runsSilhouetteExperiment: Bool { BenchmarkVisionCandidatePolicy.allows(.silhouette, in: self) }
     var runsUpperBodyROIExperiment: Bool { BenchmarkVisionCandidatePolicy.allows(.upperBodyROISpike, in: self) }
-    var runsNormalBodyAnalysis: Bool { !runsUpperBodyROIExperiment }
+    /// Benchmarks own the analysis slot exclusively and pause the product engine.
+    var runsNormalUpperBodyEngine: Bool { !isBenchmarkRunning }
+    /// VN Body is benchmark-only. The normal path owns exactly one upper-body engine.
+    var runsNormalBodyAnalysis: Bool { false }
 
     static let foreground = AnalysisPresentationState(
         isApplicationActive: true,
@@ -274,7 +255,11 @@ nonisolated struct AnalysisPresentationState: Equatable, Sendable {
 
     var faceInterval: TimeInterval {
         if isBenchmarkRunning { return 0.2 }
-        return isForegroundVisible ? 0.1 : 0.5
+        return 0.1
+    }
+
+    var upperBodyInterval: TimeInterval {
+        isForegroundVisible ? 0.5 : 1.0
     }
 
     var publishesVisualUpdates: Bool {

@@ -19,6 +19,8 @@ enum PostureEvaluatorsHarness {
         eye: Double = 0.30,
         brow: Double = 0.40,
         shoulderY: Double = 0.70,
+        leftShoulderPoint: PostureMetricPoint? = nil,
+        rightShoulderPoint: PostureMetricPoint? = nil,
         yaw: Double = 0,
         roll: Double = 0,
         includeBody: Bool = true,
@@ -46,8 +48,10 @@ enum PostureEvaluatorsHarness {
             rightEyeOpeningRatio: eye,
             innerBrowDistanceRatio: brow,
             faceCenter: .init(x: 0.5, y: 0.3),
-            leftShoulder: includeBody && includeLeftShoulder ? .init(x: 0.3, y: shoulderY) : nil,
-            rightShoulder: includeBody ? .init(x: 0.7, y: shoulderY) : nil,
+            leftShoulder: includeBody && includeLeftShoulder
+                ? (leftShoulderPoint ?? .init(x: 0.3, y: shoulderY)) : nil,
+            rightShoulder: includeBody
+                ? (rightShoulderPoint ?? .init(x: 0.7, y: shoulderY)) : nil,
             bodyGeneration: includeBody ? (bodyGeneration ?? generation) : nil,
             bodyTimestamp: includeBody ? resolvedBodyTime : nil,
             bodySampleID: includeBody ? (bodySampleID ?? id &+ 10_000) : nil
@@ -307,6 +311,32 @@ enum PostureEvaluatorsHarness {
                                          calibration: calibration, now: 32.0)
                .headProximity.state == .attention,
                "deux secondes continues au seuil conservateur déclenchent l’attention")
+
+        let rollRadians = 15.0 * Double.pi / 180
+        func rotated(_ point: PostureMetricPoint) -> PostureMetricPoint {
+            let dx = point.x - 0.5
+            let dy = point.y - 0.3
+            return .init(x: 0.5 + cos(rollRadians) * dx - sin(rollRadians) * dy,
+                         y: 0.3 + sin(rollRadians) * dx + cos(rollRadians) * dy)
+        }
+        let rolledShoulders = snapshot(
+            time: 32.5,
+            leftShoulderPoint: rotated(.init(x: 0.3, y: 0.70)),
+            rightShoulderPoint: rotated(.init(x: 0.7, y: 0.70)),
+            roll: 15
+        )
+        let levelShoulders = snapshot(time: 32.6, shoulderY: 0.70, roll: 0)
+        let rawRolledMidpointY = (
+            (rolledShoulders.leftShoulder?.y ?? 0) +
+            (rolledShoulders.rightShoulder?.y ?? 0)
+        ) / 2
+        let expectedRawElevation = (0.3 - rawRolledMidpointY) /
+            (rolledShoulders.faceScale ?? 1)
+        expect(abs((rolledShoulders.shoulderElevation() ?? 0) - expectedRawElevation) < 0.000_001,
+               "la hauteur des épaules doit utiliser leur géométrie brute, sans roll de tête")
+        expect(abs((rolledShoulders.shoulderElevation() ?? 0) -
+                   (levelShoulders.shoulderElevation() ?? 0)) > 0.000_1,
+               "le chemin upperBody ne doit plus remettre les épaules à niveau depuis la tête")
 
         suite.reset()
         _ = suite.consume(snapshot(time: 10.0), calibration: calibration, now: 10.0)

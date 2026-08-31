@@ -130,14 +130,17 @@ int main(int argc, char **argv) {
     if (raw != NULL) {
       BlazePoseLandmark decoded_landmarks[BLAZEPOSE_LANDMARK_COUNT];
       BlazePoseDecodeLandmarks(raw, decoded_landmarks);
-      raw_left = BlazePoseProjectLandmark(decoded_landmarks[11], roi);
-      raw_right = BlazePoseProjectLandmark(decoded_landmarks[12], roi);
+      raw_left = BlazePoseProjectLandmark(decoded_landmarks[11], roi,
+                                          (float)header.width, (float)header.height);
+      raw_right = BlazePoseProjectLandmark(decoded_landmarks[12], roi,
+                                           (float)header.width, (float)header.height);
     }
     BlazePoseUpperBody upper_body;
     BlazePoseLandmark refined[BLAZEPOSE_LANDMARK_COUNT];
     BlazePosePipelineStatus decode_status =
         raw != NULL && pose_score != NULL && heatmap != NULL
             ? BlazePoseDecodeUpperBody(raw, pose_score[0], heatmap, roi,
+                                       header.width, header.height,
                                        &upper_body)
             : BLAZEPOSE_PIPELINE_ERROR;
     ok = ok && decode_status == BLAZEPOSE_PIPELINE_OK;
@@ -158,7 +161,8 @@ int main(int argc, char **argv) {
     result.latency_ms = monotonic_ms() - started;
     if (ok) {
       for (int index = 0; index <= 6; ++index) {
-        refined[index] = BlazePoseProjectLandmark(refined[index], roi);
+        refined[index] = BlazePoseProjectLandmark(
+            refined[index], roi, (float)header.width, (float)header.height);
       }
       BlazePoseLandmark left_eye = {0};
       BlazePoseLandmark right_eye = {0};

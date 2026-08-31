@@ -5,7 +5,7 @@ nonisolated struct ShoulderStatusPresentation: Equatable, Sendable {
     let explanation: String
     let symbolName: String
 
-    static func make(for state: BlazePoseLiveState?) -> Self {
+    static func make(for state: ShoulderTrackingState?) -> Self {
         guard let state else {
             return Self(
                 title: "Recherche des épaules",
@@ -16,7 +16,7 @@ nonisolated struct ShoulderStatusPresentation: Equatable, Sendable {
         return make(for: state)
     }
 
-    static func make(for state: BlazePoseLiveState) -> Self {
+    static func make(for state: ShoulderTrackingState) -> Self {
         switch state {
         case .detected:
             Self(

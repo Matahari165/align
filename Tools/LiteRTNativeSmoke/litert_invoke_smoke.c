@@ -17,7 +17,9 @@
     }                                                                          \
   } while (0)
 
-static int invoke_with_zero_input(const char *path) {
+static int invoke_with_zero_input(const char *path, size_t expected_input_floats,
+                                  LiteRtParamIndex expected_output_count,
+                                  const size_t *expected_output_floats) {
   LiteRtEnvironment environment = NULL;
   LiteRtModel model = NULL;
   LiteRtOptions options = NULL;
@@ -37,6 +39,12 @@ static int invoke_with_zero_input(const char *path) {
   LiteRtParamIndex output_count = 0;
   CHECK(LiteRtGetNumSignatureInputs(signature, &input_count));
   CHECK(LiteRtGetNumSignatureOutputs(signature, &output_count));
+  if (input_count != 1 || output_count != expected_output_count) {
+    fprintf(stderr, "%s: contrat de signature inattendu (%llu entree, %llu sorties)\n",
+            path, (unsigned long long)input_count,
+            (unsigned long long)output_count);
+    return 1;
+  }
 
   LiteRtTensorBuffer *inputs = calloc(input_count, sizeof(*inputs));
   LiteRtTensorBuffer *outputs = calloc(output_count, sizeof(*outputs));
@@ -59,6 +67,10 @@ static int invoke_with_zero_input(const char *path) {
     size_t byte_count = 0;
     void *bytes = NULL;
     CHECK(LiteRtGetTensorBufferPackedSize(inputs[index], &byte_count));
+    if (byte_count != expected_input_floats * sizeof(float)) {
+      fprintf(stderr, "%s: entree inattendue (%zu octets)\n", path, byte_count);
+      return 1;
+    }
     CHECK(LiteRtLockTensorBuffer(inputs[index], &bytes,
                                  kLiteRtTensorBufferLockModeWrite));
     memset(bytes, 0, byte_count);
@@ -75,11 +87,20 @@ static int invoke_with_zero_input(const char *path) {
         compiled_model, 0, index, &requirements));
     CHECK(LiteRtCreateManagedTensorBufferFromRequirements(
         environment, &tensor_type, requirements, &outputs[index]));
+    size_t byte_count = 0;
+    CHECK(LiteRtGetTensorBufferPackedSize(outputs[index], &byte_count));
+    if (byte_count != expected_output_floats[index] * sizeof(float)) {
+      fprintf(stderr,
+              "%s: sortie %llu inattendue (%zu octets, attendu %zu)\n",
+              path, (unsigned long long)index, byte_count,
+              expected_output_floats[index] * sizeof(float));
+      return 1;
+    }
   }
 
   CHECK(LiteRtRunCompiledModel(compiled_model, 0, input_count, inputs,
                                output_count, outputs));
-  printf("%s: invocation CPU reussie, entrees=%llu, sorties=%llu\n", path,
+  printf("%s: invocation CPU et contrat tensoriel reussis, entrees=%llu, sorties=%llu\n", path,
          (unsigned long long)input_count, (unsigned long long)output_count);
 
   for (LiteRtParamIndex index = 0; index < input_count; ++index) {
@@ -104,6 +125,12 @@ int main(int argc, char **argv) {
             argv[0]);
     return 2;
   }
-  int result = invoke_with_zero_input(argv[1]);
-  return result == 0 ? invoke_with_zero_input(argv[2]) : result;
+  const size_t detector_outputs[] = {2254 * 12, 2254};
+  const size_t landmark_outputs[] = {195, 1, 256 * 256, 64 * 64 * 39, 117};
+  int result = invoke_with_zero_input(argv[1], 224 * 224 * 3, 2,
+                                      detector_outputs);
+  return result == 0
+             ? invoke_with_zero_input(argv[2], 256 * 256 * 3, 5,
+                                      landmark_outputs)
+             : result;
 }

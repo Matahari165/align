@@ -222,6 +222,29 @@ BlazePoseRoi BlazePoseDetectionToRoi(BlazePoseDetection detection,
   };
 }
 
+BlazePosePoint BlazePoseRoiLocalToImagePoint(BlazePosePoint local_point,
+                                             BlazePoseRoi roi,
+                                             float image_width,
+                                             float image_height) {
+  if (!isfinite(local_point.x) || !isfinite(local_point.y) ||
+      !isfinite(image_width) || !isfinite(image_height) ||
+      image_width <= 0.0f || image_height <= 0.0f) {
+    return (BlazePosePoint){.x = NAN, .y = NAN};
+  }
+  float x = local_point.x - 0.5f;
+  float y = local_point.y - 0.5f;
+  float cosine = cosf(roi.rotation);
+  float sine = sinf(roi.rotation);
+  float local_pixel_x = x * roi.width * image_width;
+  float local_pixel_y = y * roi.height * image_height;
+  return (BlazePosePoint){
+      .x = roi.x_center +
+          (cosine * local_pixel_x - sine * local_pixel_y) / image_width,
+      .y = roi.y_center +
+          (sine * local_pixel_x + cosine * local_pixel_y) / image_height,
+  };
+}
+
 void BlazePoseDecodeLandmarks(const float *raw,
                               BlazePoseLandmark landmarks[39]) {
   for (int index = 0; index < BLAZEPOSE_LANDMARK_COUNT; ++index) {
@@ -288,13 +311,20 @@ void BlazePoseRefineLandmarksFromHeatmap(
 }
 
 BlazePoseLandmark BlazePoseProjectLandmark(BlazePoseLandmark landmark,
-                                           BlazePoseRoi roi) {
-  float x = landmark.x - 0.5f;
-  float y = landmark.y - 0.5f;
-  float cosine = cosf(roi.rotation);
-  float sine = sinf(roi.rotation);
-  landmark.x = (cosine * x - sine * y) * roi.width + roi.x_center;
-  landmark.y = (sine * x + cosine * y) * roi.height + roi.y_center;
+                                           BlazePoseRoi roi,
+                                           float image_width,
+                                           float image_height) {
+  if (!isfinite(image_width) || !isfinite(image_height) ||
+      image_width <= 0.0f || image_height <= 0.0f) {
+    landmark.x = NAN;
+    landmark.y = NAN;
+    return landmark;
+  }
+  BlazePosePoint projected = BlazePoseRoiLocalToImagePoint(
+      (BlazePosePoint){.x = landmark.x, .y = landmark.y}, roi,
+      image_width, image_height);
+  landmark.x = projected.x;
+  landmark.y = projected.y;
   landmark.z *= roi.width;
   return landmark;
 }

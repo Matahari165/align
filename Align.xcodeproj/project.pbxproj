@@ -7,8 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A11B1A000000000000000001 /* libLiteRt.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = A11B1A000000000000000002 /* libLiteRt.dylib */; };
-		A11B1A000000000000000003 /* libLiteRt.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A11B1A000000000000000002 /* libLiteRt.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A11B1A000000000000000007 /* libonnxruntime.1.19.2.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A11B1A000000000000000009 /* libonnxruntime.1.19.2.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -18,7 +17,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
-				A11B1A000000000000000003 /* libLiteRt.dylib in Embed Frameworks */,
+				A11B1A000000000000000007 /* libonnxruntime.1.19.2.dylib in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -27,7 +26,7 @@
 
 /* Begin PBXFileReference section */
 		4FE3B97E3042036800D99FF2 /* Align.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Align.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		A11B1A000000000000000002 /* libLiteRt.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = libLiteRt.dylib; sourceTree = "<group>"; };
+		A11B1A000000000000000009 /* libonnxruntime.1.19.2.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; path = Align/Pose/RTMPose/Models/libonnxruntime.1.19.2.dylib; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -35,6 +34,20 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				LiteRT/LICENSE-Apache-2.0.txt,
+				LiteRT/NOTICE.txt,
+				LiteRT/pose_detector.tflite,
+				LiteRT/pose_detector_full.tflite,
+				LiteRT/pose_landmarks_detector.tflite,
+				LiteRT/pose_landmarks_detector_full.tflite,
+				Pose/BlazePoseLiveEngine.swift,
+				Pose/BlazePoseModelVariant.swift,
+				Pose/Native/AlignBlazePose.c,
+				Pose/Native/blazepose_geometry.c,
+				Pose/Native/blazepose_image_tensor.c,
+				Pose/Native/blazepose_pipeline.c,
+				Pose/RTMPose/Models/libonnxruntime.1.19.2.dylib,
+				Pose/UpperBody/BlazePoseUpperBodyAdapter.swift,
 			);
 			target = 4FE3B97D3042036800D99FF2 /* Align */;
 		};
@@ -56,7 +69,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A11B1A000000000000000001 /* libLiteRt.dylib in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -67,7 +79,7 @@
 			isa = PBXGroup;
 			children = (
 				4FE3B9803042036800D99FF2 /* Align */,
-				A11B1A000000000000000005 /* Vendor */,
+				A11B1A000000000000000009 /* libonnxruntime.1.19.2.dylib */,
 				4FE3B97F3042036800D99FF2 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -78,22 +90,6 @@
 				4FE3B97E3042036800D99FF2 /* Align.app */,
 			);
 			name = Products;
-			sourceTree = "<group>";
-		};
-		A11B1A000000000000000005 /* Vendor */ = {
-			isa = PBXGroup;
-			children = (
-				A11B1A000000000000000006 /* LiteRT */,
-			);
-			path = Vendor;
-			sourceTree = "<group>";
-		};
-		A11B1A000000000000000006 /* LiteRT */ = {
-			isa = PBXGroup;
-			children = (
-				A11B1A000000000000000002 /* libLiteRt.dylib */,
-			);
-			path = LiteRT;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -310,7 +306,6 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(PROJECT_DIR)/Vendor/LiteRT/include",
 					"$(PROJECT_DIR)/Align/Pose/Native",
 				);
 				INFOPLIST_FILE = Align/Info.plist;
@@ -319,10 +314,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/Vendor/LiteRT",
-				);
+				LIBRARY_SEARCH_PATHS = "$(inherited)";
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.align.Align;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -352,7 +344,6 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(PROJECT_DIR)/Vendor/LiteRT/include",
 					"$(PROJECT_DIR)/Align/Pose/Native",
 				);
 				INFOPLIST_FILE = Align/Info.plist;
@@ -361,10 +352,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/Vendor/LiteRT",
-				);
+				LIBRARY_SEARCH_PATHS = "$(inherited)";
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.align.Align;
 				PRODUCT_NAME = "$(TARGET_NAME)";

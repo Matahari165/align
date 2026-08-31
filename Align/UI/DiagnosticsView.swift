@@ -26,6 +26,8 @@ struct DiagnosticsView: View {
             }
 
             Divider()
+            upperBodyVisualization
+            Divider()
             technicalDiagnostics
             Divider()
             benchmarkControls
@@ -35,6 +37,53 @@ struct DiagnosticsView: View {
         .onAppear {
             closeButtonFocused = true
         }
+    }
+
+    private var upperBodyVisualization: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle(
+                "Visualisation du moteur",
+                isOn: Binding(
+                    get: { camera.upperBodyDevelopmentVisualizationEnabled },
+                    set: camera.setUpperBodyDevelopmentVisualizationEnabled
+                )
+            )
+            .font(.callout.weight(.medium))
+
+            HStack(spacing: 12) {
+                developmentOption("Points", \.showsLandmarks)
+                developmentOption("Connexions", \.showsConnections)
+                developmentOption("Axes", \.showsAxes)
+                developmentOption("ROI", \.showsROI)
+                developmentOption("Libellés", \.showsValues)
+            }
+            .controlSize(.small)
+            .disabled(!camera.upperBodyDevelopmentVisualizationEnabled)
+
+            Text(camera.upperBodyDevelopmentSummary)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(
+                    "Mode développement, estimations 2D. \(camera.upperBodyDevelopmentSummary)"
+                )
+        }
+    }
+
+    private func developmentOption(
+        _ title: String,
+        _ keyPath: WritableKeyPath<UpperBodyDevelopmentOptions, Bool>
+    ) -> some View {
+        Toggle(
+            title,
+            isOn: Binding(
+                get: { camera.upperBodyDevelopmentOptions[keyPath: keyPath] },
+                set: { value in
+                    camera.updateUpperBodyDevelopmentOptions { options in
+                        options[keyPath: keyPath] = value
+                    }
+                }
+            )
+        )
     }
 
     @ViewBuilder

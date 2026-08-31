@@ -1,52 +1,70 @@
 import SwiftUI
 
 struct ContentView: View {
-    @ObservedObject var camera: CameraCaptureService
+    @ObservedObject var appModel: AppModel
+    @ObservedObject private var camera: CameraCaptureService
+    private var history: PostureHistoryController { appModel.history }
+    @Environment(\.openWindow) private var openWindow
     @State private var showsDiagnostics = false
+    @State private var showsStatistics = false
+
+    init(appModel: AppModel) {
+        self.appModel = appModel
+        _camera = ObservedObject(wrappedValue: appModel.camera)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
-                CameraPreviewView(session: camera.session, overlay: camera.overlay)
+                CameraPreviewView(
+                    session: camera.session,
+                    overlay: camera.overlay,
+                    diagnosticsEnabled: camera.upperBodyDevelopmentVisualizationEnabled,
+                    upperBodyDevelopmentOptions: camera.upperBodyDevelopmentOptions
+                )
 
-                if camera.state == .running, let blazePoseState = camera.blazePoseState {
+                if camera.state == .running,
+                   camera.upperBodyDevelopmentVisualizationEnabled {
                     VStack {
                         HStack {
-                            Text(blazePoseState.displayName)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 9)
+                            Label("DÉVELOPPEMENT · estimations 2D", systemImage: "wrench.and.screwdriver")
+                                .font(.caption.weight(.bold))
+                                .padding(.horizontal, 8)
                                 .padding(.vertical, 5)
-                                .background(.black.opacity(0.68), in: Capsule())
+                                .background(.black.opacity(0.72), in: Capsule())
+                                .foregroundStyle(.white)
                             Spacer()
                         }
                         Spacer()
+                        HStack {
+                            Text(camera.upperBodyDevelopmentSummary)
+                                .font(.caption.monospaced())
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(.black.opacity(0.68), in: Capsule())
+                                .foregroundStyle(.white)
+                            Spacer()
+                        }
                     }
-                    .padding(12)
-                    .allowsHitTesting(false)
+                    .padding(10)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(
+                        "Mode développement, estimations 2D. \(camera.upperBodyDevelopmentSummary)"
+                    )
                 }
 
                 if camera.state != .running {
                     Rectangle()
                         .fill(.black.opacity(0.78))
-                    inactiveCameraMessage
+                    Image(systemName: CameraStatusPresentation.make(for: camera).symbolName)
+                        .font(.system(size: 30))
+                        .foregroundStyle(.white.opacity(0.86))
+                        .accessibilityHidden(true)
                 }
 
-                if let banner = camera.proximityAlertBanner {
-                    VStack {
-                        Spacer()
-                        Label(banner, systemImage: "exclamationmark.circle.fill")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 11)
-                            .padding(.vertical, 7)
-                            .background(.black.opacity(0.76), in: Capsule())
-                            .padding(12)
-                    }
-                    .transition(.opacity)
-                    .allowsHitTesting(false)
-                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .layoutPriority(1)
             .clipped()
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Aperçu de la caméra")
@@ -63,7 +81,32 @@ struct ContentView: View {
             statusBand
         }
         .frame(minWidth: 560, minHeight: 430)
+        .background(AlignTheme.canvas)
+        .onAppear {
+            appModel.attemptAutomaticCameraStart()
+        }
         .toolbar {
+            ToolbarItem {
+                Button {
+                    showsStatistics = true
+                } label: {
+                    Label("Statistiques…", systemImage: "chart.xyaxis.line")
+                        .labelStyle(.iconOnly)
+                }
+                .help("Statistiques…")
+                .accessibilityLabel("Statistiques…")
+            }
+            ToolbarItem {
+                Button {
+                    openWindow(id: "settings")
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                } label: {
+                    Label("Réglages…", systemImage: "gearshape")
+                        .labelStyle(.iconOnly)
+                }
+                .help("Réglages…")
+                .accessibilityLabel("Réglages…")
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     showsDiagnostics = true
@@ -80,6 +123,9 @@ struct ContentView: View {
                 showsDiagnostics = false
             }
         }
+        .sheet(isPresented: $showsStatistics) {
+            StatisticsView(history: history) { showsStatistics = false }
+        }
         .background {
             WindowPresentationReader { presentation in
                 camera.updatePresentation(
@@ -88,21 +134,6 @@ struct ContentView: View {
                 )
             }
         }
-    }
-
-    private var inactiveCameraMessage: some View {
-        let presentation = CameraStatusPresentation.make(for: camera)
-        return VStack(spacing: 10) {
-            Image(systemName: presentation.symbolName)
-                .font(.system(size: 28))
-            Text(presentation.title)
-                .font(.headline)
-            Text(presentation.explanation)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
-        }
-        .foregroundStyle(.white)
-        .padding(24)
     }
 
     private var statusBand: some View {
@@ -126,7 +157,12 @@ struct ContentView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(.bar)
+        .background(AlignTheme.elevated.opacity(0.96))
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(AlignTheme.hairline)
+                .frame(height: 1)
+        }
     }
 
     @ViewBuilder

@@ -59,6 +59,13 @@ nonisolated struct BlazePoseLiveResult: Sendable {
             leftHip: leftHip, rightHip: rightHip
         )
     }
+
+    var hasCoherentShoulderPair: Bool {
+        BlazePoseShoulderPairValidator.isCoherent(
+            left: leftShoulder?.location,
+            right: rightShoulder?.location
+        )
+    }
 }
 
 /// Moteur natif in-process. Son unique instance vit sur `sampleQueue`, donc
@@ -66,7 +73,12 @@ nonisolated struct BlazePoseLiveResult: Sendable {
 nonisolated final class BlazePoseLiveEngine: @unchecked Sendable {
     private static let shoulderThreshold: Float = 0.5
     private static let maximumFilterGap: TimeInterval = BlazePoseOverlayFreshness.maxAge
+    let modelVariant: BlazePoseModelVariant?
     private var runner: OpaquePointer?
+
+    init(modelVariant: BlazePoseModelVariant? = .bundleConfigured) {
+        self.modelVariant = modelVariant
+    }
 
     deinit { reset() }
 
@@ -132,12 +144,17 @@ nonisolated final class BlazePoseLiveEngine: @unchecked Sendable {
 
     private func ensureRunner() -> OpaquePointer? {
         if let runner { return runner }
+        guard let modelVariant else { return nil }
         let detector = Bundle.main.url(
-            forResource: "pose_detector", withExtension: "tflite", subdirectory: "LiteRT"
-        ) ?? Bundle.main.url(forResource: "pose_detector", withExtension: "tflite")
+            forResource: modelVariant.detectorResourceName,
+            withExtension: "tflite", subdirectory: "LiteRT"
+        ) ?? Bundle.main.url(forResource: modelVariant.detectorResourceName,
+                             withExtension: "tflite")
         let landmarks = Bundle.main.url(
-            forResource: "pose_landmarks_detector", withExtension: "tflite", subdirectory: "LiteRT"
-        ) ?? Bundle.main.url(forResource: "pose_landmarks_detector", withExtension: "tflite")
+            forResource: modelVariant.landmarksResourceName,
+            withExtension: "tflite", subdirectory: "LiteRT"
+        ) ?? Bundle.main.url(forResource: modelVariant.landmarksResourceName,
+                             withExtension: "tflite")
         guard let detector, let landmarks else { return nil }
         runner = AlignBlazePoseCreate(detector.path, landmarks.path)
         return runner
