@@ -2,46 +2,54 @@ import Foundation
 
 /// Modes de protocole local. Les durées décrivent le protocole, pas une promesse de précision.
 public enum PostureValidationMode: String, Codable, Sendable {
-    case short20s
-    case guided60s
-}
-public enum PostureValidationDirection: String, Codable, Sendable {
-    case yawLeft
-    case yawRight
-    case pitchUp
-    case pitchDown
-    case scaleIncrease
-    case scaleDecrease
+    case measurement20s
+    case notification60s
 }
 
-/// État attendu pendant une phase guidée.
+public enum PostureValidationDirection: String, Codable, Sendable {
+    case left
+    case right
+}
+
+public enum PostureValidationAttention: String, Codable, Sendable {
+    case leftShoulderRaised
+    case rightShoulderRaised
+    case bothShouldersRaised
+    case shouldersClosed
+    case torsoLeanLeft
+    case torsoLeanRight
+}
+
+/// Phase exacte du protocole. Une phase peut ne demander aucune attention.
 public enum PostureValidationExpectation: String, Codable, Sendable {
     case neutral
-    case yawLeft
-    case yawRight
-    case pitchUp
-    case pitchDown
-    case near
-    case far
-    case screenTiltToward
-    case screenTiltAway
-    case absent
+    case leftShoulderRaised
+    case rightShoulderRaised
+    case bothShouldersRaised
+    case shouldersClosed
+    case shouldersOpen
+    case torsoLeanLeft
+    case torsoLeanRight
     case recovery
 
-    public var expectsVisibleSignal: Bool {
-        self != .absent
+    public var expectedAttention: PostureValidationAttention? {
+        switch self {
+        case .leftShoulderRaised: return .leftShoulderRaised
+        case .rightShoulderRaised: return .rightShoulderRaised
+        case .bothShouldersRaised: return .bothShouldersRaised
+        case .shouldersClosed: return .shouldersClosed
+        case .torsoLeanLeft: return .torsoLeanLeft
+        case .torsoLeanRight: return .torsoLeanRight
+        case .neutral, .shouldersOpen, .recovery:
+            return nil
+        }
     }
 
     public var expectedDirection: PostureValidationDirection? {
         switch self {
-        case .yawLeft: return .yawLeft
-        case .yawRight: return .yawRight
-        case .pitchUp: return .pitchUp
-        case .pitchDown: return .pitchDown
-        case .near: return .scaleIncrease
-        case .far: return .scaleDecrease
-        case .neutral, .screenTiltToward, .screenTiltAway, .absent, .recovery:
-            return nil
+        case .torsoLeanLeft: return .left
+        case .torsoLeanRight: return .right
+        default: return nil
         }
     }
 }
@@ -84,6 +92,14 @@ public struct PostureValidationPhase: Codable, Equatable, Sendable {
 
     public var endTime: TimeInterval {
         startTime + duration
+    }
+
+    public var expectedAttention: PostureValidationAttention? {
+        expectation.expectedAttention
+    }
+
+    public var expectedDirection: PostureValidationDirection? {
+        expectation.expectedDirection
     }
 
     fileprivate init(definition: PostureValidationPhaseDefinition, startTime: TimeInterval) {
@@ -141,47 +157,44 @@ public struct PostureValidationPlan: Codable, Equatable, Sendable {
         return phases.first { elapsed >= $0.startTime && elapsed < $0.endTime }
     }
 
-    public static let short20s: PostureValidationPlan = {
+    private static func definitions(duration: TimeInterval) -> [PostureValidationPhaseDefinition] {
+        [
+            .init(id: "neutral-1", expectation: .neutral, duration: duration,
+                  instruction: "Reste en posture naturelle."),
+            .init(id: "left-shoulder-raised", expectation: .leftShoulderRaised,
+                  duration: duration, instruction: "Lève l'épaule gauche."),
+            .init(id: "neutral-2", expectation: .neutral, duration: duration,
+                  instruction: "Reviens en posture naturelle."),
+            .init(id: "right-shoulder-raised", expectation: .rightShoulderRaised,
+                  duration: duration, instruction: "Lève l'épaule droite."),
+            .init(id: "neutral-3", expectation: .neutral, duration: duration,
+                  instruction: "Reviens en posture naturelle."),
+            .init(id: "both-shoulders-raised", expectation: .bothShouldersRaised,
+                  duration: duration, instruction: "Lève les deux épaules."),
+            .init(id: "shoulders-closed", expectation: .shouldersClosed,
+                  duration: duration, instruction: "Ferme les épaules vers l'avant."),
+            .init(id: "shoulders-open", expectation: .shouldersOpen,
+                  duration: duration, instruction: "Ouvre les épaules naturellement."),
+            .init(id: "torso-lean-left", expectation: .torsoLeanLeft,
+                  duration: duration, instruction: "Incline le torse vers la gauche."),
+            .init(id: "torso-lean-right", expectation: .torsoLeanRight,
+                  duration: duration, instruction: "Incline le torse vers la droite."),
+            .init(id: "recovery", expectation: .recovery, duration: duration,
+                  instruction: "Reviens en posture naturelle.")
+        ]
+    }
+
+    public static let measurement20s: PostureValidationPlan = {
         PostureValidationPlan(
-            mode: .short20s,
-            definitions: [
-                .init(id: "neutral", expectation: .neutral, duration: 10,
-                      instruction: "Reste neutre et visible."),
-                .init(id: "absent", expectation: .absent, duration: 5,
-                      instruction: "Masque ton visage ou éloigne-toi."),
-                .init(id: "recovery", expectation: .recovery, duration: 5,
-                      instruction: "Reviens dans le cadre, en position neutre.")
-            ]
+            mode: .measurement20s,
+            definitions: definitions(duration: 20)
         )!
     }()
 
-    public static let guided60s: PostureValidationPlan = {
+    public static let notification60s: PostureValidationPlan = {
         PostureValidationPlan(
-            mode: .guided60s,
-            definitions: [
-                .init(id: "neutral", expectation: .neutral, duration: 10,
-                      instruction: "Reste neutre et visible."),
-                .init(id: "yaw-left", expectation: .yawLeft, duration: 5,
-                      instruction: "Tourne la tête vers la gauche."),
-                .init(id: "yaw-right", expectation: .yawRight, duration: 5,
-                      instruction: "Tourne la tête vers la droite."),
-                .init(id: "pitch-up", expectation: .pitchUp, duration: 5,
-                      instruction: "Regarde vers le haut."),
-                .init(id: "pitch-down", expectation: .pitchDown, duration: 5,
-                      instruction: "Regarde vers le bas."),
-                .init(id: "near", expectation: .near, duration: 5,
-                      instruction: "Approche-toi de la caméra."),
-                .init(id: "far", expectation: .far, duration: 5,
-                      instruction: "Éloigne-toi de la caméra."),
-                .init(id: "screen-tilt-toward", expectation: .screenTiltToward, duration: 5,
-                      instruction: "Incline l'écran vers toi."),
-                .init(id: "screen-tilt-away", expectation: .screenTiltAway, duration: 5,
-                      instruction: "Incline l'écran à l'opposé."),
-                .init(id: "absent", expectation: .absent, duration: 5,
-                      instruction: "Masque ton visage."),
-                .init(id: "recovery", expectation: .recovery, duration: 5,
-                      instruction: "Reviens dans le cadre, en position neutre.")
-            ]
+            mode: .notification60s,
+            definitions: definitions(duration: 60)
         )!
     }()
 }
@@ -191,7 +204,8 @@ public struct PostureValidationSample: Codable, Equatable, Sendable {
     public let timestamp: TimeInterval
     public let phaseID: String
     public let expected: PostureValidationExpectation
-    public let predictedVisible: Bool
+    public let expectedAttention: PostureValidationAttention?
+    public let predictedAttention: PostureValidationAttention?
     public let availability: PostureValidationAvailability
     public let predictedDirection: PostureValidationDirection?
     public let latencyMilliseconds: Double?
@@ -201,7 +215,8 @@ public struct PostureValidationSample: Codable, Equatable, Sendable {
         timestamp: TimeInterval,
         phaseID: String,
         expected: PostureValidationExpectation,
-        predictedVisible: Bool,
+        expectedAttention: PostureValidationAttention?,
+        predictedAttention: PostureValidationAttention?,
         availability: PostureValidationAvailability,
         predictedDirection: PostureValidationDirection?,
         latencyMilliseconds: Double?,
@@ -210,7 +225,8 @@ public struct PostureValidationSample: Codable, Equatable, Sendable {
         self.timestamp = timestamp
         self.phaseID = phaseID
         self.expected = expected
-        self.predictedVisible = predictedVisible
+        self.expectedAttention = expectedAttention
+        self.predictedAttention = predictedAttention
         self.availability = availability
         self.predictedDirection = predictedDirection
         if let latencyMilliseconds,
@@ -352,8 +368,9 @@ public struct PostureValidationPhaseMetrics: Codable, Equatable, Sendable {
     public let expected: PostureValidationExpectation
     public let sampleCount: Int
     public let reliableCount: Int
-    public let predictedVisibleCount: Int
-    public let coverage: PostureValidationRatio?
+    public let predictedAttentionCount: Int
+    public let expectedAttentionCount: Int
+    public let coverage: PostureValidationRatio
     public let recall: PostureValidationRatio?
     public let falsePositiveShare: PostureValidationRatio?
     public let directionAccuracy: PostureValidationRatio?
@@ -366,29 +383,35 @@ public struct PostureValidationPhaseMetrics: Codable, Equatable, Sendable {
         self.reliableCount = samples.reduce(into: 0) { count, sample in
             if sample.availability.isReliable { count += 1 }
         }
-        self.predictedVisibleCount = samples.reduce(into: 0) { count, sample in
-            if sample.predictedVisible { count += 1 }
+        self.predictedAttentionCount = samples.reduce(into: 0) { count, sample in
+            if sample.predictedAttention != nil { count += 1 }
         }
-        if phase.expectation.expectsVisibleSignal {
-            self.coverage = PostureValidationRatio(
-                numerator: reliableCount,
-                denominator: sampleCount
-            )
+        self.expectedAttentionCount = samples.reduce(into: 0) { count, sample in
+            if sample.expectedAttention != nil { count += 1 }
+        }
+        self.coverage = PostureValidationRatio(
+            numerator: reliableCount,
+            denominator: sampleCount
+        )
+        if phase.expectation.expectedAttention != nil {
             self.recall = PostureValidationRatio(
-                numerator: predictedVisibleCount,
-                denominator: sampleCount
+                numerator: samples.reduce(into: 0) { count, sample in
+                    if sample.predictedAttention == sample.expectedAttention {
+                        count += 1
+                    }
+                },
+                denominator: expectedAttentionCount
             )
         } else {
-            self.coverage = nil
             self.recall = nil
         }
-        self.falsePositiveShare = phase.expectation == .absent
-            ? PostureValidationRatio(numerator: predictedVisibleCount, denominator: sampleCount)
+        self.falsePositiveShare = phase.expectation.expectedAttention == nil
+            ? PostureValidationRatio(numerator: predictedAttentionCount, denominator: sampleCount)
             : nil
 
         let directionalSamples = samples.filter {
             $0.expected.expectedDirection != nil &&
-            $0.predictedVisible &&
+            $0.predictedAttention == $0.expectedAttention &&
             $0.availability.isReliable &&
             $0.predictedDirection != nil
         }
@@ -410,8 +433,9 @@ public struct PostureValidationReport: Codable, Equatable, Sendable {
     public let protocolVersion: String
     public let totalDuration: TimeInterval
     public let recordedSampleCount: Int
-    public let visibleAttemptCount: Int
-    public let absentAttemptCount: Int
+    public let attentionAttemptCount: Int
+    public let noAttentionAttemptCount: Int
+    public let predictedAttentionCount: Int
     public let coverage: PostureValidationRatio
     public let recall: PostureValidationRatio
     public let falsePositiveShare: PostureValidationRatio
@@ -433,36 +457,39 @@ public struct PostureValidationReport: Codable, Equatable, Sendable {
         self.totalDuration = plan.totalDuration
         self.recordedSampleCount = samples.count
 
-        let visibleSamples = samples.filter { $0.expected.expectsVisibleSignal }
-        let absentSamples = samples.filter { $0.expected == .absent }
-        self.visibleAttemptCount = visibleSamples.count
-        self.absentAttemptCount = absentSamples.count
+        let attentionSamples = samples.filter { $0.expectedAttention != nil }
+        let noAttentionSamples = samples.filter { $0.expectedAttention == nil }
+        self.attentionAttemptCount = attentionSamples.count
+        self.noAttentionAttemptCount = noAttentionSamples.count
+        self.predictedAttentionCount = samples.reduce(into: 0) { count, sample in
+            if sample.predictedAttention != nil { count += 1 }
+        }
 
-        let reliableVisibleCount = visibleSamples.reduce(into: 0) { count, sample in
+        let reliableCount = samples.reduce(into: 0) { count, sample in
             if sample.availability.isReliable { count += 1 }
         }
-        let predictedVisibleCount = visibleSamples.reduce(into: 0) { count, sample in
-            if sample.predictedVisible { count += 1 }
+        let detectedAttentionCount = attentionSamples.reduce(into: 0) { count, sample in
+            if sample.predictedAttention == sample.expectedAttention { count += 1 }
         }
-        let falsePositiveCount = absentSamples.reduce(into: 0) { count, sample in
-            if sample.predictedVisible { count += 1 }
+        let falsePositiveCount = noAttentionSamples.reduce(into: 0) { count, sample in
+            if sample.predictedAttention != nil { count += 1 }
         }
         self.coverage = PostureValidationRatio(
-            numerator: reliableVisibleCount,
-            denominator: visibleSamples.count
+            numerator: reliableCount,
+            denominator: samples.count
         )
         self.recall = PostureValidationRatio(
-            numerator: predictedVisibleCount,
-            denominator: visibleSamples.count
+            numerator: detectedAttentionCount,
+            denominator: attentionSamples.count
         )
         self.falsePositiveShare = PostureValidationRatio(
             numerator: falsePositiveCount,
-            denominator: absentSamples.count
+            denominator: noAttentionSamples.count
         )
 
         let directionalSamples = samples.filter { $0.expected.expectedDirection != nil }
         let eligibleDirectionalSamples = directionalSamples.filter {
-            $0.predictedVisible &&
+            $0.predictedAttention == $0.expectedAttention &&
             $0.availability.isReliable &&
             $0.predictedDirection != nil
         }
@@ -486,7 +513,7 @@ public struct PostureValidationReport: Codable, Equatable, Sendable {
         for phase in recoveryPhases {
             let firstReliable = samples
                 .filter { $0.phaseID == phase.id }
-                .filter { $0.predictedVisible && $0.availability.isReliable }
+                .filter { $0.predictedAttention == nil && $0.availability.isReliable }
                 .min { $0.timestamp < $1.timestamp }
             if let firstReliable {
                 recoveryLatencies.append(max(0, firstReliable.timestamp - phase.startTime))
@@ -507,7 +534,7 @@ public struct PostureValidationReport: Codable, Equatable, Sendable {
         let neutralPhases = plan.phases.filter { $0.expectation == .neutral }
         var neutralValues: [String: [Double]] = [:]
         for phase in neutralPhases {
-            for sample in samples where sample.phaseID == phase.id {
+            for sample in samples where sample.phaseID == phase.id && sample.availability.isReliable {
                 for (key, value) in sample.scalarValues {
                     neutralValues[key, default: []].append(value)
                 }
@@ -515,29 +542,28 @@ public struct PostureValidationReport: Codable, Equatable, Sendable {
         }
         self.stability = neutralValues.mapValues(PostureValidationStabilityMetric.init(values:))
 
-        var repeatability: [String: PostureValidationRepeatabilityMetric] = [:]
-        for phase in neutralPhases {
-            let midpoint = phase.startTime + phase.duration / 2
-            var firstValues: [String: [Double]] = [:]
-            var secondValues: [String: [Double]] = [:]
-            for sample in samples where sample.phaseID == phase.id {
-                if sample.timestamp < midpoint {
-                    for (key, value) in sample.scalarValues {
-                        firstValues[key, default: []].append(value)
-                    }
+        let neutralSamples = samples
+            .filter { $0.expected == .neutral && $0.availability.isReliable }
+            .sorted { $0.timestamp < $1.timestamp }
+        let midpoint = neutralSamples.count / 2
+        var firstValues: [String: [Double]] = [:]
+        var secondValues: [String: [Double]] = [:]
+        for (index, sample) in neutralSamples.enumerated() {
+            for (key, value) in sample.scalarValues {
+                if index < midpoint {
+                    firstValues[key, default: []].append(value)
                 } else {
-                    for (key, value) in sample.scalarValues {
-                        secondValues[key, default: []].append(value)
-                    }
+                    secondValues[key, default: []].append(value)
                 }
             }
-            let keys = Set(firstValues.keys).union(secondValues.keys)
-            for key in keys {
-                repeatability[key] = PostureValidationRepeatabilityMetric(
-                    firstValues: firstValues[key] ?? [],
-                    secondValues: secondValues[key] ?? []
-                )
-            }
+        }
+        var repeatability: [String: PostureValidationRepeatabilityMetric] = [:]
+        let keys = Set(firstValues.keys).union(secondValues.keys)
+        for key in keys {
+            repeatability[key] = PostureValidationRepeatabilityMetric(
+                firstValues: firstValues[key] ?? [],
+                secondValues: secondValues[key] ?? []
+            )
         }
         self.repeatability = repeatability
     }
@@ -559,7 +585,7 @@ public struct PostureValidationSession: Sendable {
     @discardableResult
     public mutating func record(
         timestamp: TimeInterval,
-        predictedVisible: Bool,
+        predictedAttention: PostureValidationAttention?,
         availability: PostureValidationAvailability,
         predictedDirection: PostureValidationDirection? = nil,
         latencyMilliseconds: Double? = nil,
@@ -580,7 +606,8 @@ public struct PostureValidationSession: Sendable {
             timestamp: timestamp,
             phaseID: phase.id,
             expected: phase.expectation,
-            predictedVisible: predictedVisible,
+            expectedAttention: phase.expectation.expectedAttention,
+            predictedAttention: predictedAttention,
             availability: availability,
             predictedDirection: predictedDirection,
             latencyMilliseconds: latencyMilliseconds,
