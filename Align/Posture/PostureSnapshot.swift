@@ -133,6 +133,8 @@ nonisolated struct PostureSnapshot: Equatable, Sendable {
               let leftShoulder, let rightShoulder,
               leftShoulder.isFinite, rightShoulder.isFinite,
               hasNearbyBody(maximumSkew: maximumSkew) else { return nil }
+        // The torso channel stays independent from head roll. Camera/model
+        // orientation belongs at the engine boundary, never in posture meaning.
         let midpointY = leftShoulder.y / 2 + rightShoulder.y / 2
         let value = (faceCenter.y - midpointY) / scale
         return value.isFinite ? value : nil

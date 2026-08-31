@@ -40,6 +40,7 @@ BlazePosePipelineStatus BlazePosePrepareLandmarkInput(
 BlazePosePipelineStatus BlazePoseDecodeUpperBody(
     const float raw_landmarks[195], float pose_score,
     const float heatmap[64 * 64 * 39], BlazePoseRoi roi,
+    size_t image_width, size_t image_height,
     BlazePoseUpperBody *upper_body);
 
 #endif  // ALIGN_BLAZEPOSE_PIPELINE_H_

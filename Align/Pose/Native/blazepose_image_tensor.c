@@ -99,12 +99,15 @@ int BlazePoseBuildLandmarkTensor(const float *rgb, size_t width,
     for (int x = 0; x < 256; ++x) {
       float local_x = ((float)x + 0.5f) / 256.0f - 0.5f;
       float local_y = ((float)y + 0.5f) / 256.0f - 0.5f;
-      float normalized_x =
-          (cosine * local_x * roi.width - sine * local_y * roi.height) +
-          roi.x_center;
-      float normalized_y =
-          (sine * local_x * roi.width + cosine * local_y * roi.height) +
-          roi.y_center;
+      // La ROI de DetectionToRoi est carrée en pixels. Rotation et échelles
+      // doivent donc être composées dans cet espace, pas dans l'espace
+      // normalisé dont les axes diffèrent sur une image non carrée.
+      float local_pixel_x = local_x * roi.width * (float)width;
+      float local_pixel_y = local_y * roi.height * (float)height;
+      float normalized_x = roi.x_center +
+          (cosine * local_pixel_x - sine * local_pixel_y) / (float)width;
+      float normalized_y = roi.y_center +
+          (sine * local_pixel_x + cosine * local_pixel_y) / (float)height;
       float source_x = normalized_x * (float)width - 0.5f;
       float source_y = normalized_y * (float)height - 0.5f;
       for (int channel = 0; channel < 3; ++channel) {

@@ -16,6 +16,24 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
         facesWithLandmarks: 0,
         facePoints: 0,
         bodyResults: 0,
+        upperBodyEngineID: "—",
+        upperBodyAttempts: 0,
+        upperBodyResults: 0,
+        upperBodyLastStatus: "—",
+        upperBodyLastRejectionReason: nil,
+        upperBodyRejected: 0,
+        upperBodyEngineRuns: 0,
+        upperBodyEngineDurationP95: nil,
+        upperBodyEngineDurationMax: nil,
+        upperBodyValidLandmarks: 0,
+        upperBodyLeftShoulderScore: nil,
+        upperBodyRightShoulderScore: nil,
+        upperBodySimCCMinimum: nil,
+        upperBodySimCCMaximum: nil,
+        upperBodyScoreMinimum: nil,
+        upperBodyScoreMaximum: nil,
+        upperBodyLatency: nil,
+        upperBodyResultAge: nil,
         upperBodyLandmarks: .empty,
         upperBodyROISpike: .empty,
         segmentationAttempts: 0,
@@ -41,6 +59,24 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
     let facesWithLandmarks: Int
     let facePoints: Int
     let bodyResults: Int
+    let upperBodyEngineID: String
+    let upperBodyAttempts: Int
+    let upperBodyResults: Int
+    let upperBodyLastStatus: String
+    let upperBodyLastRejectionReason: String?
+    let upperBodyRejected: Int
+    let upperBodyEngineRuns: Int
+    let upperBodyEngineDurationP95: TimeInterval?
+    let upperBodyEngineDurationMax: TimeInterval?
+    let upperBodyValidLandmarks: Int
+    let upperBodyLeftShoulderScore: Float?
+    let upperBodyRightShoulderScore: Float?
+    let upperBodySimCCMinimum: Float?
+    let upperBodySimCCMaximum: Float?
+    let upperBodyScoreMinimum: Float?
+    let upperBodyScoreMaximum: Float?
+    let upperBodyLatency: TimeInterval?
+    let upperBodyResultAge: TimeInterval?
     let upperBodyLandmarks: UpperBodyLandmarkDiagnostics
     let upperBodyROISpike: UpperBodyROISpikeDiagnostics
     let segmentationAttempts: Int
@@ -61,10 +97,29 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
         let error = lastVisionError.map { " · erreur: \($0)" } ?? ""
         let faceOrientationSummary = faceOrientation.map { " · visage \($0.summary)" } ?? ""
         let faceGeometrySummary = faceGeometry.map { " · géométrie \($0.summary)" } ?? ""
-        let bodyConfidence = " · repères cou/épaules \(upperBodyLandmarks.recognizedCount)/3 · confiance \(upperBodyLandmarks.neckConfidence.map { String(format: "%.0f", $0 * 100) } ?? "—")/\(upperBodyLandmarks.leftShoulderConfidence.map { String(format: "%.0f", $0 * 100) } ?? "—")/\(upperBodyLandmarks.rightShoulderConfidence.map { String(format: "%.0f", $0 * 100) } ?? "—")"
+        let legacyVisionBody = bodyResults > 0 || upperBodyLandmarks.recognizedCount > 0
+            ? " · Vision Body benchmark \(bodyResults) résultat(s), \(upperBodyLandmarks.recognizedCount)/3 repères"
+            : ""
         let segmentation = " · silhouette \(segmentationState.displayName) · cadence/performs/valid \(segmentationAttempts)/\(segmentationVisionPerforms)/\(segmentationContoursValid), \(segmentationDurationP95.map { String(format: "p95 %.0f ms", $0 * 1_000) } ?? "p95 —")"
         let roiSpike = upperBodyROISpike.rectangleAttempts > 0 ? " · spike ROI \(upperBodyROISpike.summary)" : ""
-        return "Frames \(frameCallbacks) · analyses \(analyses) · orientation \(orientation) · faces \(faceResults) / landmarks \(facesWithLandmarks) / points \(facePoints) · corps \(bodyResults)\(bodyConfidence)\(segmentation)\(roiSpike)\(faceOrientationSummary)\(faceGeometrySummary)\(error)"
+        let leftShoulder = upperBodyLeftShoulderScore.map { String(format: "%.3f", $0) } ?? "—"
+        let rightShoulder = upperBodyRightShoulderScore.map { String(format: "%.3f", $0) } ?? "—"
+        let simCCRange = formattedRange(upperBodySimCCMinimum, upperBodySimCCMaximum)
+        let scoreRange = formattedRange(upperBodyScoreMinimum, upperBodyScoreMaximum)
+        let latency = upperBodyLatency.map { String(format: "%.0f ms", $0 * 1_000) } ?? "—"
+        let age = upperBodyResultAge.map { String(format: "%.0f ms", $0 * 1_000) } ?? "—"
+        let engine = " · upperBody \(upperBodyEngineID) attempts/results \(upperBodyAttempts)/\(upperBodyResults) · statut \(upperBodyLastStatus) · repères valides \(upperBodyValidLandmarks) · SimCC \(simCCRange) · scores \(scoreRange) · épaules G/D \(leftShoulder)/\(rightShoulder) · latence \(latency) · âge \(age)"
+        let rejection = upperBodyLastRejectionReason.map { " · rejet \($0)" } ?? ""
+        let engineP95 = upperBodyEngineDurationP95.map { String(format: "%.0f ms", $0 * 1_000) } ?? "—"
+        let engineMax = upperBodyEngineDurationMax.map { String(format: "%.0f ms", $0 * 1_000) } ?? "—"
+        let engineTiming = " · moteur \(upperBodyEngineRuns) appels, p95 \(engineP95), max \(engineMax)"
+        let rejected = upperBodyRejected > 0 ? " · rejets \(upperBodyRejected)" : ""
+        return "Frames \(frameCallbacks) · analyses \(analyses) · orientation \(orientation) · faces \(faceResults) / landmarks \(facesWithLandmarks) / points \(facePoints)\(engine)\(rejection)\(rejected)\(engineTiming)\(legacyVisionBody)\(segmentation)\(roiSpike)\(faceOrientationSummary)\(faceGeometrySummary)\(error)"
+    }
+
+    private func formattedRange(_ minimum: Float?, _ maximum: Float?) -> String {
+        guard let minimum, let maximum else { return "—" }
+        return String(format: "%.3f…%.3f", minimum, maximum)
     }
 }
 
@@ -115,12 +170,18 @@ final class CameraCaptureService: ObservableObject {
     @Published private(set) var trackingMode: PoseTrackingMode?
     @Published private(set) var recognizedPointCount = 0
     @Published private(set) var overlay = PoseOverlay.empty
-    @Published private(set) var blazePoseState: BlazePoseLiveState?
+    @Published private(set) var blazePoseState: ShoulderTrackingState?
     @Published private(set) var postureIndicators = PostureIndicatorsSnapshot.initial
-    @Published private(set) var proximityAlertBanner: String?
+    @Published private(set) var postureRichEvaluation: PostureRichEvaluation?
+    @Published private(set) var postureObservations: PostureObservationsSnapshot = .init(generation: 0, producedAt: 0, signals: [])
     @Published private(set) var proximityNotificationAuthorization: LocalPostureNotificationService.Authorization = .unknown
     @Published private(set) var diagnostics = CameraAnalysisDiagnostics.empty
     @Published private(set) var benchmarkState: BenchmarkViewState = .idle
+    @Published private(set) var upperBodyDevelopmentVisualizationEnabled =
+        UserDefaults.standard.bool(forKey: "UpperBodyDevelopmentVisualizationEnabled")
+    @Published private(set) var upperBodyDevelopmentOptions = UpperBodyDevelopmentOptions.stored()
+    @Published private(set) var upperBodyDevelopmentSummary = "Torse · en attente"
+    @Published private(set) var calibrationPresentation = PostureCalibrationPresentation.idle
 
     private let sampleQueue = DispatchQueue(label: "com.align.camera.samples")
     private var notificationCancellables: Set<AnyCancellable> = []
@@ -135,13 +196,24 @@ final class CameraCaptureService: ObservableObject {
     private var isApplicationActive = true
     private var isSystemApplicationActive = NSApplication.shared.isActive
     private var isWindowMiniaturized = false
+    /// Intention de cycle de vie, indépendante de la confirmation asynchrone de la session.
+    /// Elle empêche une notification de démarrage tardive de ressusciter une session arrêtée.
+    private var wantsCameraRunning = false
+    /// Verrou explicite posé par stop(). Il est levé uniquement par un nouveau start().
+    /// La session réelle reste donc la source de vérité, sauf après un arrêt demandé.
+    private var sessionReconciliationSuppressed = false
+    private var explicitStopRequested = false
+    private var livenessEpoch: UInt64 = 0
+    private var startIntentEpoch: UInt64?
     private let proximityNotificationService = LocalPostureNotificationService()
-    private let proximityAlertHistoryStore = PostureProximityAlertHistoryStore()
-    private var proximityAlertPolicy = PostureProximityAlertPolicy()
-    private var proximityBannerWorkItem: DispatchWorkItem?
-    private lazy var sampleDelegate = PoseSampleBufferDelegate(
+    private lazy var sampleDelegate: PoseSampleBufferDelegate = PoseSampleBufferDelegate(
         sampleQueue: sampleQueue,
-        segmentationCancellation: benchmarkSegmentationCancellation
+        segmentationCancellation: benchmarkSegmentationCancellation,
+        onFrameLiveness: { [weak self] epoch in
+            Task { @MainActor [weak self] in
+                self?.reconcileFrameLiveness(epoch: epoch)
+            }
+        }
     ) { [weak self] event, generation in
         Task { @MainActor [weak self] in
             guard let self,
@@ -167,11 +239,24 @@ final class CameraCaptureService: ObservableObject {
                 if self.currentAnalysisPresentation.publishesVisualUpdates {
                     self.overlay = overlay
                 }
-            case .blazePoseState(let state):
-                self.blazePoseState = state
+            case .upperBodyPresentation(let overlay, let state):
+                if self.currentAnalysisPresentation.publishesVisualUpdates {
+                    self.overlay = overlay
+                    self.blazePoseState = state
+                } else {
+                    self.overlay = .empty
+                    self.blazePoseState = .lost
+                }
+            case .upperBodyDevelopmentSummary(let summary):
+                self.upperBodyDevelopmentSummary = summary
             case .postureIndicators(let snapshot):
                 self.postureIndicators = snapshot
-                self.evaluateProximityAlert(snapshot)
+            case .postureRichEvaluation(let evaluation):
+                self.postureRichEvaluation = evaluation
+            case .postureObservations(let snapshot):
+                self.postureObservations = snapshot
+            case .calibration(let presentation):
+                self.calibrationPresentation = presentation
             case .silhouetteOverlay(let overlay, let token):
                 guard self.benchmarkSegmentationEpoch.accepts(
                     token,
@@ -194,9 +279,6 @@ final class CameraCaptureService: ObservableObject {
     )
 
     init() {
-        proximityAlertPolicy = PostureProximityAlertPolicy(
-            restoredDeliveries: PostureProximityAlertHistoryStore().load()
-        )
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.proximityNotificationAuthorization = await self.proximityNotificationService.authorization()
@@ -221,20 +303,28 @@ final class CameraCaptureService: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.invalidateBenchmark(reason: "Benchmark annulé : la caméra a été interrompue.")
+                self?.sessionReconciliationSuppressed = true
                 self?.setPoseProcessingActive(false)
                 self?.state = .interrupted
                 self?.recognizedPointCount = 0
                 self?.trackingMode = nil
                 self?.overlay = .empty
+                self?.postureObservations = .init(
+                    generation: UInt64(self?.activePoseGeneration?.activationID ?? 0),
+                    producedAt: ProcessInfo.processInfo.systemUptime, signals: []
+                )
+                self?.calibrationPresentation = .idle
             }
             .store(in: &notificationCancellables)
 
         NotificationCenter.default.publisher(for: AVCaptureSession.interruptionEndedNotification, object: session)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                guard self?.state == .interrupted, self?.session.isRunning == true else { return }
-                self?.setPoseProcessingActive(true)
-                self?.state = .running
+                guard let self, self.state == .interrupted, self.session.isRunning else { return }
+                self.sessionReconciliationSuppressed = false
+                self.wantsCameraRunning = true
+                self.setPoseProcessingActive(true)
+                self.state = .running
             }
             .store(in: &notificationCancellables)
 
@@ -243,16 +333,43 @@ final class CameraCaptureService: ObservableObject {
             .sink { [weak self] notification in
                 guard let self, self.state != .idle else { return }
                 self.invalidateBenchmark(reason: "Benchmark annulé : une erreur caméra est survenue.")
+                self.sessionReconciliationSuppressed = true
                 self.setPoseProcessingActive(false)
                 self.recognizedPointCount = 0
                 self.trackingMode = nil
                 self.overlay = .empty
+                self.postureObservations = .init(
+                    generation: UInt64(self.activePoseGeneration?.activationID ?? 0),
+                    producedAt: ProcessInfo.processInfo.systemUptime, signals: []
+                )
+                self.calibrationPresentation = .idle
 
                 let error = notification.userInfo?[AVCaptureSessionErrorKey] as? NSError
                 self.state = .failed(
                     error.map { "L’analyse caméra s’est interrompue : \($0.localizedDescription)" }
                         ?? "L’analyse caméra s’est interrompue à cause d’une erreur système."
                 )
+            }
+            .store(in: &notificationCancellables)
+
+        NotificationCenter.default.publisher(for: AVCaptureSession.didStartRunningNotification, object: session)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.reconcileRunningSession()
+            }
+            .store(in: &notificationCancellables)
+
+        NotificationCenter.default.publisher(for: AVCaptureSession.didStopRunningNotification, object: session)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                if self.wantsCameraRunning && !self.sessionReconciliationSuppressed {
+                    self.setPoseProcessingActive(false)
+                    self.state = .failed("La caméra s’est arrêtée avant la fin de l’analyse.")
+                } else if self.state == .configuring {
+                    self.setPoseProcessingActive(false)
+                    self.state = .idle
+                }
             }
             .store(in: &notificationCancellables)
     }
@@ -270,41 +387,23 @@ final class CameraCaptureService: ObservableObject {
         }
     }
 
-    private func evaluateProximityAlert(_ snapshot: PostureIndicatorsSnapshot) {
-        let distance = snapshot.result(for: .headDistance)
-        let isForeground = isSystemApplicationActive && isApplicationActive && !isWindowMiniaturized
-        let deliveryTime = Date().timeIntervalSince1970
-        let delivery = proximityAlertPolicy.consume(
-            isProbablyTooClose: distance.state == .attention,
-            isEligible: !snapshot.isCalibrating && distance.observedAt != nil &&
-                (isForeground || proximityNotificationAuthorization == .authorized),
-            isForeground: isForeground,
-            now: deliveryTime
-        )
-        guard delivery != .none else { return }
-        switch delivery {
-        case .foregroundBanner:
-            proximityAlertHistoryStore.save(proximityAlertPolicy.deliveries)
-            proximityAlertBanner = "Vous êtes probablement trop proche de votre repère confortable."
-            proximityBannerWorkItem?.cancel()
-            let work = DispatchWorkItem { [weak self] in self?.proximityAlertBanner = nil }
-            proximityBannerWorkItem = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: work)
-        case .backgroundNotification:
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                if await self.proximityNotificationService.deliverProbablyTooClose() {
-                    self.proximityAlertHistoryStore.save(self.proximityAlertPolicy.deliveries)
-                } else {
-                    self.proximityAlertPolicy.rollbackDelivery(at: deliveryTime)
-                }
-            }
-        case .none: break
-        }
-    }
-
     func start() {
         guard state != .running, state != .configuring, state != .requestingPermission else {
+            return
+        }
+
+        wantsCameraRunning = true
+        sessionReconciliationSuppressed = false
+        explicitStopRequested = false
+        livenessEpoch &+= 1
+        startIntentEpoch = livenessEpoch
+        let requestedLivenessEpoch = livenessEpoch
+        let livenessDelegate = sampleDelegate
+        sampleQueue.sync {
+            livenessDelegate.setLivenessEpoch(requestedLivenessEpoch)
+        }
+        if session.isRunning {
+            reconcileRunningSession()
             return
         }
 
@@ -320,20 +419,39 @@ final class CameraCaptureService: ObservableObject {
                 let granted = await AVCaptureDevice.requestAccess(for: .video)
                 guard operationID == currentOperationID else { return }
                 guard granted else {
+                    wantsCameraRunning = false
+                    sessionReconciliationSuppressed = true
+                    startIntentEpoch = nil
                     state = .denied
                     return
                 }
                 configureAndStart(operationID: currentOperationID)
             }
         case .denied, .restricted:
+            wantsCameraRunning = false
+            sessionReconciliationSuppressed = true
+            startIntentEpoch = nil
             state = .denied
         @unknown default:
+            wantsCameraRunning = false
+            sessionReconciliationSuppressed = true
+            startIntentEpoch = nil
             state = .failed("L’état de l’autorisation caméra est inconnu.")
         }
     }
 
     func stop(completion: (@MainActor @Sendable () -> Void)? = nil) {
         cancelBenchmark()
+        wantsCameraRunning = false
+        sessionReconciliationSuppressed = true
+        explicitStopRequested = true
+        livenessEpoch &+= 1
+        startIntentEpoch = nil
+        let stoppedLivenessEpoch = livenessEpoch
+        let livenessDelegate = sampleDelegate
+        sampleQueue.sync {
+            livenessDelegate.setLivenessEpoch(stoppedLivenessEpoch)
+        }
         operationID += 1
         setPoseProcessingActive(false)
         recognizedPointCount = 0
@@ -341,10 +459,13 @@ final class CameraCaptureService: ObservableObject {
         overlay = .empty
         blazePoseState = nil
         postureIndicators = .initial
-        proximityAlertPolicy.resetTracking()
-        proximityBannerWorkItem?.cancel()
-        proximityBannerWorkItem = nil
-        proximityAlertBanner = nil
+        postureRichEvaluation = nil
+        calibrationPresentation = .idle
+        postureObservations = .init(
+            generation: UInt64(activePoseGeneration?.activationID ?? 0),
+            producedAt: ProcessInfo.processInfo.systemUptime,
+            signals: []
+        )
         state = .idle
         sessionRuntime.stop(operationID: operationID) {
             guard let completion else { return }
@@ -356,9 +477,44 @@ final class CameraCaptureService: ObservableObject {
 
     func calibratePosture() {
         guard state == .running, let generation = activePoseGeneration else { return }
+        calibrationPresentation = .init(
+            phase: .collecting, progress: 0, outcomes: Dictionary(
+                uniqueKeysWithValues: PostureObservationSignalID.allCases.map { ($0, .pending) }
+            )
+        )
         let delegate = sampleDelegate
         sampleQueue.async {
             delegate.beginPostureCalibration(generation: generation)
+        }
+    }
+
+    func setUpperBodyDevelopmentVisualizationEnabled(_ isEnabled: Bool) {
+        upperBodyDevelopmentVisualizationEnabled = isEnabled
+        UserDefaults.standard.set(isEnabled, forKey: "UpperBodyDevelopmentVisualizationEnabled")
+        let delegate = sampleDelegate
+        sampleQueue.async {
+            delegate.setUpperBodyDevelopmentVisualizationEnabled(isEnabled)
+        }
+    }
+
+    /// Met à jour les règles riches sur la même file que les échantillons.
+    /// Aucun second moteur n'est créé et la génération reste inchangée.
+    func setPostureRecommendationSensitivity(_ sensitivity: PostureRecommendationSensitivity) {
+        let delegate = sampleDelegate
+        sampleQueue.async {
+            delegate.setPostureRecommendationSensitivity(sensitivity)
+        }
+    }
+
+    func updateUpperBodyDevelopmentOptions(
+        _ update: (inout UpperBodyDevelopmentOptions) -> Void
+    ) {
+        update(&upperBodyDevelopmentOptions)
+        upperBodyDevelopmentOptions.store()
+        let options = upperBodyDevelopmentOptions
+        let delegate = sampleDelegate
+        sampleQueue.async {
+            delegate.setUpperBodyDevelopmentOptions(options)
         }
     }
 
@@ -456,6 +612,7 @@ final class CameraCaptureService: ObservableObject {
         let presentation = currentAnalysisPresentation
         if !presentation.publishesVisualUpdates {
             overlay = .empty
+            if blazePoseState != nil { blazePoseState = .lost }
         }
         let sampleDelegate = sampleDelegate
         let benchmarkToken = benchmarkSegmentationEpoch.currentToken
@@ -473,18 +630,23 @@ final class CameraCaptureService: ObservableObject {
     }
 
     private func configureAndStart(operationID currentOperationID: Int) {
-        guard operationID == currentOperationID else { return }
-        proximityAlertPolicy.resetTracking()
+        guard operationID == currentOperationID,
+              wantsCameraRunning,
+              !sessionReconciliationSuppressed else { return }
         setPoseProcessingActive(false)
         state = .configuring
 
         sessionRuntime.start(operationID: currentOperationID) { [weak self] result in
             Task { @MainActor [weak self] in
-                guard let self, self.operationID == currentOperationID else { return }
+                guard let self,
+                      self.operationID == currentOperationID,
+                      self.wantsCameraRunning else { return }
 
                 switch result {
                 case .running:
-                    self.setPoseProcessingActive(true)
+                    if self.state != .running {
+                        self.setPoseProcessingActive(true)
+                    }
                     self.state = .running
                 case .unavailable:
                     self.setPoseProcessingActive(false)
@@ -497,15 +659,37 @@ final class CameraCaptureService: ObservableObject {
         }
     }
 
+    /// Réconcilie l’état publié avec la session réelle. Une session peut devenir
+    /// active avant le retour du callback de configuration (notamment après TCC).
+    private func reconcileRunningSession() {
+        guard !sessionReconciliationSuppressed, session.isRunning else { return }
+        guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else { return }
+        wantsCameraRunning = true
+        guard state != .running else { return }
+        setPoseProcessingActive(true)
+        state = .running
+    }
+
+    /// Première preuve indépendante du flux vidéo. Ce chemin ne passe pas par
+    /// la garde `onEvent(state == .running)`, afin de sortir d’un éventuel cercle
+    /// vicieux où l’analyse ne peut démarrer qu’après la publication de `.running`.
+    private func reconcileFrameLiveness(epoch: UInt64) {
+        _ = epoch // conservé pour le diagnostic; la frame réelle est la preuve d’autorité.
+        guard !explicitStopRequested,
+              session.isRunning,
+              AVCaptureDevice.authorizationStatus(for: .video) == .authorized else { return }
+        wantsCameraRunning = true
+        sessionReconciliationSuppressed = false
+        guard state != .running else { return }
+        setPoseProcessingActive(true)
+        state = .running
+    }
+
     private func setPoseProcessingActive(
         _ isActive: Bool,
         resetDiagnostics: Bool = true
     ) {
         if !isActive {
-            proximityAlertPolicy.resetTracking()
-            proximityBannerWorkItem?.cancel()
-            proximityBannerWorkItem = nil
-            proximityAlertBanner = nil
         }
         activationID += 1
         let generation = PoseProcessingGeneration(
@@ -515,13 +699,21 @@ final class CameraCaptureService: ObservableObject {
         activePoseGeneration = isActive ? generation : nil
         overlay = .empty
         blazePoseState = nil
+        upperBodyDevelopmentSummary = "Torse · en attente"
         postureIndicators = .initial
+        postureRichEvaluation = nil
         if resetDiagnostics {
             diagnostics = .empty
         }
         let sampleDelegate = sampleDelegate
+        let developmentVisualizationEnabled = upperBodyDevelopmentVisualizationEnabled
+        let developmentOptions = upperBodyDevelopmentOptions
         sampleQueue.async {
             sampleDelegate.setActive(isActive, generation: generation)
+            sampleDelegate.setUpperBodyDevelopmentVisualizationEnabled(
+                developmentVisualizationEnabled
+            )
+            sampleDelegate.setUpperBodyDevelopmentOptions(developmentOptions)
         }
     }
 }
@@ -536,8 +728,12 @@ nonisolated private enum PoseProcessingEvent: Sendable {
     case analysisFailed
     case diagnostics(CameraAnalysisDiagnostics)
     case overlay(PoseOverlay)
-    case blazePoseState(BlazePoseLiveState)
+    case upperBodyPresentation(PoseOverlay, ShoulderTrackingState)
+    case upperBodyDevelopmentSummary(String)
     case postureIndicators(PostureIndicatorsSnapshot)
+    case postureRichEvaluation(PostureRichEvaluation)
+    case postureObservations(PostureObservationsSnapshot)
+    case calibration(PostureCalibrationPresentation)
     case silhouetteOverlay(PoseOverlay, UInt64)
     case benchmarkMeasurement(BenchmarkMeasurement, TimeInterval)
     case benchmarkOverlayVisibility(Bool, TimeInterval)
@@ -638,6 +834,7 @@ nonisolated private final class CameraSessionRuntime: @unchecked Sendable {
             guard let camera = AVCaptureDevice.default(for: .video) else {
                 throw CameraError.cameraUnavailable
             }
+            (sampleDelegate as? PoseSampleBufferDelegate)?.setCameraIdentifier(camera.uniqueID)
 
             let input = try AVCaptureDeviceInput(device: camera)
             guard session.canAddInput(input) else {
@@ -675,6 +872,9 @@ nonisolated private final class CameraSessionRuntime: @unchecked Sendable {
                 if connection.isVideoMirroringSupported {
                     connection.isVideoMirrored = false
                 }
+                if connection.isVideoRotationAngleSupported(0) {
+                    connection.videoRotationAngle = 0
+                }
             }
         } catch {
             if let addedOutput { session.removeOutput(addedOutput) }
@@ -703,15 +903,20 @@ private enum CameraError: LocalizedError {
 
 nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let detector = PoseDetector()
-    private let blazePoseEngine = BlazePoseLiveEngine()
+    // RTMPose is the sole product engine for this activation. There is no
+    // runtime fallback: a load/inference failure is published as technicalError.
+    private var upperBodySession = UpperBodyEngineSession(engine: RTMPoseUpperBodyAdapter())
     private let humanRectangleDetector = HumanRectangleDetector()
     private let segmentationDetector = PersonSegmentationDetector()
     private let segmentationCancellation: BenchmarkSegmentationCancellationBox
+    private let onFrameLiveness: @Sendable (UInt64) -> Void
     private let onEvent: @Sendable (PoseProcessingEvent, PoseProcessingGeneration) -> Void
     private let sampleQueue: DispatchQueue
     private var analysisCadence = AnalysisCadenceController()
     private var isActive = false
     private var generation = PoseProcessingGeneration(operationID: 0, activationID: 0)
+    private var livenessEpoch: UInt64 = 0
+    private var cameraIdentifier = "default"
     private var stabilizer = PoseResultStabilizer()
     private var expirationWorkItem: DispatchWorkItem?
     private var overlayExpirationWorkItem: DispatchWorkItem?
@@ -730,13 +935,32 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     private var silhouetteFreshness = SilhouetteOverlayFreshnessTracker()
     private var silhouetteExpirationWorkItem: DispatchWorkItem?
     private var latestFaceDetection = FaceDetectionOutput.empty
+    private var latestUpperBodyFaceROI: UpperBodyRegionOfInterest?
+    private var faceAnchorSampleID: UInt64 = 0
+    private var faceObservationSampleID: UInt64 = 0
     private var latestBodyDetection: BodyDetectionOutput?
     private var faceInvisibleSince: TimeInterval?
     private var latestSilhouetteOverlay = PoseOverlay.empty
-    private var latestBlazePoseOverlay = PoseOverlay.empty
-    private var blazePoseCadence = BlazePoseCadenceController()
-    private var blazePoseFreshness = BlazePoseOverlayFreshness()
-    private var blazePoseExpirationWorkItem: DispatchWorkItem?
+    private var latestUpperBodyOverlay = PoseOverlay.empty
+    private var upperBodyCadence = UpperBodyCadenceController()
+    private var upperBodyExpirationWorkItem: DispatchWorkItem?
+    private var postureObservationExpirationWorkItem: DispatchWorkItem?
+    private var upperBodySampleID: UInt64 = 0
+    private var upperBodyDevelopmentVisualizationEnabled = false
+    private var upperBodyDevelopmentOptions = UpperBodyDevelopmentOptions()
+    private var upperBodyAttempts = 0
+    private var upperBodyResults = 0
+    private var upperBodyLastStatus = "—"
+    private var upperBodyLastRejectionReason: String?
+    private var upperBodyValidLandmarks = 0
+    private var upperBodyLeftShoulderScore: Float?
+    private var upperBodyRightShoulderScore: Float?
+    private var upperBodySimCCMinimum: Float?
+    private var upperBodySimCCMaximum: Float?
+    private var upperBodyScoreMinimum: Float?
+    private var upperBodyScoreMaximum: Float?
+    private var upperBodyLatency: TimeInterval?
+    private var upperBodyResultCapturedAt: TimeInterval?
     private var segmentationAttempts = 0
     private var segmentationVisionPerforms = 0
     private var segmentationResults = 0
@@ -752,26 +976,45 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     private var benchmarkSegmentationToken: UInt64?
     private var upperBodyROICadence = UpperBodyROISpikeCadence()
     private var upperBodyROISpike = UpperBodyROISpikeDiagnostics.empty
-    private var posturePipeline = PostureSignalPipeline()
-    private var postureSampleID: UInt64 = 0
-    private var postureBodySourceID: UInt64 = 0
-    private var postureFusion = PostureAsyncFusion(maximumSkew: 0.30)!
-    private var postureExpirationWorkItem: DispatchWorkItem?
+    private var postureRuntimeCoordinator = PostureRuntimeCoordinator()
+    private var postureRuntimeContextKey = ""
+    private var captureClockOffset: TimeInterval?
+    private var lastCaptureTimestamp: TimeInterval?
+    private var latestFaceCapturedAt: TimeInterval?
+    private var latestPostureGeometry: PostureRichGeometryMetrics?
     private var postureCalibrationWorkItem: DispatchWorkItem?
+    private var postureCalibrationStartedAt: TimeInterval?
+    private var persistedRichBaseline: PostureRichBaseline?
 
     init(
         sampleQueue: DispatchQueue,
         segmentationCancellation: BenchmarkSegmentationCancellationBox,
+        onFrameLiveness: @escaping @Sendable (UInt64) -> Void,
         onEvent: @escaping @Sendable (PoseProcessingEvent, PoseProcessingGeneration) -> Void
     ) {
         self.sampleQueue = sampleQueue
         self.segmentationCancellation = segmentationCancellation
+        self.onFrameLiveness = onFrameLiveness
         self.onEvent = onEvent
+        if let data = UserDefaults.standard.data(forKey: "posture.richBaseline.v1") {
+            persistedRichBaseline = try? JSONDecoder().decode(PostureRichBaseline.self, from: data)
+        }
+    }
+
+    func setCameraIdentifier(_ identifier: String) {
+        guard !identifier.isEmpty else { return }
+        cameraIdentifier = identifier
+    }
+
+    func setLivenessEpoch(_ epoch: UInt64) {
+        livenessEpoch = epoch
     }
 
     func setActive(_ isActive: Bool, generation: PoseProcessingGeneration) {
         self.isActive = isActive
         self.generation = generation
+        postureRuntimeContextKey = ""
+        postureRuntimeCoordinator.reset(generation: UInt64(generation.activationID), contextKey: "")
         benchmarkSegmentationToken = nil
         analysisCadence.reset()
         expirationWorkItem?.cancel()
@@ -804,24 +1047,45 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             segmentationDetector.deactivate()
         }
         latestFaceDetection = .empty
+        latestUpperBodyFaceROI = nil
+        faceAnchorSampleID = 0
+        faceObservationSampleID = 0
         latestBodyDetection = nil
         faceInvisibleSince = nil
         latestSilhouetteOverlay = .empty
-        latestBlazePoseOverlay = .empty
-        blazePoseCadence.reset()
-        blazePoseFreshness.clear()
-        blazePoseExpirationWorkItem?.cancel()
-        blazePoseExpirationWorkItem = nil
-        blazePoseEngine.reset()
-        postureSampleID = 0
-        postureBodySourceID = 0
-        postureFusion.reset()
-        postureExpirationWorkItem?.cancel()
-        postureExpirationWorkItem = nil
+        latestUpperBodyOverlay = .empty
+        upperBodyCadence.reset()
+        upperBodyExpirationWorkItem?.cancel()
+        upperBodyExpirationWorkItem = nil
+        postureObservationExpirationWorkItem?.cancel()
+        postureObservationExpirationWorkItem = nil
+        upperBodySampleID = 0
+        upperBodyAttempts = 0
+        upperBodyResults = 0
+        upperBodyLastStatus = "—"
+        upperBodyLastRejectionReason = nil
+        upperBodyValidLandmarks = 0
+        upperBodyLeftShoulderScore = nil
+        upperBodyRightShoulderScore = nil
+        upperBodySimCCMinimum = nil
+        upperBodySimCCMaximum = nil
+        upperBodyScoreMinimum = nil
+        upperBodyScoreMaximum = nil
+        upperBodyLatency = nil
+        upperBodyResultCapturedAt = nil
+        if isActive {
+            upperBodySession.activate(generation: UInt64(generation.activationID))
+        } else {
+            upperBodySession.deactivate()
+        }
+        postureRuntimeContextKey = ""
+        captureClockOffset = nil
+        lastCaptureTimestamp = nil
+        latestFaceCapturedAt = nil
+        latestPostureGeometry = nil
         postureCalibrationWorkItem?.cancel()
         postureCalibrationWorkItem = nil
-        let postureSnapshot = posturePipeline.reset(generation: UInt64(generation.activationID))
-        if isActive { onEvent(.postureIndicators(postureSnapshot), generation) }
+        postureCalibrationStartedAt = nil
         segmentationAttempts = 0
         segmentationVisionPerforms = 0
         segmentationResults = 0
@@ -836,14 +1100,44 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         lastUpperBodyLandmarks = .empty
     }
 
+    func setUpperBodyDevelopmentVisualizationEnabled(_ isEnabled: Bool) {
+        upperBodyDevelopmentVisualizationEnabled = isEnabled
+        guard isActive else { return }
+        publishCurrentUpperBodyPresentation(at: ProcessInfo.processInfo.systemUptime)
+    }
+
+    func setPostureRecommendationSensitivity(_ sensitivity: PostureRecommendationSensitivity) {
+        postureRuntimeCoordinator.setSensitivity(sensitivity)
+        guard isActive else { return }
+        let reset = postureRuntimeCoordinator.invalidate(
+            at: ProcessInfo.processInfo.systemUptime
+        )
+        onEvent(.postureObservations(reset), generation)
+        onEvent(.postureIndicators(indicators(from: reset)), generation)
+    }
+
+    func setUpperBodyDevelopmentOptions(_ options: UpperBodyDevelopmentOptions) {
+        upperBodyDevelopmentOptions = options
+        setUpperBodyDevelopmentVisualizationEnabled(
+            upperBodyDevelopmentVisualizationEnabled
+        )
+    }
+
     func beginPostureCalibration(generation requestedGeneration: PoseProcessingGeneration) {
         guard isActive, generation == requestedGeneration else { return }
-        let snapshot = posturePipeline.beginCalibration(
-            at: ProcessInfo.processInfo.systemUptime,
-            generation: UInt64(generation.activationID)
-        )
-        onEvent(.postureIndicators(snapshot), generation)
-        schedulePostureCalibrationFinish(after: PostureSignalPipeline.calibrationDuration,
+        let now = ProcessInfo.processInfo.systemUptime
+        postureRuntimeCoordinator.beginCalibration()
+        let reset = postureRuntimeCoordinator.invalidate(at: now)
+        onEvent(.postureObservations(reset), generation)
+        onEvent(.postureIndicators(indicators(from: reset)), generation)
+        let startedAt = now
+        postureCalibrationStartedAt = startedAt
+        onEvent(.calibration(.init(
+            phase: .collecting,
+            progress: 0,
+            outcomes: Dictionary(uniqueKeysWithValues: PostureObservationSignalID.allCases.map { ($0, .pending) })
+        )), generation)
+        schedulePostureCalibrationFinish(after: 0.5,
                                          generation: generation)
     }
 
@@ -855,73 +1149,57 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.isActive, self.generation == scheduledGeneration else { return }
             let now = ProcessInfo.processInfo.systemUptime
-            let result = self.posturePipeline.expire(
-                at: now, generation: UInt64(scheduledGeneration.activationID)
-            )
-            self.onEvent(.postureIndicators(result), scheduledGeneration)
-            if result.isCalibrating {
-                self.schedulePostureCalibrationFinish(after: 2, generation: scheduledGeneration)
+            if self.postureRuntimeCoordinator.isCalibrationActive {
+                let elapsed = now - (self.postureCalibrationStartedAt ?? now)
+                if elapsed < PostureIndicatorContract.calibrationDuration {
+                    self.onEvent(.calibration(.init(
+                        phase: .collecting,
+                        progress: min(0.99, max(0, elapsed / PostureIndicatorContract.calibrationDuration)),
+                        outcomes: Dictionary(uniqueKeysWithValues: PostureObservationSignalID.allCases.map { ($0, .pending) })
+                    )), scheduledGeneration)
+                    self.schedulePostureCalibrationFinish(after: 0.5, generation: scheduledGeneration)
+                    return
+                }
+                let ready = self.postureRuntimeCoordinator.finishCalibration()
+                if ready, let baseline = self.postureRuntimeCoordinator.baselineSnapshot,
+                   let data = try? JSONEncoder().encode(baseline) {
+                    UserDefaults.standard.set(data, forKey: "posture.richBaseline.v1")
+                    self.persistedRichBaseline = baseline
+                }
+                let outcomes = Dictionary(uniqueKeysWithValues: PostureObservationSignalID.allCases.map { id in
+                    guard ready, let baseline = self.postureRuntimeCoordinator.baselineSnapshot else {
+                        return (id, PostureCalibrationSignalOutcome.unavailable("Repère insuffisant"))
+                    }
+                    switch id {
+                    case .proximity:
+                        return (id, baseline.proximityScale != nil
+                            ? .ready : .unavailable("Visage insuffisant"))
+                    case .torsoInclination:
+                        return (id, baseline.torsoInclinationDegrees != nil
+                            ? .ready : .unavailable("Hanches insuffisantes"))
+                    case .raisedShoulders:
+                        return (id, baseline.leftShoulderElevation != nil && baseline.rightShoulderElevation != nil
+                            ? .ready : .unavailable("Épaules insuffisantes"))
+                    case .shoulderSlope:
+                        return (id, baseline.shoulderSlopeDegrees != nil
+                            ? .ready : .unavailable("Épaules insuffisantes"))
+                    case .estimatedBlinks:
+                        return (id, .unavailable("Repère de clignements séparé"))
+                    case .closedShoulders:
+                        return (id, baseline.shoulderOpeningRatio != nil
+                            ? .ready : .unavailable("Ouverture des épaules insuffisante"))
+                    }
+                })
+                self.onEvent(.calibration(.init(
+                    phase: ready ? .completed : .failed("Repères insuffisants"),
+                    progress: 1,
+                    outcomes: outcomes
+                )), scheduledGeneration)
+                self.postureCalibrationStartedAt = nil
             }
         }
         postureCalibrationWorkItem = work
         sampleQueue.asyncAfter(deadline: .now() + delay, execute: work)
-    }
-
-    private func publishPosture(face: FaceDetectionOutput, at uptime: TimeInterval) {
-        postureSampleID &+= 1
-        let geometry = FaceGeometrySignal.from(polylines: face.polylines)
-        let center = geometry?.faceCenter.map { PostureMetricPoint(x: Double($0.x), y: Double($0.y)) }
-        let faceOnly = PostureSnapshot(
-            faceGeneration: UInt64(generation.activationID), faceTimestamp: uptime,
-            faceSampleID: postureSampleID,
-            facePointCount: face.polylines.reduce(0) { $0 + $1.locations.count },
-            interocularDistance: geometry?.interocularDistance, faceLength: geometry?.faceLength,
-            pitchProxy: geometry?.pitchProxy, yawProxy: geometry?.yawProxy,
-            eyeLineRollDegrees: geometry?.eyeLineRollDegrees,
-            leftEyeOpeningRatio: geometry?.leftEyeOpeningRatio,
-            rightEyeOpeningRatio: geometry?.rightEyeOpeningRatio,
-            innerBrowDistanceRatio: geometry?.innerBrowDistanceRatio, faceCenter: center,
-            leftShoulder: nil, rightShoulder: nil, bodyGeneration: nil,
-            bodyTimestamp: nil, bodySampleID: nil
-        )
-        guard let fused = postureFusion.ingestFace(faceOnly) else { return }
-        publishPosture(fused, at: uptime)
-    }
-
-    private func publishPosture(shoulders result: BlazePoseLiveResult, at uptime: TimeInterval) {
-        postureBodySourceID &+= 1
-        guard let left = result.leftShoulder, let right = result.rightShoulder else {
-            if let faceOnly = postureFusion.discardBody(
-                generation: UInt64(generation.activationID), timestamp: uptime,
-                sampleID: postureBodySourceID
-            ) { publishPosture(faceOnly, at: uptime) }
-            return
-        }
-        let body = PostureShoulderSnapshot(
-            generation: UInt64(generation.activationID), timestamp: uptime,
-            sampleID: postureBodySourceID,
-            leftShoulder: .init(x: Double(left.location.x), y: Double(left.location.y)),
-            rightShoulder: .init(x: Double(right.location.x), y: Double(right.location.y))
-        )
-        guard let fused = postureFusion.ingestBody(body) else { return }
-        publishPosture(fused, at: uptime)
-    }
-
-    private func publishPosture(_ input: PostureSnapshot, at uptime: TimeInterval) {
-        let result = posturePipeline.ingest(input, now: uptime)
-        onEvent(.postureIndicators(result), generation)
-        postureExpirationWorkItem?.cancel()
-        let scheduledGeneration = generation
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, self.isActive, self.generation == scheduledGeneration else { return }
-            let now = ProcessInfo.processInfo.systemUptime
-            let expired = self.posturePipeline.expire(
-                at: now, generation: UInt64(scheduledGeneration.activationID)
-            )
-            self.onEvent(.postureIndicators(expired), scheduledGeneration)
-        }
-        postureExpirationWorkItem = work
-        sampleQueue.asyncAfter(deadline: .now() + PostureSignalPipeline.ttl, execute: work)
     }
 
     func updatePresentation(
@@ -941,7 +1219,13 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             segmentationDetector.deactivate()
             latestSilhouetteOverlay = .empty
             segmentationState = .notRequested
-            onEvent(.overlay(combinedOverlay()), generation)
+            if presentation.publishesVisualUpdates, upperBodyAttempts > 0 {
+                publishCurrentUpperBodyPresentation(
+                    at: ProcessInfo.processInfo.systemUptime
+                )
+            } else {
+                onEvent(.overlay(combinedOverlay()), generation)
+            }
         } else if !segmentationDetector.isActive {
             segmentationDetector.activate()
         }
@@ -952,10 +1236,12 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
+        onFrameLiveness(livenessEpoch)
         guard isActive else { return }
         frameCallbacks += 1
 
         let uptime = ProcessInfo.processInfo.systemUptime
+        let capturedAt = monotonicCaptureTime(for: sampleBuffer, fallback: uptime)
         callbackBudget.beginCallback()
         guard let unit = nextVisionUnit(at: uptime), callbackBudget.claim(unit) else { return }
         analyses += 1
@@ -980,39 +1266,150 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         var roiSpikeMeasurement: UpperBodyROISpikeMeasurement?
 
         switch unit {
-        case .blazePose:
-            blazePoseCadence.recordAttempt(at: uptime)
+        case .upperBody:
+            upperBodyCadence.recordAttempt(at: uptime)
+            upperBodyAttempts += 1
             guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-                clearBlazePose(state: .technicalError)
+                upperBodyLastStatus = UpperBodyEngineState.technicalError.rawValue
+                upperBodyValidLandmarks = 0
+                upperBodyLeftShoulderScore = nil
+                upperBodyRightShoulderScore = nil
+                upperBodySimCCMinimum = nil
+                upperBodySimCCMaximum = nil
+                upperBodyScoreMinimum = nil
+                upperBodyScoreMaximum = nil
+                upperBodyLatency = nil
+                upperBodyResultCapturedAt = nil
+                clearUpperBody(state: .technicalError)
                 break
             }
-            guard let result = blazePoseEngine.analyze(
-                pixelBuffer,
-                at: uptime,
-                generation: UInt64(generation.activationID)
-            ) else { break }
-            publishPosture(shoulders: result, at: uptime)
-            if result.state == .detected || result.state == .partial {
-                latestBlazePoseOverlay = result.overlay
-                blazePoseFreshness.record(at: uptime, generation: generation.activationID)
-                scheduleBlazePoseExpiration(at: uptime)
-                onEvent(.blazePoseState(result.state), generation)
-            } else if result.state == .technicalError {
-                clearBlazePose(state: .technicalError)
-            } else if blazePoseFreshness.observedAt == nil {
-                clearBlazePose(state: .lost)
+            upperBodySampleID &+= 1
+            let frameROI = latestUpperBodyFaceROI.map { anchor in
+                UpperBodyRegionOfInterest(
+                    rect: anchor.rect,
+                    capturedAt: capturedAt,
+                    anchorCapturedAt: anchor.anchorCapturedAt,
+                    anchorSampleID: anchor.anchorSampleID,
+                    generation: anchor.generation,
+                    source: capturedAt == anchor.anchorCapturedAt
+                        ? .sameFrameFace : .recentFace
+                )
             }
-            if analysisCadence.presentation.publishesVisualUpdates {
-                onEvent(.overlay(combinedOverlay()), generation)
+            let frame = UpperBodyFrame(
+                pixelBuffer: pixelBuffer,
+                capturedAt: capturedAt,
+                sampleID: upperBodySampleID,
+                generation: UInt64(generation.activationID),
+                regionOfInterest: frameROI
+            )
+            guard let result = upperBodySession.analyze(frame) else {
+                upperBodyLastRejectionReason = upperBodySession.lastRejectionReason?.rawValue
+                upperBodyLastStatus = upperBodyLastRejectionReason.map { "rejected:\($0)" } ?? "rejected"
+                upperBodyValidLandmarks = 0
+                upperBodyLeftShoulderScore = nil
+                upperBodyRightShoulderScore = nil
+                upperBodySimCCMinimum = nil
+                upperBodySimCCMaximum = nil
+                upperBodyScoreMinimum = nil
+                upperBodyScoreMaximum = nil
+                upperBodyLatency = nil
+                upperBodyResultCapturedAt = nil
+                if upperBodySession.lastRejectionReason == .postInferenceExpired ||
+                    upperBodySession.lastRejectionReason == .invalidProducedAt {
+                    // A slow/invalid engine return invalidates the previous
+                    // geometry immediately; do not leave a detected banner
+                    // or overlay alive until a delayed expiry callback.
+                    clearUpperBody(state: .lost)
+                }
+                break
             }
-
+            upperBodyLastRejectionReason = nil
+            let resultNow = result.producedAt
+            if let context = PostureFramingContext(
+                pixelWidth: CVPixelBufferGetWidth(pixelBuffer),
+                pixelHeight: CVPixelBufferGetHeight(pixelBuffer),
+                cameraID: cameraIdentifier,
+                normalizedROI: frameROI?.rect ?? .init(x: 0, y: 0, width: 1, height: 1),
+                revision: "rtmpose-v1"
+            ) {
+                let faceObservation: PostureFaceObservation? = {
+                    guard let signal = FaceGeometrySignal.from(polylines: latestFaceDetection.polylines),
+                          faceObservationSampleID > 0 else { return nil }
+                    return .init(
+                        generation: UInt64(generation.activationID),
+                        sampleID: faceObservationSampleID,
+                        capturedAt: latestFaceCapturedAt ?? capturedAt,
+                        facePointCount: latestFaceDetection.polylines.reduce(0) { $0 + $1.locations.count },
+                        contextKey: context.key,
+                        signal: signal
+                    )
+                }()
+                let geometry = PostureRichGeometryEvaluator.make(
+                    result: result, face: faceObservation, context: context
+                )
+                latestPostureGeometry = geometry
+                preparePostureRuntime(for: context)
+                if let runtime = postureRuntimeCoordinator.consumeBody(
+                    geometry, baseline: nil, now: resultNow
+                ) {
+                    onEvent(.postureRichEvaluation(runtime.evaluation), generation)
+                    onEvent(.postureObservations(runtime.snapshot), generation)
+                    onEvent(.postureIndicators(indicators(from: runtime.snapshot)), generation)
+                }
+            }
+            upperBodyResults += 1
+            upperBodyLastStatus = result.state.rawValue
+            upperBodyValidLandmarks = result.diagnostics?.validLandmarkCount
+                ?? result.points.count
+            upperBodyLeftShoulderScore = result.diagnostics?.leftShoulderScore
+                ?? result.point(.leftShoulder)?.confidence
+            upperBodyRightShoulderScore = result.diagnostics?.rightShoulderScore
+                ?? result.point(.rightShoulder)?.confidence
+            upperBodySimCCMinimum = result.diagnostics?.simCCMinimum
+            upperBodySimCCMaximum = result.diagnostics?.simCCMaximum
+            upperBodyScoreMinimum = result.diagnostics?.scoreMinimum
+            upperBodyScoreMaximum = result.diagnostics?.scoreMaximum
+            upperBodyLatency = result.producedAt - result.capturedAt
+            upperBodyResultCapturedAt = result.capturedAt
+            switch result.state {
+            case .detected, .partial:
+                latestUpperBodyOverlay = upperBodyDevelopmentVisualizationEnabled
+                    ? DevelopmentUpperBodyOverlayBuilder.make(
+                        from: result,
+                        at: resultNow,
+                        options: upperBodyDevelopmentOptions
+                    )
+                    : ProductUpperBodyOverlayBuilder.make(from: result, at: resultNow)
+                scheduleUpperBodyExpiration(for: result, at: resultNow)
+                let shoulderState = shoulderState(for: result, at: resultNow)
+                onEvent(.upperBodyPresentation(
+                    combinedOverlay(), shoulderState
+                ), generation)
+                onEvent(.upperBodyDevelopmentSummary(
+                    DevelopmentUpperBodyOverlayBuilder.summary(for: result, at: resultNow)
+                ), generation)
+            case .technicalError:
+                clearUpperBody(state: .technicalError)
+            case .noPerson, .expired:
+                clearUpperBody(state: .lost)
+            case .stale:
+                clearUpperBody(state: .lost)
+            }
         case .face:
             analysisCadence.recordAnalysis(at: uptime)
             faceAttempted = true
+            faceObservationSampleID &+= 1
             guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
                 latestFaceDetection = .empty
                 faceDuration = 0
                 lastVisionError = "Visage : buffer vidéo absent"
+                let invalidated = postureRuntimeCoordinator.invalidateFace(
+                    sampleID: faceObservationSampleID,
+                    capturedAt: capturedAt,
+                    now: uptime
+                )
+                onEvent(.postureObservations(invalidated), generation)
+                onEvent(.postureIndicators(indicators(from: invalidated)), generation)
                 clearFaceOverlay()
                 break
             }
@@ -1020,17 +1417,90 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             do {
                 let face = try detector.detectFace(in: pixelBuffer)
                 faceDuration = ProcessInfo.processInfo.systemUptime - start
+                let faceProducedAt = ProcessInfo.processInfo.systemUptime
                 latestFaceDetection = face
+                if let contour = face.polylines.first(where: { $0.name == "faceContour" }) {
+                    faceAnchorSampleID &+= 1
+                    latestUpperBodyFaceROI = RTMPoseUpperBodyCropPolicy.faceAnchored(
+                        faceContour: contour.locations,
+                        imageSize: CGSize(
+                            width: CVPixelBufferGetWidth(pixelBuffer),
+                            height: CVPixelBufferGetHeight(pixelBuffer)
+                        ),
+                        capturedAt: capturedAt,
+                        sampleID: faceAnchorSampleID,
+                        generation: UInt64(generation.activationID)
+                    )
+                } else {
+                    latestUpperBodyFaceROI = nil
+                }
                 faceSucceeded = face.resultCount > 0
                 faceHadLandmarks = face.facesWithLandmarksCount > 0
                 faceOrientation = face.primaryOrientation
                 lastVisionError = nil
-                publishPosture(face: face, at: uptime)
-                handleFaceVisibility(face.polylines.isEmpty ? nil : uptime)
+                latestFaceCapturedAt = capturedAt
+                let expiredRuntime = postureRuntimeCoordinator.expire(now: faceProducedAt)
+                if expiredRuntime.generation == UInt64(generation.activationID),
+                   expiredRuntime.signals.contains(where: { $0.availability == .insufficient }) {
+                    onEvent(.postureObservations(expiredRuntime), generation)
+                    onEvent(.postureIndicators(indicators(from: expiredRuntime)), generation)
+                }
+                if let faceContext = PostureFramingContext(
+                    pixelWidth: CVPixelBufferGetWidth(pixelBuffer),
+                    pixelHeight: CVPixelBufferGetHeight(pixelBuffer),
+                    cameraID: cameraIdentifier,
+                    normalizedROI: latestUpperBodyFaceROI?.rect ?? .init(x: 0, y: 0, width: 1, height: 1),
+                    revision: "rtmpose-v1"
+                   ),
+                   faceObservationSampleID > 0 {
+                    preparePostureRuntime(for: faceContext)
+                    if let signal = FaceGeometrySignal.from(polylines: face.polylines) {
+                        let observation = PostureFaceObservation(
+                            generation: UInt64(generation.activationID),
+                            sampleID: faceObservationSampleID,
+                            capturedAt: capturedAt,
+                            facePointCount: face.polylines.reduce(0) { $0 + $1.locations.count },
+                            contextKey: faceContext.key,
+                            signal: signal
+                        )
+                        if let runtime = postureRuntimeCoordinator.consumeFace(
+                            observation, baseline: nil, now: faceProducedAt
+                        ) {
+                            onEvent(.postureRichEvaluation(runtime.evaluation), generation)
+                            onEvent(.postureObservations(runtime.snapshot), generation)
+                            onEvent(.postureIndicators(indicators(from: runtime.snapshot)), generation)
+                        }
+                    } else {
+                        let invalidated = postureRuntimeCoordinator.invalidateFace(
+                            sampleID: faceObservationSampleID,
+                            capturedAt: capturedAt,
+                            now: faceProducedAt
+                        )
+                        onEvent(.postureObservations(invalidated), generation)
+                        onEvent(.postureIndicators(indicators(from: invalidated)), generation)
+                    }
+                }
+                handleFaceVisibility(face.polylines.isEmpty ? nil : capturedAt)
                 if face.polylines.isEmpty { clearFaceOverlay() }
             } catch {
                 faceDuration = ProcessInfo.processInfo.systemUptime - start
                 latestFaceDetection = .empty
+                latestUpperBodyFaceROI = nil
+                if let faceContext = PostureFramingContext(
+                    pixelWidth: CVPixelBufferGetWidth(pixelBuffer),
+                    pixelHeight: CVPixelBufferGetHeight(pixelBuffer),
+                    cameraID: cameraIdentifier,
+                    revision: "rtmpose-v1"
+                ) {
+                    preparePostureRuntime(for: faceContext)
+                    let invalidated = postureRuntimeCoordinator.invalidateFace(
+                        sampleID: faceObservationSampleID,
+                        capturedAt: capturedAt,
+                        now: ProcessInfo.processInfo.systemUptime
+                    )
+                    onEvent(.postureObservations(invalidated), generation)
+                    onEvent(.postureIndicators(indicators(from: invalidated)), generation)
+                }
                 handleFaceVisibility(nil, at: uptime)
                 lastVisionError = "Visage : \(error.localizedDescription)"
                 clearFaceOverlay()
@@ -1291,7 +1761,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         let fusedOverlay = combinedOverlay()
         if analysisCadence.presentation.publishesVisualUpdates {
             switch unit {
-            case .blazePose:
+            case .upperBody:
                 break
             case .face:
                 if !latestFaceDetection.polylines.isEmpty { publishFreshOverlay(fusedOverlay, at: uptime) }
@@ -1339,15 +1809,53 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         }
     }
 
+    private func monotonicCaptureTime(
+        for sampleBuffer: CMSampleBuffer,
+        fallback uptime: TimeInterval
+    ) -> TimeInterval {
+        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        let seconds = CMTimeGetSeconds(pts)
+        let candidate: TimeInterval
+        if seconds.isFinite, seconds >= 0 {
+            if let captureClockOffset {
+                let adjusted = seconds + captureClockOffset
+                // CMSampleBuffer timestamps are not guaranteed to share the
+                // ProcessInfo uptime clock. Rebase when a restart/timebase
+                // jump would make the frame appear future or older than the
+                // admission TTL; the callback uptime remains monotonic.
+                if adjusted.isFinite,
+                   adjusted >= uptime - UpperBodyEngineSession.defaultMaximumAge,
+                   adjusted <= uptime + 0.05 {
+                    candidate = adjusted
+                } else {
+                    self.captureClockOffset = uptime - seconds
+                    candidate = uptime
+                }
+            } else {
+                captureClockOffset = uptime - seconds
+                candidate = uptime
+            }
+        } else {
+            candidate = uptime
+        }
+
+        // Preserve non-decreasing capture timestamps even when a camera
+        // driver emits equal or slightly regressing PTS values. Equal values
+        // remain admissible because the sample ID is strictly increasing.
+        let monotonic = min(uptime, max(candidate, lastCaptureTimestamp ?? candidate))
+        lastCaptureTimestamp = monotonic
+        return monotonic
+    }
+
     private func combinedOverlay() -> PoseOverlay {
         let bodyPoints = bodyOverlayAvailableUntil.map { ProcessInfo.processInfo.systemUptime < $0 } == true
             ? (latestBodyDetection?.points ?? [])
             : []
         return PoseOverlay(
-            points: bodyPoints + latestBlazePoseOverlay.points,
+            points: bodyPoints + latestUpperBodyOverlay.points,
             polylines: latestFaceDetection.polylines
                 + latestSilhouetteOverlay.polylines
-                + latestBlazePoseOverlay.polylines
+                + latestUpperBodyOverlay.polylines
         )
     }
 
@@ -1399,8 +1907,18 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     private func nextVisionUnit(at uptime: TimeInterval) -> VisionAnalysisUnit? {
         let presentation = analysisCadence.presentation
         let candidates: [VisionAnalysisCandidate] = [
-            blazePoseCadence.isDue(at: uptime)
-                ? VisionAnalysisCandidate(unit: .blazePose, overdue: blazePoseCadence.overdue(at: uptime), priority: 4)
+            (presentation.runsNormalUpperBodyEngine && upperBodyCadence.isDue(
+                at: uptime,
+                interval: presentation.upperBodyInterval
+            ))
+                ? VisionAnalysisCandidate(
+                    unit: .upperBody,
+                    overdue: upperBodyCadence.overdue(
+                        at: uptime,
+                        interval: presentation.upperBodyInterval
+                    ),
+                    priority: 4
+                )
                 : nil,
             analysisCadence.isDue(at: uptime)
                 ? VisionAnalysisCandidate(unit: .face, overdue: analysisCadence.lastAnalysisUptime == nil ? 1 : analysisCadence.overdue(at: uptime), priority: 3)
@@ -1418,40 +1936,151 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         return VisionAnalysisSelector.select(candidates)
     }
 
-    private func scheduleBlazePoseExpiration(at uptime: TimeInterval) {
-        blazePoseExpirationWorkItem?.cancel()
+    private func scheduleUpperBodyExpiration(
+        for result: UpperBodyResult,
+        at uptime: TimeInterval
+    ) {
+        upperBodyExpirationWorkItem?.cancel()
+        postureObservationExpirationWorkItem?.cancel()
+        guard let delay = upperBodySession.expirationDelay(
+            for: result, at: uptime
+        ) else { return }
         let scheduledGeneration = generation
         let workItem = DispatchWorkItem { [weak self] in
             guard let self,
                   self.isActive,
                   self.generation == scheduledGeneration else { return }
             let now = ProcessInfo.processInfo.systemUptime
-            guard self.blazePoseFreshness.shouldExpire(
+            let expired = self.upperBodySession.expire(
                 at: now,
-                generation: scheduledGeneration.activationID
-            ) else { return }
-            self.clearBlazePose(state: .lost)
+                generation: UInt64(scheduledGeneration.activationID)
+            )
+            if let expired {
+                self.onEvent(.upperBodyDevelopmentSummary(
+                    DevelopmentUpperBodyOverlayBuilder.summary(for: expired, at: now)
+                ), scheduledGeneration)
+            }
+            self.upperBodyLastStatus = UpperBodyEngineState.expired.rawValue
+            self.upperBodyValidLandmarks = 0
+            self.upperBodyLeftShoulderScore = nil
+            self.upperBodyRightShoulderScore = nil
+            self.upperBodySimCCMinimum = nil
+            self.upperBodySimCCMaximum = nil
+            self.upperBodyScoreMinimum = nil
+            self.upperBodyScoreMaximum = nil
+            // L'overlay a une durée de vie plus courte que l'observation de
+            // posture (1,2 s contre 2 s). Sa disparition ne doit donc pas
+            // effacer une mesure encore fraîche ni casser son historique.
+            self.clearUpperBody(
+                state: .lost,
+                publishesDevelopmentSummary: false,
+                invalidatesPosture: false
+            )
+            self.publishDiagnosticsIfNeeded()
         }
-        blazePoseExpirationWorkItem = workItem
+        upperBodyExpirationWorkItem = workItem
         sampleQueue.asyncAfter(
-            deadline: .now() + BlazePoseOverlayFreshness.maxAge,
+            deadline: .now() + delay,
             execute: workItem
+        )
+
+        let postureDelay = max(
+            0,
+            PostureObservationEngine.richConfiguration.ttl - (uptime - result.capturedAt)
+        ) + 0.01
+        let postureWorkItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.isActive,
+                  self.generation == scheduledGeneration else { return }
+            let expired = self.postureRuntimeCoordinator.expire(
+                now: ProcessInfo.processInfo.systemUptime
+            )
+            self.onEvent(.postureObservations(expired), scheduledGeneration)
+            self.onEvent(.postureIndicators(
+                self.indicators(from: expired)
+            ), scheduledGeneration)
+        }
+        postureObservationExpirationWorkItem = postureWorkItem
+        sampleQueue.asyncAfter(
+            deadline: .now() + postureDelay,
+            execute: postureWorkItem
         )
     }
 
-    private func clearBlazePose(
-        state: BlazePoseLiveState,
-        publishesState: Bool = true
+    private func clearUpperBody(
+        state: ShoulderTrackingState,
+        publishesState: Bool = true,
+        publishesDevelopmentSummary: Bool = true,
+        invalidatesPosture: Bool = true
     ) {
-        blazePoseExpirationWorkItem?.cancel()
-        blazePoseExpirationWorkItem = nil
-        blazePoseFreshness.clear()
-        latestBlazePoseOverlay = .empty
-        blazePoseEngine.resetTracking()
-        if publishesState { onEvent(.blazePoseState(state), generation) }
-        if analysisCadence.presentation.publishesVisualUpdates {
+        upperBodyExpirationWorkItem?.cancel()
+        upperBodyExpirationWorkItem = nil
+        if invalidatesPosture {
+            postureObservationExpirationWorkItem?.cancel()
+            postureObservationExpirationWorkItem = nil
+        }
+        latestUpperBodyOverlay = .empty
+        latestPostureGeometry = nil
+        let now = ProcessInfo.processInfo.systemUptime
+        let runtimeInvalidation = invalidatesPosture
+            ? postureRuntimeCoordinator.invalidateBody(at: now, reason: "corps indisponible")
+            : nil
+        let observationSnapshot = runtimeInvalidation?.snapshot ??
+            postureRuntimeCoordinator.expire(now: now)
+        if let evaluation = runtimeInvalidation?.evaluation {
+            onEvent(.postureRichEvaluation(evaluation), generation)
+        }
+        onEvent(.postureObservations(observationSnapshot), generation)
+        onEvent(.postureIndicators(indicators(from: observationSnapshot)), generation)
+        if publishesState {
+            onEvent(.upperBodyPresentation(combinedOverlay(), state), generation)
+        }
+        if publishesDevelopmentSummary {
+            let summary = state == .technicalError ? "Erreur technique du moteur" : "Torse · perdu"
+            onEvent(.upperBodyDevelopmentSummary(summary), generation)
+        }
+        if !publishesState && analysisCadence.presentation.publishesVisualUpdates {
             onEvent(.overlay(combinedOverlay()), generation)
         }
+    }
+
+    private func shoulderState(
+        for result: UpperBodyResult,
+        at uptime: TimeInterval
+    ) -> ShoulderTrackingState {
+        guard result.isRenderable(
+            at: uptime,
+            maximumAge: UpperBodyEngineSession.defaultMaximumAge
+        ) else { return .lost }
+        let shoulderCount = [
+            result.point(.leftShoulder), result.point(.rightShoulder)
+        ].compactMap { $0 }.count
+        switch shoulderCount {
+        case 2 where result.hasCoherentShoulders: return .detected
+        case 1...: return .partial
+        default: return .lost
+        }
+    }
+
+    private func publishCurrentUpperBodyPresentation(at uptime: TimeInterval) {
+        guard let result = upperBodySession.currentResult,
+              result.isRenderable(
+                at: uptime,
+                maximumAge: UpperBodyEngineSession.defaultMaximumAge
+              ) else {
+            clearUpperBody(state: .lost)
+            return
+        }
+        latestUpperBodyOverlay = upperBodyDevelopmentVisualizationEnabled
+            ? DevelopmentUpperBodyOverlayBuilder.make(
+                from: result,
+                at: uptime,
+                options: upperBodyDevelopmentOptions
+            )
+            : ProductUpperBodyOverlayBuilder.make(from: result, at: uptime)
+        onEvent(.upperBodyPresentation(
+            combinedOverlay(), shoulderState(for: result, at: uptime)
+        ), generation)
     }
 
     private func faceAnchor(from face: FaceDetectionOutput) -> PersonSegmentationFaceAnchor? {
@@ -1472,6 +2101,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         silhouetteCadence.reset()
         clearSilhouetteOverlay()
         segmentationState = .notRequested
+        latestUpperBodyFaceROI = nil
         faceInvisibleSince = now
     }
 
@@ -1495,6 +2125,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                 generation: scheduledGeneration.activationID
             ) {
                 self.latestFaceDetection = .empty
+                self.latestUpperBodyFaceROI = nil
                 let overlay = self.combinedOverlay()
                 self.onEvent(.overlay(overlay), scheduledGeneration)
                 self.onEvent(.benchmarkOverlayVisibility(!overlay.isEmpty, uptime), scheduledGeneration)
@@ -1516,6 +2147,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         silhouetteExpirationWorkItem?.cancel()
         silhouetteExpirationWorkItem = nil
         latestFaceDetection = .empty
+        latestUpperBodyFaceROI = nil
         latestSilhouetteOverlay = .empty
         onEvent(.overlay(.empty), generation)
         onEvent(.benchmarkOverlayVisibility(
@@ -1529,6 +2161,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         overlayExpirationWorkItem = nil
         overlayFreshness.recordMiss()
         latestFaceDetection = .empty
+        latestUpperBodyFaceROI = nil
         onEvent(.overlay(combinedOverlay()), generation)
         onEvent(.benchmarkOverlayVisibility(!combinedOverlay().isEmpty, ProcessInfo.processInfo.systemUptime), generation)
     }
@@ -1578,6 +2211,11 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     private func publishDiagnosticsIfNeeded() {
         guard analysisCadence.presentation.publishesVisualUpdates else { return }
         let inference = lastInferenceDiagnostics
+        let now = ProcessInfo.processInfo.systemUptime
+        let upperBodyResultAge: TimeInterval? = upperBodyResultCapturedAt.flatMap { capturedAt in
+            guard capturedAt.isFinite, now >= capturedAt else { return nil }
+            return now - capturedAt
+        }
         onEvent(.diagnostics(CameraAnalysisDiagnostics(
             frameCallbacks: frameCallbacks,
             analyses: analyses,
@@ -1589,6 +2227,24 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             facesWithLandmarks: inference?.facesWithLandmarksCount ?? 0,
             facePoints: inference?.facePointCount ?? 0,
             bodyResults: inference?.bodyResultCount ?? 0,
+            upperBodyEngineID: upperBodySession.descriptor.id,
+            upperBodyAttempts: upperBodyAttempts,
+            upperBodyResults: upperBodyResults,
+            upperBodyLastStatus: upperBodyLastStatus,
+            upperBodyLastRejectionReason: upperBodyLastRejectionReason,
+            upperBodyRejected: Int(upperBodySession.admissionDiagnostics.rejected),
+            upperBodyEngineRuns: Int(upperBodySession.admissionDiagnostics.engineRuns),
+            upperBodyEngineDurationP95: upperBodySession.admissionDiagnostics.engineDurationP95,
+            upperBodyEngineDurationMax: upperBodySession.admissionDiagnostics.engineDurationMax,
+            upperBodyValidLandmarks: upperBodyValidLandmarks,
+            upperBodyLeftShoulderScore: upperBodyLeftShoulderScore,
+            upperBodyRightShoulderScore: upperBodyRightShoulderScore,
+            upperBodySimCCMinimum: upperBodySimCCMinimum,
+            upperBodySimCCMaximum: upperBodySimCCMaximum,
+            upperBodyScoreMinimum: upperBodyScoreMinimum,
+            upperBodyScoreMaximum: upperBodyScoreMaximum,
+            upperBodyLatency: upperBodyLatency,
+            upperBodyResultAge: upperBodyResultAge,
             upperBodyLandmarks: lastUpperBodyLandmarks,
             upperBodyROISpike: upperBodyROISpike,
             segmentationAttempts: segmentationAttempts,
@@ -1603,6 +2259,77 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             segmentationState: segmentationState,
             lastVisionError: lastVisionError
         )), generation)
+    }
+
+    private func indicators(from snapshot: PostureObservationsSnapshot) -> PostureIndicatorsSnapshot {
+        func result(_ id: PostureIndicatorID, _ signalID: PostureObservationSignalID?) -> PostureIndicatorResult {
+            guard let signalID else { return .unavailable(id) }
+            let signal = snapshot.signal(signalID)
+            let state: PostureIndicatorState
+            if postureRuntimeCoordinator.isCalibrationActive {
+                state = .calibrating
+            } else {
+                switch signal.availability {
+            case .needsCalibration: state = .needsCalibration
+            case .calibrating: state = .calibrating
+            case .insufficient: state = .unavailable
+            case .observing: state = .pending
+            case .available: state = signal.assessment == .attention ? .attention : .normal
+                }
+            }
+            let quality: PostureSignalQuality = switch signal.quality {
+            case .good: .good
+            case .limited: .limited
+            case .unavailable: .unavailable
+            }
+            let hasValidBaseline = switch signal.availability {
+            case .needsCalibration, .calibrating: false
+            case .insufficient, .observing, .available: true
+            }
+            return .init(
+                id: id,
+                state: state,
+                count: nil,
+                observedAt: signal.observedAt,
+                quality: quality,
+                hasValidBaseline: hasValidBaseline,
+                isExperimental: id == .estimatedBlinks || id == .shoulderSlope ||
+                    id == .closedShoulders,
+                freshnessTTL: PostureObservationEngine.freshnessTTL(for: signalID)
+            )
+        }
+        let mapped: [PostureIndicatorResult] = [
+            result(.apparentProximity, .proximity),
+            result(.torsoInclination, .torsoInclination),
+            result(.raisedShoulders, .raisedShoulders),
+            result(.shoulderSlope, .shoulderSlope),
+            result(.estimatedBlinks, .estimatedBlinks),
+            result(.closedShoulders, .closedShoulders)
+        ]
+        return .init(generation: snapshot.generation, producedAt: snapshot.producedAt,
+                     isCalibrating: postureRuntimeCoordinator.isCalibrationActive,
+                     indicators: mapped)
+    }
+
+    private func preparePostureRuntime(for context: PostureFramingContext) {
+        guard postureRuntimeContextKey != context.key ||
+                postureRuntimeCoordinator.generation != UInt64(generation.activationID) else {
+            return
+        }
+        postureRuntimeContextKey = context.key
+        postureRuntimeCoordinator.reset(
+            generation: UInt64(generation.activationID),
+            contextKey: context.key,
+            preserveCalibration: postureRuntimeCoordinator.isCalibrationActive
+        )
+        if !postureRuntimeCoordinator.isCalibrationActive,
+           let persistedRichBaseline {
+            postureRuntimeCoordinator.restoreBaseline(
+                persistedRichBaseline,
+                for: UInt64(generation.activationID),
+                contextKey: context.key
+            )
+        }
     }
 
     private func recordSegmentationDuration(_ duration: TimeInterval) {

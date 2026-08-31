@@ -1,0 +1,191 @@
+import CoreGraphics
+import Foundation
+
+@main
+private enum PostureRuntimeCoordinatorHarness {
+    static func main() {
+        var coordinator = PostureRuntimeCoordinator()
+        let context = PostureFramingContext(pixelWidth: 1280, pixelHeight: 720, cameraID: "camera-a")!
+        let otherCameraContext = PostureFramingContext(pixelWidth: 1280, pixelHeight: 720, cameraID: "camera-b")!
+        precondition(context.stableContextKey != otherCameraContext.stableContextKey,
+                     "deux caméras de même format doivent avoir des contextes distincts")
+        coordinator.reset(generation: 7, contextKey: context.key)
+        let duplicate = coordinator.consume(geometry: nil, face: nil, baseline: nil, now: 1)
+        precondition(duplicate == nil, "une entrée sans identité doit rester inactive")
+        let descriptor = UpperBodyEngineDescriptor(id: "harness", displayName: "Harness", version: "1", runtime: "test")
+        func point(_ id: UpperBodyLandmarkID, _ x: CGFloat, _ y: CGFloat) -> UpperBodyPoint {
+            .init(id: id, location: .init(x: x, y: y), confidence: 0.95, quality: .good, provenance: .observed)
+        }
+        let points: [UpperBodyPoint] = [
+            point(.nose, 0.5, 0.2), point(.leftEar, 0.44, 0.22), point(.rightEar, 0.56, 0.22),
+            point(.neck, 0.5, 0.36), point(.leftShoulder, 0.35, 0.5), point(.rightShoulder, 0.65, 0.5),
+            point(.leftHip, 0.4, 0.8), point(.rightHip, 0.6, 0.8)
+        ]
+        let preCalibrationBody = UpperBodyResult(descriptor: descriptor, state: .detected, generation: 7,
+                                                 sampleID: 1, capturedAt: 1.1, producedAt: 1.11,
+                                                 points: points, contours: [])
+        let preCalibrationGeometry = PostureRichGeometryEvaluator.make(result: preCalibrationBody, face: nil, context: context)
+        let preCalibration = coordinator.consume(geometry: preCalibrationGeometry, face: nil, baseline: nil, now: 1.11)
+        precondition(preCalibration?.snapshot.signal(.torsoInclination).quality != .good,
+                     "aucune baseline riche ne doit se construire sans clic explicite")
+        coordinator.reset(generation: 7, contextKey: context.key)
+        coordinator.beginCalibration()
+        var lastSnapshot: PostureObservationsSnapshot?
+        var firstBodySnapshot: PostureObservationsSnapshot?
+        var firstInterleavedFaceSnapshot: PostureObservationsSnapshot?
+        for sample in 1...12 {
+            let body = UpperBodyResult(descriptor: descriptor, state: .detected, generation: 7,
+                                       sampleID: UInt64(sample), capturedAt: 1 + Double(sample) * 0.1,
+                                       producedAt: 1.01 + Double(sample) * 0.1,
+                                       points: points, contours: [])
+            let face = PostureFaceObservation(
+                generation: 7, sampleID: UInt64(sample), capturedAt: body.capturedAt,
+                facePointCount: 50, contextKey: context.key,
+                signal: .init(eyeLineRollDegrees: 0, yawProxy: 0, pitchProxy: 0,
+                              interocularDistance: 0.1, faceLength: 0.3,
+                              leftEyeOpeningRatio: 0.3, rightEyeOpeningRatio: 0.3,
+                              innerBrowDistanceRatio: 0.4, faceCenter: .init(x: 0.5, y: 0.3))
+            )
+            let geometry = PostureRichGeometryEvaluator.make(result: body, face: face, context: context)
+            lastSnapshot = coordinator.consume(geometry: geometry, face: face, baseline: nil, now: body.producedAt)?.snapshot
+            if sample == 1 {
+                firstBodySnapshot = lastSnapshot
+            }
+            for tick in 1...3 {
+                let faceTick = PostureFaceObservation(
+                    generation: 7, sampleID: UInt64(sample * 10 + tick),
+                    capturedAt: body.capturedAt + Double(tick) * 0.01,
+                    facePointCount: 50, contextKey: context.key, signal: face.signal
+                )
+                lastSnapshot = coordinator.consume(geometry: geometry, face: faceTick, baseline: nil,
+                                                   now: faceTick.capturedAt + 0.01)?.snapshot
+                if sample == 1, tick == 1 {
+                    firstInterleavedFaceSnapshot = lastSnapshot
+                }
+            }
+        }
+        if let firstBodySnapshot, let firstInterleavedFaceSnapshot {
+            precondition(
+                firstInterleavedFaceSnapshot.signal(.torsoInclination).availability ==
+                    firstBodySnapshot.signal(.torsoInclination).availability,
+                "un tick visage intercalé ne doit pas réinitialiser l'état corporel"
+            )
+            precondition(
+                firstInterleavedFaceSnapshot.signal(.raisedShoulders).availability ==
+                    firstBodySnapshot.signal(.raisedShoulders).availability,
+                "un tick visage intercalé ne doit pas réinitialiser les épaules"
+            )
+        } else {
+            preconditionFailure("le scénario intercalé doit publier ses deux snapshots")
+        }
+        precondition(lastSnapshot?.signal(.torsoInclination).quality == .good,
+                     "douze corps uniques doivent figer une baseline exploitable")
+        precondition(coordinator.finishCalibration(), "la session explicite doit produire une baseline")
+        let savedBaseline = coordinator.baselineSnapshot
+        var resumed = PostureRuntimeCoordinator()
+        resumed.reset(generation: 8, contextKey: context.key)
+        if let savedBaseline {
+            resumed.restoreBaseline(savedBaseline, for: 8, contextKey: context.key)
+        }
+        let resumedBody = UpperBodyResult(descriptor: descriptor, state: .detected, generation: 8,
+                                          sampleID: 1, capturedAt: 10, producedAt: 10.01,
+                                          points: points, contours: [])
+        let resumedGeometry = PostureRichGeometryEvaluator.make(result: resumedBody, face: nil, context: context)
+        precondition(resumed.consume(geometry: resumedGeometry, face: nil, baseline: nil, now: 10.01)?
+            .snapshot.signal(.torsoInclination).quality == .good,
+            "une baseline valide doit survivre à une nouvelle activation du même contexte")
+        let duplicateBody = UpperBodyResult(descriptor: descriptor, state: .detected, generation: 7,
+                                            sampleID: 1, capturedAt: 1, producedAt: 1.01,
+                                            points: points, contours: [])
+        let duplicateGeometry = PostureRichGeometryEvaluator.make(result: duplicateBody, face: nil, context: context)
+        precondition(coordinator.consume(geometry: duplicateGeometry, face: nil, baseline: nil, now: 3) == nil,
+                     "un échantillon corps ancien ne doit pas revenir")
+        let mismatchedFace = PostureFaceObservation(
+            generation: 7, sampleID: 999, capturedAt: 3.1, facePointCount: 50,
+            contextKey: "camera-other", signal: faceAfterLossSignal()
+        )
+        precondition(coordinator.consume(geometry: duplicateGeometry, face: mismatchedFace,
+                                         baseline: nil, now: 3.2) == nil,
+                     "des contextes visage/corps différents ne doivent jamais être fusionnés")
+        coordinator.reset(generation: 8, contextKey: "camera-v2")
+        precondition(coordinator.consume(geometry: nil, face: nil, baseline: nil, now: 2) == nil,
+                     "un contexte sans source ne doit rien publier")
+
+        // Les cadences source-specifices ne doivent pas se bloquer entre
+        // elles : un visage d'un nouveau contexte peut continuer ses signaux
+        // propres, tandis que le corps de l'ancien contexte n'est jamais
+        // fusionné avec lui.
+        var sourceCoordinator = PostureRuntimeCoordinator()
+        sourceCoordinator.reset(generation: 9, contextKey: context.key)
+        let bodyA = UpperBodyResult(descriptor: descriptor, state: .detected, generation: 9,
+                                    sampleID: 1, capturedAt: 1, producedAt: 1.01,
+                                    points: points, contours: [])
+        _ = sourceCoordinator.consumeBody(
+            PostureRichGeometryEvaluator.make(result: bodyA, face: nil, context: context),
+            now: 1.01
+        )
+        let faceB = PostureFaceObservation(
+            generation: 9, sampleID: 1, capturedAt: 1.1, facePointCount: 50,
+            contextKey: "camera-other", signal: faceAfterLossSignal()
+        )
+        precondition(sourceCoordinator.consumeFace(faceB, now: 1.11) != nil,
+                     "un tick visage source-specific reste exploitable après changement de contexte")
+
+        var sourceCalibration = PostureRuntimeCoordinator()
+        sourceCalibration.reset(generation: 10, contextKey: context.key)
+        sourceCalibration.beginCalibration()
+        for sample in 1...12 {
+            let body = UpperBodyResult(descriptor: descriptor, state: .detected, generation: 10,
+                                       sampleID: UInt64(sample), capturedAt: Double(sample),
+                                       producedAt: Double(sample) + 0.01,
+                                       points: points, contours: [])
+            let geometry = PostureRichGeometryEvaluator.make(result: body, face: nil, context: context)
+            _ = sourceCalibration.consumeBody(geometry, now: body.producedAt)
+        }
+        precondition(sourceCalibration.finishCalibration(),
+                     "la calibration doit être alimentée par le chemin source-specific corps")
+
+        // A no-person/error invalidation must be a hard barrier: a subsequent
+        // 10 Hz face tick cannot resurrect the previous body's torso/shoulder
+        // evidence or advance an alertable body signal.
+        let cleared = coordinator.invalidate(at: 3)
+        precondition(cleared.signal(.torsoInclination).availability == .insufficient,
+                     "invalidate doit vider le torse immédiatement")
+        precondition(cleared.signal(.raisedShoulders).availability == .insufficient,
+                     "invalidate doit vider les épaules immédiatement")
+        let faceAfterLoss = PostureFaceObservation(
+            generation: 8, sampleID: 900, capturedAt: 3.1,
+            facePointCount: 50, contextKey: "camera-v2", signal: .init(
+                eyeLineRollDegrees: 0, yawProxy: 0, pitchProxy: 0,
+                interocularDistance: 0.1, faceLength: 0.3,
+                leftEyeOpeningRatio: 0.3, rightEyeOpeningRatio: 0.3,
+                innerBrowDistanceRatio: 0.4, faceCenter: .init(x: 0.5, y: 0.3)))
+        let afterLoss = coordinator.consume(geometry: nil, face: faceAfterLoss,
+                                            baseline: nil, now: 3.11)
+        precondition(afterLoss?.snapshot.signal(.torsoInclination).availability != .available,
+                     "un tick visage ne doit pas réinjecter un torse stale")
+        precondition(afterLoss?.snapshot.signal(.raisedShoulders).availability != .available,
+                     "un tick visage ne doit pas réinjecter des épaules stale")
+        precondition(afterLoss?.snapshot.signal(.torsoInclination).assessment == nil,
+                     "aucune alerte corporelle après noPerson")
+        var alerts = PostureAlertCoordinator(
+            signalConfigurations: Dictionary(uniqueKeysWithValues:
+                PostureObservationSignalID.allCases.map {
+                    ($0, .init(persistence: 1, recovery: 1, cooldown: 1, dailyMaximum: 2))
+                }),
+            globalConfiguration: .normal
+        )
+        if let afterLoss {
+            precondition(alerts.consume(afterLoss.snapshot, now: 3.2) == nil,
+                         "noPerson suivi d’un tick visage ne doit produire aucune alerte")
+        }
+        print("PostureRuntimeCoordinatorHarness: OK")
+    }
+
+    private static func faceAfterLossSignal() -> FaceGeometrySignal {
+        .init(eyeLineRollDegrees: 0, yawProxy: 0, pitchProxy: 0,
+              interocularDistance: 0.1, faceLength: 0.3,
+              leftEyeOpeningRatio: 0.3, rightEyeOpeningRatio: 0.3,
+              innerBrowDistanceRatio: 0.4, faceCenter: .init(x: 0.5, y: 0.3))
+    }
+}

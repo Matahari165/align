@@ -5,13 +5,19 @@ import SwiftUI
 struct CameraPreviewView: NSViewRepresentable {
     let session: AVCaptureSession
     let overlay: PoseOverlay
+    let diagnosticsEnabled: Bool
+    let upperBodyDevelopmentOptions: UpperBodyDevelopmentOptions
 
     func makeNSView(context: Context) -> CameraPreviewNSView {
         CameraPreviewNSView(session: session)
     }
 
     func updateNSView(_ nsView: CameraPreviewNSView, context: Context) {
-        nsView.update(overlay: overlay)
+        nsView.update(
+            overlay: overlay,
+            diagnosticsEnabled: diagnosticsEnabled,
+            upperBodyDevelopmentOptions: upperBodyDevelopmentOptions
+        )
     }
 }
 
@@ -23,9 +29,29 @@ final class CameraPreviewNSView: NSView {
     private let bodyShapeLayer = CAShapeLayer()
     private let silhouetteShapeLayer = CAShapeLayer()
     private let blazePoseShapeLayer = CAShapeLayer()
+    private let upperBodyHeadShapeLayer = CAShapeLayer()
+    private let upperBodyHeadLimitedShapeLayer = CAShapeLayer()
+    private let upperBodyShoulderShapeLayer = CAShapeLayer()
+    private let upperBodyShoulderLimitedShapeLayer = CAShapeLayer()
+    private let upperBodyTorsoShapeLayer = CAShapeLayer()
+    private let upperBodyTorsoLimitedShapeLayer = CAShapeLayer()
+    private let upperBodyDerivedShapeLayer = CAShapeLayer()
+    private let upperBodyROIShapeLayer = CAShapeLayer()
     private var blazePoseLabelLayers: [CATextLayer] = []
 
     init(session: AVCaptureSession) {
+        let alignCopper = NSColor(
+            calibratedRed: 0.76,
+            green: 0.48,
+            blue: 0.29,
+            alpha: 1
+        )
+        let alignIvory = NSColor(
+            calibratedRed: 0.95,
+            green: 0.93,
+            blue: 0.87,
+            alpha: 1
+        )
         previewLayer = AVCaptureVideoPreviewLayer(session: session)
         super.init(frame: .zero)
 
@@ -41,8 +67,8 @@ final class CameraPreviewNSView: NSView {
         faceShapeLayer.lineWidth = 1.5
         faceShapeLayer.lineJoin = .round
         faceShapeLayer.lineCap = .round
-        bodyShapeLayer.fillColor = NSColor.systemGreen.cgColor
-        bodyShapeLayer.strokeColor = NSColor.white.withAlphaComponent(0.8).cgColor
+        bodyShapeLayer.fillColor = alignCopper.cgColor
+        bodyShapeLayer.strokeColor = alignIvory.withAlphaComponent(0.84).cgColor
         bodyShapeLayer.lineWidth = 1
         silhouetteShapeLayer.fillColor = NSColor.clear.cgColor
         silhouetteShapeLayer.strokeColor = NSColor.systemPink.cgColor
@@ -50,14 +76,33 @@ final class CameraPreviewNSView: NSView {
         silhouetteShapeLayer.lineDashPattern = [6, 4]
         silhouetteShapeLayer.lineJoin = .round
         silhouetteShapeLayer.lineCap = .round
-        blazePoseShapeLayer.fillColor = NSColor.systemYellow.cgColor
-        blazePoseShapeLayer.strokeColor = NSColor.systemYellow.cgColor
+        blazePoseShapeLayer.fillColor = alignCopper.cgColor
+        blazePoseShapeLayer.strokeColor = alignCopper.cgColor
         blazePoseShapeLayer.lineWidth = 3
         blazePoseShapeLayer.lineCap = .round
+        configureDevelopmentLayer(upperBodyHeadShapeLayer, color: .systemCyan, lineWidth: 2)
+        configureLimitedLayer(upperBodyHeadLimitedShapeLayer, color: .systemCyan)
+        configureDevelopmentLayer(upperBodyShoulderShapeLayer, color: alignCopper, lineWidth: 2)
+        configureLimitedLayer(upperBodyShoulderLimitedShapeLayer, color: alignCopper)
+        configureDevelopmentLayer(upperBodyTorsoShapeLayer, color: alignIvory, lineWidth: 1.5)
+        configureLimitedLayer(upperBodyTorsoLimitedShapeLayer, color: alignIvory)
+        configureDevelopmentLayer(upperBodyDerivedShapeLayer, color: .systemPurple, lineWidth: 2)
+        upperBodyDerivedShapeLayer.lineDashPattern = [6, 4]
+        configureDevelopmentLayer(upperBodyROIShapeLayer, color: .lightGray, lineWidth: 1)
+        upperBodyROIShapeLayer.fillColor = NSColor.clear.cgColor
+        upperBodyROIShapeLayer.lineDashPattern = [2, 3]
         jointLayer.addSublayer(faceShapeLayer)
         jointLayer.addSublayer(bodyShapeLayer)
         jointLayer.addSublayer(silhouetteShapeLayer)
         jointLayer.addSublayer(blazePoseShapeLayer)
+        jointLayer.addSublayer(upperBodyHeadShapeLayer)
+        jointLayer.addSublayer(upperBodyHeadLimitedShapeLayer)
+        jointLayer.addSublayer(upperBodyShoulderShapeLayer)
+        jointLayer.addSublayer(upperBodyShoulderLimitedShapeLayer)
+        jointLayer.addSublayer(upperBodyTorsoShapeLayer)
+        jointLayer.addSublayer(upperBodyTorsoLimitedShapeLayer)
+        jointLayer.addSublayer(upperBodyDerivedShapeLayer)
+        jointLayer.addSublayer(upperBodyROIShapeLayer)
         mirroredContentLayer.addSublayer(previewLayer)
         mirroredContentLayer.addSublayer(jointLayer)
         layer?.addSublayer(mirroredContentLayer)
@@ -78,13 +123,25 @@ final class CameraPreviewNSView: NSView {
         bodyShapeLayer.frame = mirroredContentLayer.bounds
         silhouetteShapeLayer.frame = mirroredContentLayer.bounds
         blazePoseShapeLayer.frame = mirroredContentLayer.bounds
+        upperBodyHeadShapeLayer.frame = mirroredContentLayer.bounds
+        upperBodyHeadLimitedShapeLayer.frame = mirroredContentLayer.bounds
+        upperBodyShoulderShapeLayer.frame = mirroredContentLayer.bounds
+        upperBodyShoulderLimitedShapeLayer.frame = mirroredContentLayer.bounds
+        upperBodyTorsoShapeLayer.frame = mirroredContentLayer.bounds
+        upperBodyTorsoLimitedShapeLayer.frame = mirroredContentLayer.bounds
+        upperBodyDerivedShapeLayer.frame = mirroredContentLayer.bounds
+        upperBodyROIShapeLayer.frame = mirroredContentLayer.bounds
         mirroredContentLayer.setAffineTransform(
             PreviewMirrorTransform.layerTransform(width: bounds.width)
         )
         configureUnmirroredPreviewConnection()
     }
 
-    func update(overlay: PoseOverlay) {
+    func update(
+        overlay: PoseOverlay,
+        diagnosticsEnabled: Bool,
+        upperBodyDevelopmentOptions: UpperBodyDevelopmentOptions
+    ) {
         // The preview connection may be created only after the capture input is
         // configured. Reassert the single-mirror contract on SwiftUI updates.
         configureUnmirroredPreviewConnection()
@@ -92,8 +149,13 @@ final class CameraPreviewNSView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
+        let renderedOverlay = PoseOverlayRenderSelection.select(
+            overlay,
+            diagnosticsEnabled: diagnosticsEnabled
+        )
+
         let facePath = CGMutablePath()
-        for polyline in overlay.polylines where polyline.source == .face {
+        for polyline in renderedOverlay.polylines where polyline.source == .face {
             let positions = polyline.locations.map { layerPosition(for: $0) }
             guard let first = positions.first else { continue }
             facePath.move(to: first)
@@ -103,7 +165,7 @@ final class CameraPreviewNSView: NSView {
         faceShapeLayer.path = facePath
 
         let bodyPath = CGMutablePath()
-        for point in overlay.points where point.source == .body {
+        for point in renderedOverlay.points where point.source == .body {
             let position = layerPosition(for: point.location)
             bodyPath.addEllipse(in: CGRect(
                 x: position.x - 3,
@@ -115,7 +177,7 @@ final class CameraPreviewNSView: NSView {
         bodyShapeLayer.path = bodyPath
 
         let silhouettePath = CGMutablePath()
-        for polyline in overlay.polylines where polyline.source == .silhouette {
+        for polyline in renderedOverlay.polylines where polyline.source == .silhouette {
             let positions = polyline.locations.map { layerPosition(for: $0) }
             guard let first = positions.first else { continue }
             silhouettePath.move(to: first)
@@ -124,15 +186,19 @@ final class CameraPreviewNSView: NSView {
         silhouetteShapeLayer.path = silhouettePath
 
         let blazePosePath = CGMutablePath()
-        for polyline in overlay.polylines where polyline.source == .blazePose {
+        for polyline in renderedOverlay.polylines where
+                polyline.source == .blazePose ||
+                (!diagnosticsEnabled && polyline.source == .upperBodyShoulders) {
             let positions = polyline.locations.map { layerPosition(for: $0) }
             guard let first = positions.first else { continue }
             blazePosePath.move(to: first)
             positions.dropFirst().forEach { blazePosePath.addLine(to: $0) }
         }
-        for point in overlay.points where point.source == .blazePose {
+        for point in renderedOverlay.points where
+                point.source == .blazePose ||
+                (!diagnosticsEnabled && point.source == .upperBodyShoulders) {
             let position = layerPosition(for: point.location)
-            let radius: CGFloat = point.name == "CENTRE ESTIMÉ" ? 4 : 6
+            let radius: CGFloat = 6
             blazePosePath.addEllipse(in: CGRect(
                 x: position.x - radius,
                 y: position.y - radius,
@@ -141,15 +207,107 @@ final class CameraPreviewNSView: NSView {
             ))
         }
         blazePoseShapeLayer.path = blazePosePath
-        updateBlazePoseLabels(for: overlay)
+        upperBodyHeadShapeLayer.path = developmentPath(
+            overlay: renderedOverlay,
+            source: .upperBodyHead,
+            limitedPoints: false
+        )
+        upperBodyHeadLimitedShapeLayer.path = developmentPath(
+            overlay: renderedOverlay,
+            source: .upperBodyHead,
+            limitedPoints: true
+        )
+        upperBodyShoulderShapeLayer.path = developmentPath(
+            overlay: renderedOverlay,
+            source: .upperBodyShoulders,
+            limitedPoints: false
+        )
+        upperBodyShoulderLimitedShapeLayer.path = developmentPath(
+            overlay: renderedOverlay,
+            source: .upperBodyShoulders,
+            limitedPoints: true
+        )
+        upperBodyTorsoShapeLayer.path = developmentPath(
+            overlay: renderedOverlay,
+            source: .upperBodyTorso,
+            limitedPoints: false
+        )
+        upperBodyTorsoLimitedShapeLayer.path = developmentPath(
+            overlay: renderedOverlay,
+            source: .upperBodyTorso,
+            limitedPoints: true
+        )
+        upperBodyDerivedShapeLayer.path = developmentPath(
+            overlay: renderedOverlay,
+            source: .upperBodyDerived,
+            limitedPoints: false
+        )
+        upperBodyROIShapeLayer.path = developmentPath(
+            overlay: renderedOverlay,
+            source: .upperBodyROI,
+            limitedPoints: false
+        )
+        updateBlazePoseLabels(
+            for: diagnosticsEnabled && upperBodyDevelopmentOptions.showsValues
+                ? renderedOverlay
+                : .empty
+        )
 
         CATransaction.commit()
+    }
+
+    private func configureDevelopmentLayer(
+        _ layer: CAShapeLayer,
+        color: NSColor,
+        lineWidth: CGFloat
+    ) {
+        layer.fillColor = color.cgColor
+        layer.strokeColor = color.cgColor
+        layer.lineWidth = lineWidth
+        layer.lineCap = .round
+        layer.lineJoin = .round
+    }
+
+    private func configureLimitedLayer(_ layer: CAShapeLayer, color: NSColor) {
+        configureDevelopmentLayer(layer, color: color, lineWidth: 2)
+        layer.fillColor = NSColor.clear.cgColor
+    }
+
+    private func developmentPath(
+        overlay: PoseOverlay,
+        source: PosePointSource,
+        limitedPoints: Bool
+    ) -> CGPath {
+        let path = CGMutablePath()
+        if !limitedPoints {
+            for polyline in overlay.polylines where polyline.source == source {
+                let positions = polyline.locations.map { layerPosition(for: $0) }
+                guard let first = positions.first else { continue }
+                path.move(to: first)
+                positions.dropFirst().forEach { path.addLine(to: $0) }
+                if polyline.isClosed { path.closeSubpath() }
+            }
+        }
+        for point in overlay.points where point.source == source && point.isLimited == limitedPoints {
+            let position = layerPosition(for: point.location)
+            let radius: CGFloat = 3
+            path.addEllipse(in: CGRect(
+                x: position.x - radius,
+                y: position.y - radius,
+                width: radius * 2,
+                height: radius * 2
+            ))
+        }
+        return path
     }
 
     private func updateBlazePoseLabels(for overlay: PoseOverlay) {
         blazePoseLabelLayers.forEach { $0.removeFromSuperlayer() }
         blazePoseLabelLayers.removeAll(keepingCapacity: true)
-        for point in overlay.points where point.source == .blazePose {
+        for point in overlay.points where point.source == .blazePose ||
+                point.source == .upperBodyShoulders ||
+                point.source == .upperBodyHead ||
+                point.source == .upperBodyTorso {
             let position = layerPosition(for: point.location)
             let label = CATextLayer()
             label.string = point.name

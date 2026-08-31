@@ -3,11 +3,16 @@ import CoreVideo
 import ImageIO
 import Vision
 
-nonisolated enum PosePointSource: String, Sendable {
+nonisolated enum PosePointSource: String, Hashable, Sendable {
     case face
     case body
     case silhouette
     case blazePose
+    case upperBodyHead
+    case upperBodyShoulders
+    case upperBodyTorso
+    case upperBodyDerived
+    case upperBodyROI
 }
 
 nonisolated struct PosePoint: Identifiable, Sendable {
@@ -15,6 +20,21 @@ nonisolated struct PosePoint: Identifiable, Sendable {
     let location: CGPoint
     let confidence: Float
     let source: PosePointSource
+    let isLimited: Bool
+
+    init(
+        name: String,
+        location: CGPoint,
+        confidence: Float,
+        source: PosePointSource,
+        isLimited: Bool = false
+    ) {
+        self.name = name
+        self.location = location
+        self.confidence = confidence
+        self.source = source
+        self.isLimited = isLimited
+    }
 
     var id: String { "\(source.rawValue).\(name)" }
 }
@@ -47,11 +67,9 @@ nonisolated enum BlazePoseOverlayBuilder {
         leftElbow: PosePoint?, rightElbow: PosePoint?,
         leftHip: PosePoint?, rightHip: PosePoint?
     ) -> PoseOverlay {
-        // Le cadrage proche privilégie les repères réellement susceptibles de
-        // rester visibles. Les hanches restent dans le contrat de mesure mais
-        // ne structurent pas l'overlay principal.
-        var points = [nose, leftEar, rightEar, leftShoulder, rightShoulder,
-                      leftElbow, rightElbow].compactMap { $0 }
+        // Usage normal volontairement minimal : les autres repères restent
+        // disponibles dans le bridge pour diagnostic, jamais affichés ici.
+        let points = [leftShoulder, rightShoulder].compactMap { $0 }
         var lines: [PosePolyline] = []
         func connect(_ name: String, _ first: PosePoint?, _ second: PosePoint?) {
             guard let first, let second else { return }
@@ -59,25 +77,36 @@ nonisolated enum BlazePoseOverlayBuilder {
                                       locations: [first.location, second.location],
                                       source: .blazePose, isClosed: false))
         }
-        connect("visage-gauche", leftEar, nose)
-        connect("visage-droit", nose, rightEar)
-        connect("contour-haut-gauche", leftEar, leftShoulder)
-        connect("contour-haut-droit", rightEar, rightShoulder)
-        connect("épaule-gauche", leftShoulder, leftElbow)
-        connect("ligne-épaules", leftShoulder, rightShoulder)
-        connect("épaule-droite", rightShoulder, rightElbow)
-        if let leftShoulder, let rightShoulder {
-            let center = PosePoint(
-                name: "CENTRE ESTIMÉ",
-                location: CGPoint(x: (leftShoulder.location.x + rightShoulder.location.x) / 2,
-                                  y: (leftShoulder.location.y + rightShoulder.location.y) / 2),
-                confidence: min(leftShoulder.confidence, rightShoulder.confidence),
-                source: .blazePose
-            )
-            points.append(center)
-            connect("axe-tête-épaules", nose, center)
+        if BlazePoseShoulderPairValidator.isCoherent(
+            left: leftShoulder?.location,
+            right: rightShoulder?.location
+        ) {
+            connect("ligne-épaules", leftShoulder, rightShoulder)
         }
         return PoseOverlay(points: points, polylines: lines)
+    }
+}
+
+/// Garde géométrique volontairement permissive : elle élimine uniquement une
+/// paire manifestement dégénérée. Une épaule levée reste un mouvement valide.
+nonisolated enum BlazePoseShoulderPairValidator {
+    static let minimumSeparation: CGFloat = 0.08
+    static let maximumSeparation: CGFloat = 0.90
+
+    static func isCoherent(left: CGPoint?, right: CGPoint?) -> Bool {
+        guard let left, let right,
+              left.x.isFinite, left.y.isFinite,
+              right.x.isFinite, right.y.isFinite,
+              (0...1).contains(left.x), (0...1).contains(left.y),
+              (0...1).contains(right.x), (0...1).contains(right.y) else { return false }
+        let horizontal = abs(right.x - left.x)
+        let vertical = abs(right.y - left.y)
+        let separation = hypot(horizontal, vertical)
+        // La pente n'est pas un critère de validité : une épaule réellement
+        // levée peut produire une forte asymétrie. La paire est rejetée
+        // uniquement si elle est confondue, hors cadre ou invraisemblablement
+        // éloignée dans l'image normalisée.
+        return separation >= minimumSeparation && separation <= maximumSeparation
     }
 }
 

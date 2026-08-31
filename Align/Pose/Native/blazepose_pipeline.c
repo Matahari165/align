@@ -42,8 +42,10 @@ BlazePosePipelineStatus BlazePosePrepareLandmarkInput(
 BlazePosePipelineStatus BlazePoseDecodeUpperBody(
     const float raw_landmarks[195], float pose_score,
     const float heatmap[64 * 64 * 39], BlazePoseRoi roi,
+    size_t image_width, size_t image_height,
     BlazePoseUpperBody *upper_body) {
   if (raw_landmarks == NULL || heatmap == NULL || upper_body == NULL ||
+      image_width == 0 || image_height == 0 ||
       !isfinite(pose_score) || !isfinite(roi.x_center) ||
       !isfinite(roi.y_center) || !isfinite(roi.width) ||
       !isfinite(roi.height) || !isfinite(roi.rotation)) {
@@ -59,15 +61,17 @@ BlazePosePipelineStatus BlazePoseDecodeUpperBody(
   BlazePoseLandmark landmarks[BLAZEPOSE_LANDMARK_COUNT];
   BlazePoseDecodeLandmarks(raw_landmarks, landmarks);
   BlazePoseRefineLandmarksFromHeatmap(landmarks, heatmap, 64, 64, 39);
-  BlazePoseLandmark nose = BlazePoseProjectLandmark(landmarks[0], roi);
-  BlazePoseLandmark left_ear = BlazePoseProjectLandmark(landmarks[7], roi);
-  BlazePoseLandmark right_ear = BlazePoseProjectLandmark(landmarks[8], roi);
-  BlazePoseLandmark left = BlazePoseProjectLandmark(landmarks[11], roi);
-  BlazePoseLandmark right = BlazePoseProjectLandmark(landmarks[12], roi);
-  BlazePoseLandmark left_elbow = BlazePoseProjectLandmark(landmarks[13], roi);
-  BlazePoseLandmark right_elbow = BlazePoseProjectLandmark(landmarks[14], roi);
-  BlazePoseLandmark left_hip = BlazePoseProjectLandmark(landmarks[23], roi);
-  BlazePoseLandmark right_hip = BlazePoseProjectLandmark(landmarks[24], roi);
+  float width = (float)image_width;
+  float height = (float)image_height;
+  BlazePoseLandmark nose = BlazePoseProjectLandmark(landmarks[0], roi, width, height);
+  BlazePoseLandmark left_ear = BlazePoseProjectLandmark(landmarks[7], roi, width, height);
+  BlazePoseLandmark right_ear = BlazePoseProjectLandmark(landmarks[8], roi, width, height);
+  BlazePoseLandmark left = BlazePoseProjectLandmark(landmarks[11], roi, width, height);
+  BlazePoseLandmark right = BlazePoseProjectLandmark(landmarks[12], roi, width, height);
+  BlazePoseLandmark left_elbow = BlazePoseProjectLandmark(landmarks[13], roi, width, height);
+  BlazePoseLandmark right_elbow = BlazePoseProjectLandmark(landmarks[14], roi, width, height);
+  BlazePoseLandmark left_hip = BlazePoseProjectLandmark(landmarks[23], roi, width, height);
+  BlazePoseLandmark right_hip = BlazePoseProjectLandmark(landmarks[24], roi, width, height);
   BlazePoseLandmark neck = {
       .x = (left.x + right.x) * 0.5f,
       .y = (left.y + right.y) * 0.5f,

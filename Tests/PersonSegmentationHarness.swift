@@ -45,6 +45,48 @@ private enum PersonSegmentationHarness {
         let shoulderLine = asymmetric.polylines.first { $0.name == "ligne-épaules" }
         expect(shoulderLine?.locations == [leftShoulder.location, rightShoulder.location],
                "la paire asymétrique gauche/droite doit conserver ordre et coordonnées")
+        let raisedRight = PosePoint(name: "Épaule droite",
+                                    location: CGPoint(x: 0.30, y: 0.80),
+                                    confidence: 0.9, source: .blazePose)
+        let raised = BlazePoseOverlayBuilder.make(
+            nose: nil, leftEar: nil, rightEar: nil,
+            leftShoulder: leftShoulder, rightShoulder: raisedRight,
+            leftElbow: nil, rightElbow: nil, leftHip: nil, rightHip: nil
+        )
+        expect(raised.polylines.count == 1,
+               "une vraie asymétrie verticale supérieure à 45 degrés doit rester valide")
+        let incoherentRight = PosePoint(name: "Épaule droite",
+                                        location: CGPoint(x: 0.181, y: 0.421),
+                                        confidence: 0.9, source: .blazePose)
+        let incoherent = BlazePoseOverlayBuilder.make(
+            nose: nil, leftEar: nil, rightEar: nil,
+            leftShoulder: leftShoulder, rightShoulder: incoherentRight,
+            leftElbow: nil, rightElbow: nil, leftHip: nil, rightHip: nil
+        )
+        expect(incoherent.points.count == 2 && incoherent.polylines.isEmpty,
+               "une paire incohérente conserve les points réels mais ne crée aucune ligne")
+        expect(BlazePoseShoulderPairValidator.isCoherent(
+            left: CGPoint(x: 0.30, y: 0.30), right: CGPoint(x: 0.50, y: 0.498)
+        ), "une pente 0,99 doit être mesurable")
+        expect(BlazePoseShoulderPairValidator.isCoherent(
+            left: CGPoint(x: 0.30, y: 0.30), right: CGPoint(x: 0.50, y: 0.502)
+        ), "une pente 1,01 doit également préserver une vraie épaule levée")
+        expect(BlazePoseShoulderPairValidator.isCoherent(
+            left: CGPoint(x: 0.05, y: 0.50), right: CGPoint(x: 0.95, y: 0.50)
+        ), "un span exactement 0,90 reste mesurable")
+        let beyondSpanLeft = PosePoint(name: "Épaule gauche",
+                                       location: CGPoint(x: 0.045, y: 0.50),
+                                       confidence: 0.9, source: .blazePose)
+        let beyondSpanRight = PosePoint(name: "Épaule droite",
+                                        location: CGPoint(x: 0.955, y: 0.50),
+                                        confidence: 0.9, source: .blazePose)
+        let beyondSpan = BlazePoseOverlayBuilder.make(
+            nose: nil, leftEar: nil, rightEar: nil,
+            leftShoulder: beyondSpanLeft, rightShoulder: beyondSpanRight,
+            leftElbow: nil, rightElbow: nil, leftHip: nil, rightHip: nil
+        )
+        expect(beyondSpan.points.count == 2 && beyondSpan.polylines.isEmpty,
+               "span 0,91 : points détectés conservés, mesure de paire indisponible")
 
         let width = 100
         let height = 100

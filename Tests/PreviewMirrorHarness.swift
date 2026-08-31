@@ -13,6 +13,7 @@ private enum PreviewMirrorHarness {
     }
 
     static func main() {
+        // Marqueur asymétrique exprimé dans le buffer BGRA top-left, non miroir.
         let anatomicalLeft = CGPoint(x: 0.20, y: 0.35)
         let displayed = PreviewMirrorTransform.mirroredNormalizedPoint(anatomicalLeft)
         expect(abs(displayed.x - 0.80) < 0.000_001, "le miroir doit inverser x une seule fois")

@@ -100,6 +100,11 @@ int BlazePoseSelectBestDetection(const float *raw_boxes, const float *logits,
 BlazePoseRoi BlazePoseDetectionToRoi(BlazePoseDetection detection,
                                      float image_width, float image_height);
 
+BlazePosePoint BlazePoseRoiLocalToImagePoint(BlazePosePoint local_point,
+                                             BlazePoseRoi roi,
+                                             float image_width,
+                                             float image_height);
+
 void BlazePoseDecodeLandmarks(const float *raw,
                               BlazePoseLandmark landmarks[39]);
 
@@ -108,7 +113,9 @@ void BlazePoseRefineLandmarksFromHeatmap(
     size_t width, size_t channels);
 
 BlazePoseLandmark BlazePoseProjectLandmark(BlazePoseLandmark landmark,
-                                           BlazePoseRoi roi);
+                                           BlazePoseRoi roi,
+                                           float image_width,
+                                           float image_height);
 
 void BlazePoseResetOneEuroFilter(BlazePoseOneEuroFilter *filter);
 

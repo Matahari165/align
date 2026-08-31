@@ -114,12 +114,82 @@ int main(void) {
   assert(isnan(landmarks[13].x));
   assert(isinf(landmarks[13].y));
   free(heatmap);
-  BlazePoseLandmark projected = BlazePoseProjectLandmark(landmarks[11], roi);
+  BlazePoseLandmark projected = BlazePoseProjectLandmark(landmarks[11], roi, 640, 480);
   assert(projected.x > 0.39f && projected.x < 0.42f);
   assert(near(projected.y, 0.5f));
   landmarks[11].z = 0.4f;
-  projected = BlazePoseProjectLandmark(landmarks[11], roi);
+  projected = BlazePoseProjectLandmark(landmarks[11], roi, 640, 480);
   assert(near(projected.z, 0.4f * roi.width));
+
+  // Aller-retour exact d'un point dans une ROI non carree, decalee et
+  // tournee. Ce cas reproduit la compression/translation observee en live.
+  BlazePoseRoi asymmetric_roi = {
+      .x_center = 0.61f,
+      .y_center = 0.47f,
+      .width = 0.42f,
+      .height = 0.68f,
+      .rotation = 0.31f,
+  };
+  BlazePoseLandmark asymmetric_local = {
+      .x = 0.19f, .y = 0.73f, .z = 0.2f, .visibility = 0.9f, .presence = 0.8f};
+  BlazePoseLandmark asymmetric_full =
+      BlazePoseProjectLandmark(asymmetric_local, asymmetric_roi, 640, 480);
+  float local_x = asymmetric_local.x - 0.5f;
+  float local_y = asymmetric_local.y - 0.5f;
+  float cosine = cosf(asymmetric_roi.rotation);
+  float sine = sinf(asymmetric_roi.rotation);
+  assert(near(asymmetric_full.x,
+              asymmetric_roi.x_center + cosine * local_x * asymmetric_roi.width -
+                  sine * local_y * asymmetric_roi.height * 480.0f / 640.0f));
+  assert(near(asymmetric_full.y,
+              asymmetric_roi.y_center + sine * local_x * asymmetric_roi.width *
+                  640.0f / 480.0f + cosine * local_y * asymmetric_roi.height));
+  // Inversion analytique : le point image complet doit revenir au point crop.
+  float full_dx = (asymmetric_full.x - asymmetric_roi.x_center) * 640.0f;
+  float full_dy = (asymmetric_full.y - asymmetric_roi.y_center) * 480.0f;
+  float recovered_x =
+      (cosine * full_dx + sine * full_dy) /
+          (asymmetric_roi.width * 640.0f) + 0.5f;
+  float recovered_y =
+      (-sine * full_dx + cosine * full_dy) /
+          (asymmetric_roi.height * 480.0f) + 0.5f;
+  assert(near(recovered_x, asymmetric_local.x));
+  assert(near(recovered_y, asymmetric_local.y));
+
+  // Contrat pixel exact : DetectionToRoi fabrique un carré en pixels. Sur
+  // 640x480, une rotation de 45 degrés ne doit pas être effectuée dans les
+  // axes normalisés, qui n'ont pas la même échelle.
+  BlazePoseDetection pixel_detection = {0};
+  pixel_detection.keypoints[0] = (BlazePosePoint){.x = 0.50f, .y = 0.50f};
+  pixel_detection.keypoints[1] =
+      (BlazePosePoint){.x = 0.625f, .y = 1.0f / 3.0f};
+  BlazePoseRoi pixel_roi = BlazePoseDetectionToRoi(pixel_detection, 640, 480);
+  assert(near(pixel_roi.rotation, (float)M_PI_4));
+  assert(fabsf(pixel_roi.width * 640.0f - pixel_roi.height * 480.0f) <
+         1e-3f);
+  BlazePosePoint local_marker = {.x = 0.77f, .y = 0.18f};
+  BlazePosePoint crop_source = BlazePoseRoiLocalToImagePoint(
+      local_marker, pixel_roi, 640, 480);
+  BlazePoseLandmark marker = {
+      .x = local_marker.x, .y = local_marker.y, .visibility = 1, .presence = 1};
+  BlazePoseLandmark pixel_projected =
+      BlazePoseProjectLandmark(marker, pixel_roi, 640, 480);
+  assert(fabsf(pixel_projected.x * 640.0f - 438.0f) < 1e-3f);
+  assert(fabsf(pixel_projected.y * 480.0f - 230.0f) < 1e-3f);
+  assert(near(crop_source.x * 640.0f, pixel_projected.x * 640.0f));
+  assert(near(crop_source.y * 480.0f, pixel_projected.y * 480.0f));
+  float pixel_dx = (pixel_projected.x - pixel_roi.x_center) * 640.0f;
+  float pixel_dy = (pixel_projected.y - pixel_roi.y_center) * 480.0f;
+  float pixel_cosine = cosf(pixel_roi.rotation);
+  float pixel_sine = sinf(pixel_roi.rotation);
+  float recovered_pixel_x =
+      (pixel_cosine * pixel_dx + pixel_sine * pixel_dy) /
+          (pixel_roi.width * 640.0f) + 0.5f;
+  float recovered_pixel_y =
+      (-pixel_sine * pixel_dx + pixel_cosine * pixel_dy) /
+          (pixel_roi.height * 480.0f) + 0.5f;
+  assert(near(recovered_pixel_x, local_marker.x));
+  assert(near(recovered_pixel_y, local_marker.y));
 
   float boxes[2 * 12] = {0};
   float logits[2] = {-3.0f, 3.0f};

@@ -207,7 +207,8 @@ AlignBlazePoseResult AlignBlazePoseAnalyzeBGRA(AlignBlazePoseRunner *runner,
   float *heatmap = lock_output(&runner->landmarks, 3, 64 * 64 * 39);
   BlazePoseUpperBody upper = {0};
   BlazePosePipelineStatus decoded = raw != NULL && pose_score != NULL && heatmap != NULL
-      ? BlazePoseDecodeUpperBody(raw, pose_score[0], heatmap, roi, &upper)
+      ? BlazePoseDecodeUpperBody(raw, pose_score[0], heatmap, roi,
+                                 width, height, &upper)
       : BLAZEPOSE_PIPELINE_ERROR;
   if (raw != NULL) LiteRtUnlockTensorBuffer(runner->landmarks.outputs[0]);
   if (pose_score != NULL) LiteRtUnlockTensorBuffer(runner->landmarks.outputs[1]);

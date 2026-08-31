@@ -59,16 +59,16 @@ int main(void) {
   raw_landmarks[12 * 5 + 3] = 4.0f;
   raw_landmarks[12 * 5 + 4] = 4.0f;
   BlazePoseUpperBody upper_body;
-  assert(BlazePoseDecodeUpperBody(raw_landmarks, 0.49f, heatmap, roi,
+  assert(BlazePoseDecodeUpperBody(raw_landmarks, 0.49f, heatmap, roi, 640, 480,
                                   &upper_body) ==
          BLAZEPOSE_PIPELINE_NO_PERSON);
-  assert(BlazePoseDecodeUpperBody(raw_landmarks, NAN, heatmap, roi,
+  assert(BlazePoseDecodeUpperBody(raw_landmarks, NAN, heatmap, roi, 640, 480,
                                   &upper_body) == BLAZEPOSE_PIPELINE_ERROR);
   raw_landmarks[0] = NAN;
-  assert(BlazePoseDecodeUpperBody(raw_landmarks, 0.9f, heatmap, roi,
+  assert(BlazePoseDecodeUpperBody(raw_landmarks, 0.9f, heatmap, roi, 640, 480,
                                   &upper_body) == BLAZEPOSE_PIPELINE_ERROR);
   raw_landmarks[0] = 0.0f;
-  assert(BlazePoseDecodeUpperBody(raw_landmarks, 0.9f, heatmap, roi,
+  assert(BlazePoseDecodeUpperBody(raw_landmarks, 0.9f, heatmap, roi, 640, 480,
                                   &upper_body) == BLAZEPOSE_PIPELINE_OK);
   assert(near(upper_body.estimated_neck.x,
               (upper_body.left_shoulder.x + upper_body.right_shoulder.x) /
@@ -92,7 +92,7 @@ int main(void) {
         .visibility = 1.0f / (1.0f + expf(-raw_landmarks[landmark * 5 + 3])),
         .presence = 1.0f / (1.0f + expf(-raw_landmarks[landmark * 5 + 4])),
     };
-    BlazePoseLandmark expected = BlazePoseProjectLandmark(model, roi);
+    BlazePoseLandmark expected = BlazePoseProjectLandmark(model, roi, 640, 480);
     assert(near(decoded[index]->x, expected.x));
     assert(near(decoded[index]->y, expected.y));
     assert(near(decoded[index]->visibility, expected.visibility));

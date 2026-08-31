@@ -13,6 +13,7 @@ struct StatusMenuLabel: View {
 
 struct StatusMenuView: View {
     @ObservedObject var camera: CameraCaptureService
+    @ObservedObject var history: PostureHistoryController
     let onQuit: () -> Void
 
     @Environment(\.openWindow) private var openWindow
@@ -24,6 +25,14 @@ struct StatusMenuView: View {
         Divider()
         Button("Ouvrir Align…") {
             openWindow(id: "main")
+            NSApplication.shared.activate(ignoringOtherApps: true)
+        }
+        Button("Statistiques…") {
+            openWindow(id: "statistics")
+            NSApplication.shared.activate(ignoringOtherApps: true)
+        }
+        Button("Réglages…") {
+            openWindow(id: "settings")
             NSApplication.shared.activate(ignoringOtherApps: true)
         }
         menuCameraAction
