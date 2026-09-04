@@ -20,6 +20,7 @@ final class AppModel: ObservableObject {
     private var lastHistoryState: [PostureObservationSignalID: PostureSignalSnapshot] = [:]
     private var signalDurationLastObserved: [PostureObservationSignalID: TimeInterval] = [:]
     private var signalDurationAssessment: [PostureObservationSignalID: PostureObservationAssessment?] = [:]
+    private var attentionEpisodeStartedAt: [PostureObservationSignalID: TimeInterval] = [:]
     private var lastHistoryKey = Set<String>()
     private var pendingDeliveryRequests: [String: PostureAlertCandidate] = [:]
     private var lastObservationGeneration: UInt64 = 0
@@ -127,6 +128,7 @@ final class AppModel: ObservableObject {
                     self.coverageLastRecorded.removeAll(keepingCapacity: true)
                     self.signalDurationLastObserved.removeAll(keepingCapacity: true)
                     self.signalDurationAssessment.removeAll(keepingCapacity: true)
+                    self.attentionEpisodeStartedAt.removeAll(keepingCapacity: true)
                     self.lastHistoryState.removeAll(keepingCapacity: true)
                     self.coverageWallOffset = nil
                 }
@@ -161,6 +163,7 @@ final class AppModel: ObservableObject {
             coverageLastRecorded.removeAll(keepingCapacity: true)
             signalDurationLastObserved.removeAll(keepingCapacity: true)
             signalDurationAssessment.removeAll(keepingCapacity: true)
+            attentionEpisodeStartedAt.removeAll(keepingCapacity: true)
             coverageWallOffset = nil
             lastObservationGeneration = snapshot.generation
             lastObservationContextKey = snapshot.contextKey
@@ -236,12 +239,19 @@ final class AppModel: ObservableObject {
         }
         for signal in snapshot.signals {
             let previous = lastHistoryState[signal.signalID]
+            let transitionAt = signal.observedAt ?? signal.producedAt
+            if signal.availability == .available,
+               signal.quality == .good,
+               signal.assessment == .attention,
+               (previous?.assessment != .attention || previous?.episodeID != signal.episodeID),
+               transitionAt.isFinite {
+                attentionEpisodeStartedAt[signal.signalID] = transitionAt
+            }
             let changed = previous?.availability != signal.availability ||
                 previous?.assessment != signal.assessment ||
                 previous?.episodeID != signal.episodeID
             if changed, let previous {
-                if let transitionAt = signal.observedAt ?? Optional(signal.producedAt),
-                   let previousAt = signalDurationLastObserved[signal.signalID],
+                if let previousAt = signalDurationLastObserved[signal.signalID],
                    transitionAt > previousAt {
                     recordSignalDuration(previous, start: previousAt, end: transitionAt,
                                          wallNow: now,
@@ -249,16 +259,29 @@ final class AppModel: ObservableObject {
                                          generation: lastObservationGeneration)
                     signalDurationLastObserved[signal.signalID] = transitionAt
                 }
+                let recoveredFromAttention = previous.assessment == .attention &&
+                    signal.availability == .available && signal.quality == .good &&
+                    signal.assessment == .withinReference
+                let recoveryDuration = recoveredFromAttention
+                    ? attentionEpisodeStartedAt[signal.signalID].flatMap {
+                        transitionAt >= $0 ? transitionAt - $0 : nil
+                    }
+                    : nil
                 let transition = PostureHistoryObservation(
                     date: Date(timeIntervalSince1970: now), signalID: signal.signalID,
                     sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v1",
                     observedDuration: 0, attentionDuration: 0,
-                    beganOpportunity: signal.episodeID != previous.episodeID,
+                    beganOpportunity: signal.assessment == .attention &&
+                        signal.episodeID != previous.episodeID,
                     acceptedEventCount: 0, deliveredNotification: false,
-                    recoveryDuration: nil,
+                    recoveryDuration: recoveryDuration,
                     eventKey: "\(launchSessionID):transition:source=runtime:g\(snapshot.generation):c\(observationContextEpoch):s=\(signal.signalID.rawValue):e\(signal.episodeID ?? 0):t\(signal.producedAt)"
                 )
-                Task { @MainActor [weak self] in await self?.history.record(transition) }
+                history.enqueue(transition)
+                if recoveredFromAttention || signal.availability != .available ||
+                    signal.quality != .good {
+                    attentionEpisodeStartedAt.removeValue(forKey: signal.signalID)
+                }
             }
             if signal.quality == .good, let observedAt = signal.observedAt,
                observedAt.isFinite {
@@ -290,16 +313,17 @@ final class AppModel: ObservableObject {
         }
         if snapshot.blinkEventCount > 0 {
             let eventKey = "\(launchSessionID):blink:source=face:g\(snapshot.generation):c\(observationContextEpoch):s=\(PostureObservationSignalID.estimatedBlinks.rawValue):t\(snapshot.producedAt)"
-            guard lastHistoryKey.insert(eventKey).inserted else { return }
-            let observation = PostureHistoryObservation(
-                date: Date(timeIntervalSince1970: now), signalID: .estimatedBlinks,
-                sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v1",
-                observedDuration: 0, attentionDuration: 0, beganOpportunity: false,
-                acceptedEventCount: 0, deliveredNotification: false,
-                recoveryDuration: nil, eventKey: eventKey,
-                blinkEventCount: snapshot.blinkEventCount
-            )
-            Task { @MainActor [weak self] in await self?.history.record(observation) }
+            if lastHistoryKey.insert(eventKey).inserted {
+                let observation = PostureHistoryObservation(
+                    date: Date(timeIntervalSince1970: now), signalID: .estimatedBlinks,
+                    sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v1",
+                    observedDuration: 0, attentionDuration: 0, beganOpportunity: false,
+                    acceptedEventCount: 0, deliveredNotification: false,
+                    recoveryDuration: nil, eventKey: eventKey,
+                    blinkEventCount: snapshot.blinkEventCount
+                )
+                history.enqueue(observation)
+            }
         }
         if let faceObservedAt = snapshot.faceAndEyesObservedAt {
             updateCoverage(
@@ -358,13 +382,10 @@ final class AppModel: ObservableObject {
         alertCoordinator.setSensitivity(value)
         camera.setPostureRecommendationSensitivity(value)
         objectWillChange.send()
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.history.recordControlEvent(.init(
-                date: Date(), signalID: nil, action: .sensitivityChanged,
-                sensitivity: value, ruleProfileID: "runtime-v1"
-            ))
-        }
+        history.enqueueControlEvent(.init(
+            date: Date(), signalID: nil, action: .sensitivityChanged,
+            sensitivity: value, ruleProfileID: "runtime-v1"
+        ))
     }
 
     func setAlertEnabled(_ enabled: Bool, for id: PostureObservationSignalID) {
@@ -378,14 +399,11 @@ final class AppModel: ObservableObject {
         PostureAlertSettingsStore().save(alertSettings)
         alertCoordinator.setEnabled(enabled, for: id)
         objectWillChange.send()
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.history.recordControlEvent(.init(
-                date: Date(), signalID: id,
-                action: enabled ? .reactivated : .disabled,
-                sensitivity: self.alertCoordinator.sensitivity, ruleProfileID: "runtime-v1"
-            ))
-        }
+        history.enqueueControlEvent(.init(
+            date: Date(), signalID: id,
+            action: enabled ? .reactivated : .disabled,
+            sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v1"
+        ))
     }
 
     func snoozeAlert(_ id: PostureObservationSignalID, choice: PostureSnoozeChoice, now: Date = Date()) {
@@ -406,13 +424,10 @@ final class AppModel: ObservableObject {
         }
         PostureAlertSettingsStore().save(alertSettings)
         objectWillChange.send()
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.history.recordControlEvent(.init(
-                date: now, signalID: id, action: .snoozed,
-                sensitivity: self.alertCoordinator.sensitivity, ruleProfileID: "runtime-v1"
-            ))
-        }
+        history.enqueueControlEvent(.init(
+            date: now, signalID: id, action: .snoozed,
+            sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v1"
+        ))
     }
 
     func reactivateAlert(_ id: PostureObservationSignalID) {
@@ -423,13 +438,10 @@ final class AppModel: ObservableObject {
         alertSettings.controls[id, default: .init()].isSnoozedUntilReactivation = false
         PostureAlertSettingsStore().save(alertSettings)
         objectWillChange.send()
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.history.recordControlEvent(.init(
-                date: Date(), signalID: id, action: .reactivated,
-                sensitivity: self.alertCoordinator.sensitivity, ruleProfileID: "runtime-v1"
-            ))
-        }
+        history.enqueueControlEvent(.init(
+            date: Date(), signalID: id, action: .reactivated,
+            sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v1"
+        ))
     }
 
     private func updateCoverage(
@@ -477,9 +489,7 @@ final class AppModel: ObservableObject {
             start: Date(timeIntervalSince1970: start + offset),
             end: Date(timeIntervalSince1970: end + offset)
         )
-        Task { @MainActor [weak self] in
-            await self?.history.recordCoverage(channel: channel, interval: interval)
-        }
+        history.enqueueCoverage(channel: channel, interval: interval)
     }
 
     private func flushCoverage(at uptime: TimeInterval, wallNow: TimeInterval) {
@@ -521,9 +531,9 @@ final class AppModel: ObservableObject {
             acceptedEventCount: 0,
             deliveredNotification: false,
             recoveryDuration: nil,
-            eventKey: "\(launchSessionID):duration:source=runtime:g\(generation):s=\(signal.signalID.rawValue):e\(signal.episodeID ?? 0):t\(start)"
+            eventKey: "\(launchSessionID):duration:source=runtime:g\(generation):c\(observationContextEpoch):s=\(signal.signalID.rawValue):e\(signal.episodeID ?? 0):t\(start)"
         )
-        Task { @MainActor [weak self] in await self?.history.record(observation) }
+        history.enqueue(observation)
     }
 
     private func flushSignalDurations(at uptime: TimeInterval, wallNow: TimeInterval) {
@@ -542,8 +552,11 @@ final class AppModel: ObservableObject {
     func quit() {
         guard !isTerminating else { return }
         isTerminating = true
-        camera.stop {
-            NSApplication.shared.terminate(nil)
+        camera.stop { [weak self] in
+            Task { @MainActor in
+                if let self { await self.history.flushPending() }
+                NSApplication.shared.terminate(nil)
+            }
         }
     }
 }

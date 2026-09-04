@@ -68,7 +68,12 @@ private enum PostureGuidedValidationHarness {
     }
 
     static func testRecordingContract() {
-        var session = PostureValidationSession(plan: .measurement20s)
+        var blocked = PostureValidationSession(plan: .measurement20s, baselineValidated: false)
+        expect(blocked.record(timestamp: 0, predictedAttention: nil, availability: .reliable)
+               == .rejected(.baselineRequired),
+               "un benchmark sans repère personnel valide est refusé")
+
+        var session = PostureValidationSession(plan: .measurement20s, baselineValidated: true)
         record(&session, timestamp: 0, attention: nil, availability: .reliable, scalar: 1)
         expect(session.record(timestamp: 0, predictedAttention: nil, availability: .reliable)
                == .rejected(.nonMonotonicTimestamp), "les timestamps dupliqués sont refusés")
@@ -82,10 +87,12 @@ private enum PostureGuidedValidationHarness {
         expect(session.record(timestamp: 1, predictedAttention: nil, availability: .reliable)
                == .rejected(.finished), "aucun échantillon ne suit finish")
         expect(report.protocolVersion == "guided-validation-v1", "le rapport est versionné")
+        expect(report.completionStatus == .incomplete && !report.isConclusive,
+               "une session interrompue ne doit pas être présentée comme concluante")
     }
 
     static func testMeasurementMetrics() {
-        var session = PostureValidationSession(plan: .measurement20s)
+        var session = PostureValidationSession(plan: .measurement20s, baselineValidated: true)
 
         // Les cinq phases sans attention servent de contrôle des faux positifs.
         record(&session, timestamp: 0, attention: nil, availability: .reliable, scalar: 1.0)
@@ -107,17 +114,21 @@ private enum PostureGuidedValidationHarness {
         record(&session, timestamp: 180, attention: .torsoLeanRight,
                availability: .reliable, direction: .right, latency: 100)
         record(&session, timestamp: 200, attention: nil, availability: .reliable, latency: 110)
+        record(&session, timestamp: 200.6, attention: nil, availability: .reliable, latency: 110)
 
         let report = session.finish()
-        expect(report.attentionAttemptCount == 6 && report.noAttentionAttemptCount == 5,
+        expect(report.attentionAttemptCount == 6 && report.noAttentionAttemptCount == 6,
                "les dénominateurs séparent attention et absence d'attention")
         expect(report.predictedAttentionCount == 7, "les attentions prédites sont comptées sans notion de visibilité")
-        expect(report.coverage.numerator == 10 && report.coverage.denominator == 11,
+        expect(report.coverage.numerator == 11 && report.coverage.denominator == 12,
                "coverage = disponibilités fiables / échantillons")
         expect(report.recall.numerator == 5 && report.recall.denominator == 6,
                "recall = attention correctement prédite / phases avec attention")
-        expect(report.falsePositiveShare.numerator == 2 && report.falsePositiveShare.denominator == 5,
+        expect(report.falsePositiveShare.numerator == 2 && report.falsePositiveShare.denominator == 6,
                "false-positive share = attention prédite hors attention attendue")
+        expect(report.reliableFalsePositiveShare.numerator == 2 &&
+               report.reliableFalsePositiveShare.denominator == 6,
+               "le rapport sépare les faux positifs conditionnels aux données fiables")
         expect(report.directionAttemptCount == 2 && report.directionEligibleCount == 2 &&
                report.directionAccuracy.numerator == 2 && report.directionAccuracy.denominator == 2,
                "direction G/D ne compte que les torse fiables correctement identifiés")
@@ -136,7 +147,7 @@ private enum PostureGuidedValidationHarness {
     }
 
     static func testDirectionAndSignalSeparation() {
-        var session = PostureValidationSession(plan: .notification60s)
+        var session = PostureValidationSession(plan: .notification60s, baselineValidated: true)
         let phases = session.plan.phases
         for phase in phases {
             let attention = phase.expectation.expectedAttention
@@ -154,11 +165,47 @@ private enum PostureGuidedValidationHarness {
                "recovery sans attention n'est pas un objectif de détection")
     }
 
+    static func completeReport(neutralScalar: Double) -> PostureValidationReport {
+        var session = PostureValidationSession(plan: .measurement20s, baselineValidated: true)
+        for phase in session.plan.phases {
+            record(
+                &session,
+                timestamp: phase.startTime + 0.1,
+                attention: phase.expectedAttention,
+                availability: .reliable,
+                direction: phase.expectedDirection,
+                scalar: phase.expectation == .neutral ? neutralScalar : nil
+            )
+            if phase.expectation == .recovery {
+                record(&session, timestamp: phase.startTime + 0.7,
+                       attention: nil, availability: .reliable)
+            }
+        }
+        record(&session, timestamp: session.plan.totalDuration - 0.1,
+               attention: nil, availability: .reliable)
+        return session.finish()
+    }
+
+    static func testCompletionAndThreeRunRepeatability() {
+        let reports = [1.00, 1.02, 0.98].map {
+            completeReport(neutralScalar: $0)
+        }
+        expect(reports.allSatisfy(\.isConclusive),
+               "les 11 phases et la fin du protocole rendent le rapport concluant")
+        let repeatability = PostureValidationThreeRunRepeatability(reports: reports)
+        expect(repeatability?.runCount == 3 &&
+               repeatability?.metrics["torsoScale"]?.sampleCount == 3,
+               "la répétabilité exige trois sessions indépendantes complètes")
+        expect(PostureValidationThreeRunRepeatability(reports: Array(reports.prefix(2))) == nil,
+               "deux exécutions ne suffisent pas à prouver la répétabilité")
+    }
+
     static func main() {
         testPlansAndBoundaries()
         testRecordingContract()
         testMeasurementMetrics()
         testDirectionAndSignalSeparation()
+        testCompletionAndThreeRunRepeatability()
         print("PostureGuidedValidationHarness: OK")
     }
 }

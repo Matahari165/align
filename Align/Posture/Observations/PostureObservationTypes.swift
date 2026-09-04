@@ -64,6 +64,9 @@ nonisolated struct PostureMetricEvidence: Equatable, Codable, Sendable {
     let cameraContextID: String
     let framingSignature: String
     var assessmentHint: PostureObservationAssessment? = nil
+    var leftShoulderDelta: Double? = nil
+    var rightShoulderDelta: Double? = nil
+    var shoulderRaiseClassification: PostureShoulderRaiseClassification? = nil
 
     var hasValidIdentity: Bool {
         generation > 0 && sampleID > 0 && capturedAt.isFinite && producedAt.isFinite &&
@@ -81,6 +84,9 @@ nonisolated struct PostureSignalSnapshot: Equatable, Codable, Sendable {
     let producedAt: TimeInterval
     let episodeID: UInt64?
     let reason: String?
+    var leftShoulderDelta: Double? = nil
+    var rightShoulderDelta: Double? = nil
+    var shoulderRaiseClassification: PostureShoulderRaiseClassification? = nil
 
     static func unavailable(
         _ id: PostureObservationSignalID,

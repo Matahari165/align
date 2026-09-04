@@ -56,7 +56,7 @@ nonisolated struct PostureObservationEngine: Sendable {
                       evaluation.shouldersRaised, evaluation.shoulderSlope, evaluation.blinkRate,
                       evaluation.shoulderOpening]
         for value in values {
-            let id: PostureObservationSignalID?
+            let id: PostureObservationSignalID
             switch value.kind {
             case .proximity: id = .proximity
             case .torsoInclination: id = .torsoInclination
@@ -64,9 +64,8 @@ nonisolated struct PostureObservationEngine: Sendable {
             case .shoulderSlope: id = .shoulderSlope
             case .blinkRate: id = .estimatedBlinks
             case .shoulderOpening: id = .closedShoulders
-            default: id = nil
             }
-            guard let id, signalIDs.contains(id) else { continue }
+            guard signalIDs.contains(id) else { continue }
             let usable = value.quality == .good && value.value?.isFinite == true &&
                 value.state == .available
             let evidenceCalibration: PostureCalibrationState = if id == .estimatedBlinks,
@@ -88,7 +87,13 @@ nonisolated struct PostureObservationEngine: Sendable {
                            (value.belowDuration ?? 0) >= Self.blinkLowRateDuration
                             ? .attention : .withinReference)
                         : (value.isAttention ? .attention : .withinReference)
-                ) : nil
+                ) : nil,
+                leftShoulderDelta: id == .raisedShoulders
+                    ? evaluation.shouldersRaised.leftShoulderDelta : nil,
+                rightShoulderDelta: id == .raisedShoulders
+                    ? evaluation.shouldersRaised.rightShoulderDelta : nil,
+                shoulderRaiseClassification: id == .raisedShoulders
+                    ? evaluation.shouldersRaised.shoulderRaiseClassification : nil
             )
             _ = ingest(evidence, now: now)
         }

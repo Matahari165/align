@@ -6,6 +6,10 @@ contents="$app/Contents"
 resources="$contents/Resources"
 frameworks="$contents/Frameworks"
 binary="$contents/MacOS/Align.debug.dylib"
+if [ ! -f "$binary" ]; then
+  binary="$contents/MacOS/Align"
+fi
+test -f "$binary"
 
 test "$(/usr/libexec/PlistBuddy -c 'Print :UpperBodyEngineIdentifier' "$contents/Info.plist")" = \
   "rtmpose-m-halpe26"

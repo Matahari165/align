@@ -51,6 +51,9 @@ nonisolated struct PostureIndicatorResult: Equatable, Sendable {
     let hasValidBaseline: Bool
     let isExperimental: Bool
     let freshnessTTL: TimeInterval
+    var leftShoulderDelta: Double? = nil
+    var rightShoulderDelta: Double? = nil
+    var shoulderRaiseClassification: PostureShoulderRaiseClassification? = nil
 
     static func unavailable(_ id: PostureIndicatorID) -> Self {
         .init(

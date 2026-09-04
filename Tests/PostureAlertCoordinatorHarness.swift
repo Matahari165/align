@@ -17,9 +17,13 @@ private enum PostureAlertCoordinatorHarness {
               producedAt: time, episodeID: episode, reason: nil)
     }
 
-    static func snapshot(_ values: [PostureSignalSnapshot], at time: TimeInterval) ->
+    static func snapshot(
+        _ values: [PostureSignalSnapshot],
+        at time: TimeInterval,
+        contextKey: String = "camera-a"
+    ) ->
         PostureObservationsSnapshot {
-        .init(generation: 1, producedAt: time, signals: values)
+        .init(generation: 1, contextKey: contextKey, producedAt: time, signals: values)
     }
 
     static func main() {
@@ -106,6 +110,84 @@ private enum PostureAlertCoordinatorHarness {
                "un échec de livraison doit appliquer un bref backoff")
         expect(retryCoordinator.consume(retrySnapshot, now: 8) != nil,
                "un échec ne doit ni livrer ni consommer le quota")
+
+        var identityCoordinator = PostureAlertCoordinator(
+            signalConfigurations: [.proximity: config],
+            globalConfiguration: .init(
+                mode: .validation, minimumIntervalBetweenSignals: 1,
+                dailyMaximum: 3, dailyWindow: 100
+            )
+        )
+        _ = identityCoordinator.consume(retrySnapshot, now: 0)
+        guard let oldContext = identityCoordinator.consume(retrySnapshot, now: 2) else {
+            fatalError("la réservation d'identité doit exister")
+        }
+        _ = identityCoordinator.consume(
+            snapshot([signal(.proximity, assessment: .withinReference, episode: nil, at: 2.1)],
+                     at: 2.1, contextKey: "camera-b"),
+            now: 2.1
+        )
+        expect(!identityCoordinator.ownsReservation(oldContext, now: 2.2),
+               "une réservation d'un ancien contexte doit devenir inerte")
+
+        var persisted = PostureAlertCoordinator(
+            signalConfigurations: [.proximity: config],
+            globalConfiguration: .init(
+                mode: .validation, minimumIntervalBetweenSignals: 1,
+                dailyMaximum: 3, dailyWindow: 100
+            )
+        )
+        let persistedAttention = snapshot([
+            signal(.proximity, assessment: .attention, episode: 40, at: 10)
+        ], at: 10)
+        _ = persisted.consume(persistedAttention, now: 10)
+        guard let delivered = persisted.consume(persistedAttention, now: 12) else {
+            fatalError("l'alerte persistée doit devenir éligible")
+        }
+        expect(persisted.commitDelivery(delivered, now: 12),
+               "la livraison persistée doit être confirmée")
+        let savedDeliveryState = persisted.deliveryState()
+        expect(savedDeliveryState.requiresRecovery["proximity"] == true,
+               "l'obligation de récupération doit être persistée")
+
+        var restoredCoordinator = PostureAlertCoordinator(
+            signalConfigurations: [.proximity: config],
+            globalConfiguration: .init(
+                mode: .validation, minimumIntervalBetweenSignals: 1,
+                dailyMaximum: 3, dailyWindow: 100
+            )
+        )
+        restoredCoordinator.restoreDeliveryState(.init(
+            globalDeliveries: savedDeliveryState.globalDeliveries + [999],
+            perSignal: savedDeliveryState.perSignal,
+            requiresRecovery: savedDeliveryState.requiresRecovery
+        ), now: 20)
+        let afterRestartAttention = snapshot([
+            signal(.proximity, assessment: .attention, episode: 41, at: 20)
+        ], at: 20)
+        _ = restoredCoordinator.consume(afterRestartAttention, now: 20)
+        expect(restoredCoordinator.consume(afterRestartAttention, now: 23) == nil,
+               "un redémarrage ne doit pas contourner la récupération persistante")
+        let recoveredAfterRestart = snapshot([
+            signal(.proximity, assessment: .withinReference, episode: nil, at: 24)
+        ], at: 24)
+        _ = restoredCoordinator.consume(recoveredAfterRestart, now: 24)
+        _ = restoredCoordinator.consume(recoveredAfterRestart, now: 27)
+        _ = restoredCoordinator.consume(afterRestartAttention, now: 28)
+        expect(restoredCoordinator.consume(afterRestartAttention, now: 30) != nil,
+               "la récupération puis la persistance doivent réautoriser un rappel")
+
+        var nonAlertable = PostureAlertCoordinator(
+            signalConfigurations: [.shoulderSlope: config, .closedShoulders: config],
+            globalConfiguration: .validation
+        )
+        let experimental = snapshot([
+            signal(.shoulderSlope, assessment: .attention, episode: 1, at: 0),
+            signal(.closedShoulders, assessment: .attention, episode: 1, at: 0)
+        ], at: 0)
+        _ = nonAlertable.consume(experimental, now: 0)
+        expect(nonAlertable.consume(experimental, now: 10) == nil,
+               "pente et ouverture ne doivent jamais produire de notification")
 
         let suite = "com.align.tests.alert-settings"
         let defaults = UserDefaults(suiteName: suite)!

@@ -24,7 +24,10 @@ require(!content.contains("inactiveCameraMessage"), "Le statut caméra inactif n
 require(!content.contains("camera.proximityAlertBanner"), "Aucune troisième bannière ne doit recouvrir la caméra.")
 require(!content.contains("blazePoseState.displayName"), "Aucun badge d’état redondant ne doit recouvrir la caméra.")
 
-for id in ["headDistance", "raisedShoulders", "estimatedForwardHead", "estimatedEyeHeight", "estimatedBlinks", "narrowedBrows"] {
+for id in [
+    "apparentProximity", "torsoInclination", "raisedShoulders",
+    "shoulderSlope", "closedShoulders", "estimatedBlinks"
+] {
     require(indicators.contains("indicator(for: .\(id))"), "Signal absent du rail complet : \(id)")
 }
 require(indicators.contains("threeColumnGrid") && indicators.contains("twoColumnGrid"),
@@ -121,6 +124,11 @@ require(cameraCapture.contains("requestAccess(for: .video)") &&
 for title in ["Proximité apparente", "Torse incliné", "Épaules relevées", "Clignements estimés — Expérimental"] {
     require(settings.contains(title), "Rappel absent des réglages : \(title)")
 }
+require(!settings.contains("Toggle(\"Inclinaison des épaules") &&
+        !settings.contains("Toggle(\"Épaules refermées"),
+        "La pente et l'ouverture ne doivent pas devenir des rappels.")
+require(settings.contains("private let signals = PostureObservationSignalID.alertableCases"),
+        "Les réglages de rappels doivent utiliser la liste canonique de quatre signaux.")
 for choice in ["1 h", "Aujourd’hui", "Jusqu’à réactivation"] {
     require(settings.contains(choice), "Choix de suspension absent : \(choice)")
 }

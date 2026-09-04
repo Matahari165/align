@@ -76,7 +76,8 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
                          proximityScale: value.proximityScale, sampleCount: value.sampleCount,
                          torsoInclinationMAD: value.torsoInclinationMAD,
                          torsoAxisMAD: value.torsoAxisMAD,
-                         shoulderSlopeMAD: value.shoulderSlopeMAD)
+                         shoulderSlopeMAD: value.shoulderSlopeMAD,
+                         blinkOpeningBaseline: value.blinkOpeningBaseline)
         lastBaselineBodySampleID = 0
         lastBaselineBodyCapturedAt = nil
     }
