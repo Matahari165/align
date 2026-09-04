@@ -660,7 +660,7 @@ final class CameraCaptureService: ObservableObject {
                       let startedAt = self.postureValidationStartedAt else { return }
                 let elapsed = ProcessInfo.processInfo.systemUptime - startedAt
                 if elapsed >= session.plan.totalDuration {
-                    let report = session.finish()
+                    let report = session.finish(at: elapsed)
                     self.postureValidationSession = nil
                     self.postureValidationStartedAt = nil
                     self.postureValidationGeneration = nil
