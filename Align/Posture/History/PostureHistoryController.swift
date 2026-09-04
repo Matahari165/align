@@ -10,6 +10,7 @@ final class PostureHistoryController: ObservableObject {
     private var accumulator = PostureHistoryAccumulator()
     private var loadTask: Task<PostureHistoryLoadResult, Never>?
     private var persistTail: Task<Bool, Never>?
+    private var operationTail: Task<Void, Never>?
     /// Monotone tombstone for persistence.  A completion from a generation
     /// older than an erase may finish its I/O, but it must not republish stale
     /// state into the actor after the erase has completed.
@@ -62,9 +63,55 @@ final class PostureHistoryController: ObservableObject {
         await persist()
     }
 
+    /// File explicitement les écritures lancées depuis le runtime synchrone.
+    /// `flushPending` peut alors garantir qu'une fermeture ne coupe pas la
+    /// dernière durée, couverture ou transition en attente.
+    func enqueue(_ observation: PostureHistoryObservation, now: Date = Date()) {
+        let previous = operationTail
+        let generation = persistenceGeneration
+        operationTail = Task { @MainActor [weak self] in
+            if let previous { await previous.value }
+            guard let self, generation == self.persistenceGeneration else { return }
+            await self.record(observation, now: now)
+        }
+    }
+
+    func enqueueCoverage(
+        channel: PostureCoverageChannel,
+        interval: DateInterval,
+        now: Date = Date()
+    ) {
+        let previous = operationTail
+        let generation = persistenceGeneration
+        operationTail = Task { @MainActor [weak self] in
+            if let previous { await previous.value }
+            guard let self, generation == self.persistenceGeneration else { return }
+            await self.recordCoverage(channel: channel, interval: interval, now: now)
+        }
+    }
+
+    func enqueueControlEvent(_ event: PostureHistoryControlEvent, now: Date = Date()) {
+        let previous = operationTail
+        let generation = persistenceGeneration
+        operationTail = Task { @MainActor [weak self] in
+            if let previous { await previous.value }
+            guard let self, generation == self.persistenceGeneration else { return }
+            await self.recordControlEvent(event, now: now)
+        }
+    }
+
+    func flushPending() async {
+        if let operationTail { await operationTail.value }
+        if let persistTail { _ = await persistTail.value }
+    }
+
     func erase() async {
         persistenceGeneration &+= 1
         let eraseGeneration = persistenceGeneration
+        let queuedOperation = operationTail
+        operationTail = nil
+        queuedOperation?.cancel()
+        if let queuedOperation { await queuedOperation.value }
         if let loadTask {
             loadTask.cancel()
             _ = await loadTask.value

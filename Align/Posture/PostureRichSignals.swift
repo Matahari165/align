@@ -119,6 +119,17 @@ nonisolated enum PostureRichSignalDirection: String, Equatable, Sendable {
     case above
 }
 
+/// Classification descriptive de l'élévation des épaules. Elle reste une
+/// preuve CV locale : l'arbitrage d'une éventuelle alerte appartient à
+/// l'étage produit.
+nonisolated enum PostureShoulderRaiseClassification: String, Equatable, Codable, Sendable {
+    case unavailable
+    case none
+    case unilateralLeft
+    case unilateralRight
+    case bilateral
+}
+
 nonisolated struct PostureRichScalarObservation: Equatable, Sendable {
     let kind: PostureRichSignalKind
     let value: Double?
@@ -136,6 +147,12 @@ nonisolated struct PostureRichScalarObservation: Equatable, Sendable {
     /// Elle permet à l'intégrateur de décider d'une alerte sans recalculer les
     /// intervalles; ce snapshot CV n'autorise aucune notification.
     let belowDuration: TimeInterval?
+    /// Deltas normalisés par rapport au repère personnel pour le signal
+    /// `shouldersRaised`. Les champs restent optionnels pour ne pas imposer
+    /// une forme artificielle aux autres observations scalaires.
+    let leftShoulderDelta: Double?
+    let rightShoulderDelta: Double?
+    let shoulderRaiseClassification: PostureShoulderRaiseClassification?
 
     init(
         kind: PostureRichSignalKind,
@@ -150,7 +167,10 @@ nonisolated struct PostureRichScalarObservation: Equatable, Sendable {
         reason: String,
         normalizedValue: Double? = nil,
         direction: PostureRichSignalDirection = .unknown,
-        belowDuration: TimeInterval? = nil
+        belowDuration: TimeInterval? = nil,
+        leftShoulderDelta: Double? = nil,
+        rightShoulderDelta: Double? = nil,
+        shoulderRaiseClassification: PostureShoulderRaiseClassification? = nil
     ) {
         self.kind = kind
         self.value = value
@@ -165,6 +185,9 @@ nonisolated struct PostureRichScalarObservation: Equatable, Sendable {
         self.normalizedValue = normalizedValue
         self.direction = direction
         self.belowDuration = belowDuration
+        self.leftShoulderDelta = leftShoulderDelta
+        self.rightShoulderDelta = rightShoulderDelta
+        self.shoulderRaiseClassification = shoulderRaiseClassification
     }
 
     static func unavailable(
@@ -203,6 +226,50 @@ nonisolated struct PostureRichGeometryMetrics: Equatable, Sendable {
     let torsoState: PostureRichSignalState
     let openingState: PostureRichSignalState
     let reason: String?
+    /// Ouvertures par œil conservées pour la calibration clignement. Elles
+    /// restent absentes si la preuve faciale n'est pas disponible.
+    let leftEyeOpeningRatio: Double?
+    let rightEyeOpeningRatio: Double?
+
+    init(
+        generation: UInt64,
+        sampleID: UInt64,
+        capturedAt: TimeInterval,
+        contextKey: String,
+        torsoInclinationDegrees: Double?,
+        torsoAxisDeviation: Double?,
+        shoulderSlopeDegrees: Double?,
+        shoulderOpeningDegrees: Double?,
+        shoulderOpeningRatio: Double?,
+        leftShoulderElevation: Double?,
+        rightShoulderElevation: Double?,
+        proximityScale: Double?,
+        shouldersState: PostureRichSignalState,
+        torsoState: PostureRichSignalState,
+        openingState: PostureRichSignalState,
+        reason: String?,
+        leftEyeOpeningRatio: Double? = nil,
+        rightEyeOpeningRatio: Double? = nil
+    ) {
+        self.generation = generation
+        self.sampleID = sampleID
+        self.capturedAt = capturedAt
+        self.contextKey = contextKey
+        self.torsoInclinationDegrees = torsoInclinationDegrees
+        self.torsoAxisDeviation = torsoAxisDeviation
+        self.shoulderSlopeDegrees = shoulderSlopeDegrees
+        self.shoulderOpeningDegrees = shoulderOpeningDegrees
+        self.shoulderOpeningRatio = shoulderOpeningRatio
+        self.leftShoulderElevation = leftShoulderElevation
+        self.rightShoulderElevation = rightShoulderElevation
+        self.proximityScale = proximityScale
+        self.shouldersState = shouldersState
+        self.torsoState = torsoState
+        self.openingState = openingState
+        self.reason = reason
+        self.leftEyeOpeningRatio = leftEyeOpeningRatio
+        self.rightEyeOpeningRatio = rightEyeOpeningRatio
+    }
 
     static func unavailable(
         generation: UInt64,
@@ -219,7 +286,8 @@ nonisolated struct PostureRichGeometryMetrics: Equatable, Sendable {
              leftShoulderElevation: nil, rightShoulderElevation: nil,
              proximityScale: nil,
              shouldersState: state, torsoState: state, openingState: state,
-             reason: reason)
+             reason: reason, leftEyeOpeningRatio: nil,
+             rightEyeOpeningRatio: nil)
     }
 }
 
@@ -286,17 +354,22 @@ nonisolated enum PostureRichGeometryEvaluator {
         if let leftShoulder, let rightShoulder, let leftHip, let rightHip {
             let shoulderMid = midpoint(leftShoulder, rightShoulder)
             let hipMid = midpoint(leftHip, rightHip)
-            torsoInclination = axialAngleDegrees(
+            let candidateInclination = axialAngleDegrees(
                 dx: Double(hipMid.x - shoulderMid.x),
                 dy: Double(hipMid.y - shoulderMid.y)
             )
             let dx = Double(hipMid.x - shoulderMid.x)
             let dy = Double(hipMid.y - shoulderMid.y)
             let normalized = dx / max(abs(dy), 0.000001)
-            torsoAxisDeviation = normalized.isFinite ? normalized : nil
             let good = [UpperBodyLandmarkID.leftShoulder, .rightShoulder, .leftHip, .rightHip]
                 .allSatisfy { qualityGood[$0] == true }
-            torsoState = torsoInclination != nil ? (good ? .available : .partial) : .unavailable
+            // Une inclinaison latérale n'est publiable que si les quatre
+            // repères qui forment l'axe sont good. Les coordonnées limited
+            // restent disponibles aux diagnostics, mais ne doivent jamais
+            // alimenter une décision ni une baseline.
+            torsoInclination = good ? candidateInclination : nil
+            torsoAxisDeviation = good && normalized.isFinite ? normalized : nil
+            torsoState = good && torsoInclination != nil ? .available : .partial
         } else {
             torsoInclination = nil
             torsoAxisDeviation = nil
@@ -406,7 +479,9 @@ nonisolated enum PostureRichGeometryEvaluator {
             shouldersState: shouldersState,
             torsoState: torsoState,
             openingState: openingState,
-            reason: reason
+            reason: reason,
+            leftEyeOpeningRatio: matchedFace?.signal.leftEyeOpeningRatio,
+            rightEyeOpeningRatio: matchedFace?.signal.rightEyeOpeningRatio
         )
     }
 
@@ -441,6 +516,16 @@ nonisolated enum PostureRichGeometryEvaluator {
     }
 }
 
+/// Repère personnel d'ouverture, conservé séparément pour chaque œil. Les
+/// MAD rendent la dispersion observable sans imposer une moyenne des yeux.
+nonisolated struct PostureBlinkOpeningBaseline: Equatable, Codable, Sendable {
+    let leftEyeOpeningRatio: Double
+    let rightEyeOpeningRatio: Double
+    let leftEyeOpeningMAD: Double?
+    let rightEyeOpeningMAD: Double?
+    let sampleCount: Int
+}
+
 nonisolated struct PostureRichBaseline: Equatable, Codable, Sendable {
     let generation: UInt64
     let contextKey: String
@@ -456,6 +541,43 @@ nonisolated struct PostureRichBaseline: Equatable, Codable, Sendable {
     let torsoInclinationMAD: Double?
     let torsoAxisMAD: Double?
     let shoulderSlopeMAD: Double?
+    /// `nil` pour les anciennes baselines ou une calibration sans deux yeux
+    /// valides; l'évaluateur conserve alors son fallback de compatibilité.
+    let blinkOpeningBaseline: PostureBlinkOpeningBaseline?
+
+    init(
+        generation: UInt64,
+        contextKey: String,
+        ruleVersion: String,
+        torsoInclinationDegrees: Double?,
+        torsoAxisDeviation: Double?,
+        shoulderSlopeDegrees: Double?,
+        shoulderOpeningRatio: Double?,
+        leftShoulderElevation: Double?,
+        rightShoulderElevation: Double?,
+        proximityScale: Double?,
+        sampleCount: Int,
+        torsoInclinationMAD: Double?,
+        torsoAxisMAD: Double?,
+        shoulderSlopeMAD: Double?,
+        blinkOpeningBaseline: PostureBlinkOpeningBaseline? = nil
+    ) {
+        self.generation = generation
+        self.contextKey = contextKey
+        self.ruleVersion = ruleVersion
+        self.torsoInclinationDegrees = torsoInclinationDegrees
+        self.torsoAxisDeviation = torsoAxisDeviation
+        self.shoulderSlopeDegrees = shoulderSlopeDegrees
+        self.shoulderOpeningRatio = shoulderOpeningRatio
+        self.leftShoulderElevation = leftShoulderElevation
+        self.rightShoulderElevation = rightShoulderElevation
+        self.proximityScale = proximityScale
+        self.sampleCount = sampleCount
+        self.torsoInclinationMAD = torsoInclinationMAD
+        self.torsoAxisMAD = torsoAxisMAD
+        self.shoulderSlopeMAD = shoulderSlopeMAD
+        self.blinkOpeningBaseline = blinkOpeningBaseline
+    }
 }
 
 nonisolated enum PostureRichBaselineBuilder {
@@ -486,6 +608,28 @@ nonisolated enum PostureRichBaselineBuilder {
             guard pair.1.capturedAt > pair.0.capturedAt,
                   pair.1.capturedAt - pair.0.capturedAt <= maximumSampleGap else { return nil }
         }
+        let blinkOpeningSamples = eligibleSamples.compactMap { sample -> (left: Double, right: Double)? in
+            guard let left = sample.leftEyeOpeningRatio,
+                  let right = sample.rightEyeOpeningRatio,
+                  left.isFinite, right.isFinite, left > 0, right > 0 else {
+                return nil
+            }
+            return (left, right)
+        }
+        let blinkOpeningBaseline: PostureBlinkOpeningBaseline? = {
+            guard blinkOpeningSamples.count == eligibleSamples.count,
+                  let leftMedian = median(blinkOpeningSamples.map(\.left)),
+                  let rightMedian = median(blinkOpeningSamples.map(\.right)) else {
+                return nil
+            }
+            return PostureBlinkOpeningBaseline(
+                leftEyeOpeningRatio: leftMedian,
+                rightEyeOpeningRatio: rightMedian,
+                leftEyeOpeningMAD: mad(blinkOpeningSamples.map(\.left)),
+                rightEyeOpeningMAD: mad(blinkOpeningSamples.map(\.right)),
+                sampleCount: blinkOpeningSamples.count
+            )
+        }()
         return PostureRichBaseline(
             generation: generation,
             contextKey: contextKey,
@@ -500,7 +644,8 @@ nonisolated enum PostureRichBaselineBuilder {
             sampleCount: eligibleSamples.count,
             torsoInclinationMAD: mad(eligibleSamples.compactMap(\.torsoInclinationDegrees)),
             torsoAxisMAD: mad(eligibleSamples.compactMap(\.torsoAxisDeviation)),
-            shoulderSlopeMAD: mad(eligibleSamples.compactMap(\.shoulderSlopeDegrees))
+            shoulderSlopeMAD: mad(eligibleSamples.compactMap(\.shoulderSlopeDegrees)),
+            blinkOpeningBaseline: blinkOpeningBaseline
         )
     }
 
@@ -533,6 +678,10 @@ nonisolated struct PostureRichSignalConfiguration: Equatable, Sendable {
     var shoulderOpeningExitDelta: Double = 0.04
     var shoulderElevationEnterDelta: Double = 0.04
     var shoulderElevationExitDelta: Double = 0.02
+    /// Variation maximale d'un delta d'élévation entre deux résultats corps
+    /// rapprochés. Au-delà, le point est traité comme un saut de modèle et
+    /// n'alimente ni la persistance ni l'alerte.
+    var shoulderElevationMaximumStep: Double = 0.25
     var requiredDuration: TimeInterval = 1.0
     var proximityEnterRatio: Double = 1.25
     var proximityExitRatio: Double = 1.15
@@ -548,6 +697,9 @@ nonisolated struct PostureRichSignalConfiguration: Equatable, Sendable {
     var blinkMinimumClosed: TimeInterval = 0.05
     var blinkMaximumClosed: TimeInterval = 0.50
     var blinkMaximumGap: TimeInterval = 0.35
+    /// Écart maximal entre les transitions des deux yeux d'un clignement.
+    /// Une valeur personnalisée est préférable au fallback historique.
+    var blinkMaximumEyeSkew: TimeInterval = 0.12
     var blinkWindow: TimeInterval = 60
     var blinkMinimumObservable: TimeInterval = 30
     /// Pas de fréquence universelle : la cible est fournie par calibration/produit.
@@ -602,13 +754,22 @@ nonisolated struct PostureBlinkEvent: Equatable, Sendable {
     let duration: TimeInterval
 }
 
-/// Détecteur open -> closed -> open. Le dénominateur est exclusivement la
-/// durée entre deux visages valides et suffisamment qualitatifs.
+/// Détecteur open -> closed -> open par œil. Un événement n'est publié que si
+/// les deux yeux terminent un cycle temporellement cohérent; aucune moyenne des
+/// ratios gauche/droite ne franchit la frontière CV.
 nonisolated struct PostureBlinkTracker: Equatable, Sendable {
+    /// Compatibilité : `.closed` signifie que les deux yeux sont actuellement
+    /// fermés. Les phases détaillées sont exposées séparément ci-dessous.
     private(set) var phase: PostureBlinkPhase = .open
+    private(set) var leftEyePhase: PostureBlinkPhase = .open
+    private(set) var rightEyePhase: PostureBlinkPhase = .open
     private(set) var observableSeconds: TimeInterval = 0
     private(set) var events: [PostureBlinkEvent] = []
-    private var closedStartedAt: TimeInterval?
+    private var leftClosedStartedAt: TimeInterval?
+    private var rightClosedStartedAt: TimeInterval?
+    private var leftReopenedAt: TimeInterval?
+    private var rightReopenedAt: TimeInterval?
+    private var awaitingBothEyesOpen = false
     private var lastValidAt: TimeInterval?
     private var lastGoodAt: TimeInterval?
     private var lastObservedAt: TimeInterval?
@@ -617,9 +778,15 @@ nonisolated struct PostureBlinkTracker: Equatable, Sendable {
 
     mutating func reset() {
         phase = .open
+        leftEyePhase = .open
+        rightEyePhase = .open
         observableSeconds = 0
         events.removeAll(keepingCapacity: true)
-        closedStartedAt = nil
+        leftClosedStartedAt = nil
+        rightClosedStartedAt = nil
+        leftReopenedAt = nil
+        rightReopenedAt = nil
+        awaitingBothEyesOpen = false
         lastValidAt = nil
         lastGoodAt = nil
         lastObservedAt = nil
@@ -627,6 +794,8 @@ nonisolated struct PostureBlinkTracker: Equatable, Sendable {
         windowStartedAt = nil
     }
 
+    /// API historique : il duplique explicitement la même preuve vers les
+    /// deux yeux. Le chemin de production utilise l'overload typé ci-dessous.
     mutating func consume(
         generation newGeneration: UInt64,
         timestamp: TimeInterval,
@@ -634,30 +803,74 @@ nonisolated struct PostureBlinkTracker: Equatable, Sendable {
         qualityGood: Bool,
         configuration: PostureRichSignalConfiguration
     ) -> PostureBlinkEvent? {
-        guard timestamp.isFinite, newGeneration > 0 else { return nil }
+        consume(generation: newGeneration, timestamp: timestamp,
+                leftEyeOpeningRatio: openingRatio,
+                rightEyeOpeningRatio: openingRatio,
+                qualityGood: qualityGood, configuration: configuration)
+    }
+
+    mutating func consume(
+        generation newGeneration: UInt64,
+        timestamp: TimeInterval,
+        leftEyeOpeningRatio: Double?,
+        rightEyeOpeningRatio: Double?,
+        qualityGood: Bool,
+        configuration: PostureRichSignalConfiguration
+    ) -> PostureBlinkEvent? {
+        guard newGeneration > 0, timestamp.isFinite,
+              configuration.blinkCloseRatio.isFinite,
+              configuration.blinkOpenRatio.isFinite,
+              configuration.blinkOpenRatio > configuration.blinkCloseRatio,
+              configuration.blinkMinimumClosed.isFinite,
+              configuration.blinkMinimumClosed >= 0,
+              configuration.blinkMaximumClosed.isFinite,
+              configuration.blinkMaximumClosed >= configuration.blinkMinimumClosed,
+              configuration.blinkMaximumGap.isFinite,
+              configuration.blinkMaximumGap > 0,
+              configuration.blinkMaximumSuspension.isFinite,
+              configuration.blinkMaximumSuspension > 0,
+              configuration.blinkMaximumEyeSkew.isFinite,
+              configuration.blinkMaximumEyeSkew >= 0,
+              configuration.blinkMaximumCountedInterval.isFinite,
+              configuration.blinkMaximumCountedInterval > 0 else {
+            reset()
+            return nil
+        }
+
         if generation != newGeneration {
             reset()
             generation = newGeneration
         } else if let previous = lastObservedAt, timestamp <= previous {
             return nil
         }
-        lastObservedAt = timestamp
-        if let previous = lastGoodAt,
-           timestamp - previous > configuration.blinkMaximumSuspension {
-            reset()
-            generation = newGeneration
-            lastObservedAt = timestamp
+
+        if let previous = lastGoodAt {
+            let gap = timestamp - previous
+            if gap > configuration.blinkMaximumSuspension || gap > configuration.blinkMaximumGap {
+                reset()
+                generation = newGeneration
+            }
         }
-        guard qualityGood, let openingRatio, openingRatio.isFinite, openingRatio >= 0 else {
-            phase = .open
-            closedStartedAt = nil
+        lastObservedAt = timestamp
+
+        let validEyes = qualityGood &&
+            leftEyeOpeningRatio.map { $0.isFinite && $0 >= 0 } == true &&
+            rightEyeOpeningRatio.map { $0.isFinite && $0 >= 0 } == true
+        guard validEyes, let leftEyeOpeningRatio, let rightEyeOpeningRatio else {
+            // Une seule preuve faciale invalide casse le cycle, sans compter
+            // l'intervalle; l'historique rate reste conservé hors suspension.
             lastValidAt = nil
+            resetCycle(awaitingBothEyesOpen: true)
             return nil
         }
-        if let previous = lastGoodAt,
-           timestamp - previous > configuration.blinkMaximumGap {
-            phase = .open
-            closedStartedAt = nil
+
+        if let previous = lastValidAt {
+            let delta = timestamp - previous
+            if delta > 0,
+               delta <= min(configuration.blinkMaximumGap,
+                            configuration.blinkMaximumCountedInterval) {
+                observableSeconds += delta
+            }
         }
         if let windowStartedAt,
            timestamp - windowStartedAt >= configuration.blinkWindow {
@@ -667,32 +880,90 @@ nonisolated struct PostureBlinkTracker: Equatable, Sendable {
         } else if self.windowStartedAt == nil {
             self.windowStartedAt = timestamp
         }
-        if let previous = lastValidAt {
-            let delta = timestamp - previous
-            if delta > 0,
-               delta <= min(configuration.blinkMaximumGap,
-                            configuration.blinkMaximumCountedInterval) {
-                observableSeconds += delta
-            }
-        }
         lastValidAt = timestamp
         lastGoodAt = timestamp
-        if phase == .open, openingRatio <= configuration.blinkCloseRatio {
-            phase = .closed
-            closedStartedAt = timestamp
+
+        if awaitingBothEyesOpen {
+            guard leftEyeOpeningRatio >= configuration.blinkOpenRatio,
+                  rightEyeOpeningRatio >= configuration.blinkOpenRatio else {
+                return nil
+            }
+            resetCycle(awaitingBothEyesOpen: false)
             return nil
         }
-        guard phase == .closed, openingRatio >= configuration.blinkOpenRatio,
-              let started = closedStartedAt else { return nil }
-        phase = .open
-        closedStartedAt = nil
-        let duration = timestamp - started
-        guard duration >= configuration.blinkMinimumClosed,
-              duration <= configuration.blinkMaximumClosed else { return nil }
-        let event = PostureBlinkEvent(generation: newGeneration, startedAt: started,
-                                      endedAt: timestamp, duration: duration)
+
+        if leftEyePhase == .open, leftEyeOpeningRatio <= configuration.blinkCloseRatio {
+            leftEyePhase = .closed
+            leftClosedStartedAt = timestamp
+            leftReopenedAt = nil
+        } else if leftEyePhase == .closed, leftEyeOpeningRatio >= configuration.blinkOpenRatio {
+            leftEyePhase = .open
+            leftReopenedAt = timestamp
+        }
+        if rightEyePhase == .open, rightEyeOpeningRatio <= configuration.blinkCloseRatio {
+            rightEyePhase = .closed
+            rightClosedStartedAt = timestamp
+            rightReopenedAt = nil
+        } else if rightEyePhase == .closed, rightEyeOpeningRatio >= configuration.blinkOpenRatio {
+            rightEyePhase = .open
+            rightReopenedAt = timestamp
+        }
+        phase = leftEyePhase == .closed && rightEyePhase == .closed ? .closed : .open
+
+        if let leftStart = leftClosedStartedAt,
+           timestamp - leftStart > configuration.blinkMaximumClosed {
+            resetCycle(awaitingBothEyesOpen: true)
+            return nil
+        }
+        if let rightStart = rightClosedStartedAt,
+           timestamp - rightStart > configuration.blinkMaximumClosed {
+            resetCycle(awaitingBothEyesOpen: true)
+            return nil
+        }
+        if let leftStart = leftClosedStartedAt, let rightStart = rightClosedStartedAt,
+           abs(leftStart - rightStart) > configuration.blinkMaximumEyeSkew {
+            resetCycle(awaitingBothEyesOpen: true)
+            return nil
+        }
+
+        guard leftEyePhase == .open, rightEyePhase == .open else { return nil }
+        guard let leftStart = leftClosedStartedAt, let rightStart = rightClosedStartedAt,
+              let leftEnd = leftReopenedAt, let rightEnd = rightReopenedAt else {
+            // Un clignement unilatéral ne laisse pas de cycle à apparier.
+            leftClosedStartedAt = nil
+            rightClosedStartedAt = nil
+            leftReopenedAt = nil
+            rightReopenedAt = nil
+            return nil
+        }
+        let leftDuration = leftEnd - leftStart
+        let rightDuration = rightEnd - rightStart
+        guard leftDuration >= configuration.blinkMinimumClosed,
+              leftDuration <= configuration.blinkMaximumClosed,
+              rightDuration >= configuration.blinkMinimumClosed,
+              rightDuration <= configuration.blinkMaximumClosed,
+              abs(leftEnd - rightEnd) <= configuration.blinkMaximumEyeSkew else {
+            resetCycle(awaitingBothEyesOpen: true)
+            return nil
+        }
+        let startedAt = min(leftStart, rightStart)
+        let endedAt = max(leftEnd, rightEnd)
+        let event = PostureBlinkEvent(generation: newGeneration, startedAt: startedAt,
+                                      endedAt: endedAt, duration: endedAt - startedAt)
         events.append(event)
+        resetCycle(awaitingBothEyesOpen: false)
         return event
+    }
+
+    private mutating func resetCycle(awaitingBothEyesOpen: Bool) {
+        phase = .open
+        leftEyePhase = .open
+        rightEyePhase = .open
+        leftClosedStartedAt = nil
+        rightClosedStartedAt = nil
+        leftReopenedAt = nil
+        rightReopenedAt = nil
+        self.awaitingBothEyesOpen = awaitingBothEyesOpen
     }
 
     var ratePerMinute: Double? {
@@ -912,6 +1183,83 @@ nonisolated struct PostureRichSustainedState: Equatable, Sendable {
     }
 }
 
+/// Rejette un saut soudain dans les deltas d'élévation des épaules. Le filtre
+/// est volontairement séparé de `PostureRichSustainedState` : un échantillon
+/// aberrant ne doit ni ouvrir une nouvelle attention, ni effacer les règles
+/// temporelles des autres signaux corporels.
+private nonisolated struct PostureShoulderRaiseTemporalFilter: Equatable, Sendable {
+    enum Result: Equatable, Sendable {
+        case accepted
+        case rejectedJump
+    }
+
+    private var generation: UInt64?
+    private var contextKey: String?
+    private var lastSampleID: UInt64?
+    private var lastCapturedAt: TimeInterval?
+    private var lastLeft: Double?
+    private var lastRight: Double?
+
+    mutating func reset() {
+        generation = nil
+        contextKey = nil
+        lastSampleID = nil
+        lastCapturedAt = nil
+        lastLeft = nil
+        lastRight = nil
+    }
+
+    mutating func consume(
+        generation: UInt64,
+        contextKey: String,
+        sampleID: UInt64,
+        capturedAt: TimeInterval,
+        left: Double?,
+        right: Double?,
+        maximumStep: Double,
+        maximumGap: TimeInterval
+    ) -> Result {
+        guard generation > 0, !contextKey.isEmpty, sampleID > 0,
+              capturedAt.isFinite, maximumStep.isFinite, maximumStep > 0,
+              maximumGap.isFinite, maximumGap > 0,
+              left.map(\.isFinite) ?? true,
+              right.map(\.isFinite) ?? true else {
+            return .rejectedJump
+        }
+
+        let sameStream = self.generation == generation && self.contextKey == contextKey
+        let hasUsablePrevious = sameStream &&
+            (lastSampleID.map { sampleID > $0 } ?? true) &&
+            (lastCapturedAt.map { capturedAt > $0 } ?? true) &&
+            (lastCapturedAt.map { capturedAt - $0 <= maximumGap } ?? true)
+        if hasUsablePrevious {
+            let leftJump = if let left, let lastLeft {
+                abs(left - lastLeft) > maximumStep
+            } else { false }
+            let rightJump = if let right, let lastRight {
+                abs(right - lastRight) > maximumStep
+            } else { false }
+            if leftJump || rightJump {
+                // Ne mémorise pas le saut : le prochain échantillon est
+                // comparé au dernier point accepté et reste donc vérifiable.
+                return .rejectedJump
+            }
+        }
+
+        self.generation = generation
+        self.contextKey = contextKey
+        self.lastSampleID = sampleID
+        self.lastCapturedAt = capturedAt
+        self.lastLeft = left
+        self.lastRight = right
+        return .accepted
+    }
+
+    var acceptedDeltas: (left: Double?, right: Double?) {
+        (lastLeft, lastRight)
+    }
+}
+
 nonisolated struct PostureRichEvaluation: Equatable, Sendable {
     let torsoInclination: PostureRichScalarObservation
     let shoulderSlope: PostureRichScalarObservation
@@ -943,6 +1291,7 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
     private var shoulderSlopeState = PostureRichSustainedState()
     private var openingState = PostureRichSustainedState()
     private var raisedState = PostureRichSustainedState()
+    private var shoulderRaiseFilter = PostureShoulderRaiseTemporalFilter()
     private var proximityState = PostureRichSustainedState()
     private var blinkTracker = PostureBlinkTracker()
     private var blinkRateTracker = PostureBlinkRateTracker()
@@ -983,6 +1332,7 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
         lastAcceptedTimestamp = nil
         lastAcceptedSampleID = nil
         torsoState.reset(); shoulderSlopeState.reset(); openingState.reset(); raisedState.reset(); proximityState.reset()
+        shoulderRaiseFilter.reset()
         blinkTracker.reset()
         blinkRateTracker.reset()
         automaticBlinkTargetPerMinute = nil
@@ -1414,21 +1764,62 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
         )
 
         let leftDelta: Double? = if let value = body?.leftShoulderElevation,
-                                    let neutral = baselineUsable?.leftShoulderElevation {
+                                    let neutral = bodyBaselineUsable?.leftShoulderElevation {
             value - neutral
         } else { nil }
         let rightDelta: Double? = if let value = body?.rightShoulderElevation,
-                                     let neutral = baselineUsable?.rightShoulderElevation {
+                                     let neutral = bodyBaselineUsable?.rightShoulderElevation {
             value - neutral
         } else { nil }
-        let raisedValue: Double? = if body?.shouldersState == .available,
-                                       let leftDelta, let rightDelta {
-            // Ne pas annuler une élévation unilatérale par une moyenne :
-            // l'arbitre dispose toujours des deux deltas bruts ci-dessus.
-            max(leftDelta, rightDelta)
-        } else { nil }
+
+        // Le filtre avance uniquement sur un nouvel échantillon corps. Un
+        // tick visage republie les derniers deltas acceptés, tandis qu'un
+        // saut rejette les deux côtés afin de ne pas fabriquer une élévation
+        // bilatérale ou un épisode à partir d'un seul résultat aberrant.
+        let filteredDeltas: (left: Double?, right: Double?, rejectedJump: Bool)
+        switch source {
+        case .body, .combined:
+            switch shoulderRaiseFilter.consume(
+                generation: idGeneration,
+                contextKey: key,
+                sampleID: body?.sampleID ?? idSample,
+                capturedAt: body?.capturedAt ?? idTimestamp,
+                left: leftDelta,
+                right: rightDelta,
+                maximumStep: configuration.shoulderElevationMaximumStep,
+                maximumGap: configuration.maximumSampleGap
+            ) {
+            case .accepted:
+                filteredDeltas = (leftDelta, rightDelta, false)
+            case .rejectedJump:
+                filteredDeltas = (nil, nil, true)
+            }
+        case .face:
+            let accepted = shoulderRaiseFilter.acceptedDeltas
+            filteredDeltas = (accepted.left, accepted.right, false)
+        case .invalidateBody:
+            filteredDeltas = (nil, nil, false)
+        }
+        let acceptedLeftDelta = filteredDeltas.left
+        let acceptedRightDelta = filteredDeltas.right
+        let raisedValue = [acceptedLeftDelta, acceptedRightDelta].compactMap { $0 }.max()
+        let raiseClassification = classifyShoulderRaise(
+            left: acceptedLeftDelta,
+            right: acceptedRightDelta,
+            enterThreshold: configuration.shoulderElevationEnterDelta
+        )
+        let raisedQuality: PostureSignalQuality = if filteredDeltas.rejectedJump {
+            .limited
+        } else if raisedValue == nil {
+            .unavailable
+        } else if body?.shouldersState == .available,
+                  acceptedLeftDelta != nil, acceptedRightDelta != nil {
+            .good
+        } else {
+            .limited
+        }
         let raisedAttention: Bool
-        if let raisedValue {
+        if let raisedValue, raisedQuality == .good {
             if source == .face || source == .invalidateBody {
                 raisedAttention = raisedState.active
             } else {
@@ -1444,13 +1835,34 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
             if source == .body || source == .combined { raisedState.reset() }
             raisedAttention = false
         }
+        let raisedSignalState: PostureRichSignalState = if filteredDeltas.rejectedJump {
+            .error
+        } else if raisedValue == nil {
+            body == nil ? .unavailable : .partial
+        } else {
+            body?.shouldersState ?? .unavailable
+        }
+        let raisedReason: String = if let bodyInvalidationReason {
+            bodyInvalidationReason
+        } else if filteredDeltas.rejectedJump {
+            "saut d'élévation des épaules rejeté"
+        } else if raisedValue == nil {
+            "deux épaules et baseline requises"
+        } else if raisedQuality != .good {
+            "qualité des épaules insuffisante"
+        } else {
+            ""
+        }
         let raised = PostureRichScalarObservation(
             kind: .shouldersRaised, value: raisedValue,
-            state: raisedValue == nil ? .partial : (body?.shouldersState ?? .unavailable),
-            quality: raisedValue == nil ? .limited : .good,
+            state: raisedSignalState,
+            quality: raisedQuality,
             generation: idGeneration, sampleID: idSample, capturedAt: idTimestamp,
             isEstimated2DProxy: true, isAttention: raisedAttention,
-            reason: bodyInvalidationReason ?? (raisedValue == nil ? "deux épaules et baseline requises" : "")
+            reason: raisedReason,
+            leftShoulderDelta: acceptedLeftDelta,
+            rightShoulderDelta: acceptedRightDelta,
+            shoulderRaiseClassification: raiseClassification
         )
 
         let scale = faceForEvaluation?.faceScale
@@ -1490,14 +1902,15 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
             reason: proximityReason
         )
 
-        let eyeOpening: Double?
-        if let face = faceForEvaluation,
-           let left = face.signal.leftEyeOpeningRatio,
-           let right = face.signal.rightEyeOpeningRatio {
-            eyeOpening = (left + right) / 2
-        } else {
-            eyeOpening = nil
-        }
+        let leftEyeOpening = faceForEvaluation?.signal.leftEyeOpeningRatio
+        let rightEyeOpening = faceForEvaluation?.signal.rightEyeOpeningRatio
+        let blinkOpeningBaseline = faceBaselineUsable?.blinkOpeningBaseline
+        // Les baselines personnalisées sont le contrat attendu. Le fallback
+        // historique reste par œil, jamais une moyenne gauche/droite.
+        let leftOpeningReference = blinkOpeningBaseline?.leftEyeOpeningRatio
+            ?? configuration.blinkBaselineOpeningRatio
+        let rightOpeningReference = blinkOpeningBaseline?.rightEyeOpeningRatio
+            ?? configuration.blinkBaselineOpeningRatio
         let blinkGood = faceForEvaluation.map {
             let leftEyeGood = $0.signal.leftEyeOpeningRatio.map {
                 $0.isFinite && $0 >= 0
@@ -1512,21 +1925,25 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
                 $0.isFinite && abs($0) <= configuration.maximumRollDegrees
             } ?? false
             return $0.facePointCount >= configuration.minimumFacePoints &&
-                leftEyeGood && rightEyeGood && yawGood && rollGood
+                leftEyeGood && rightEyeGood && yawGood && rollGood &&
+                leftOpeningReference.isFinite && leftOpeningReference > 0 &&
+                rightOpeningReference.isFinite && rightOpeningReference > 0
         } ?? false
-        let normalizedEyeOpening: Double?
-        if let eyeOpening, configuration.blinkBaselineOpeningRatio.isFinite,
-           configuration.blinkBaselineOpeningRatio > 0 {
-            normalizedEyeOpening = eyeOpening / configuration.blinkBaselineOpeningRatio
-        } else {
-            normalizedEyeOpening = nil
-        }
+        let normalizedLeftEyeOpening: Double? = if let leftEyeOpening,
+            leftOpeningReference.isFinite, leftOpeningReference > 0 {
+            leftEyeOpening / leftOpeningReference
+        } else { nil }
+        let normalizedRightEyeOpening: Double? = if let rightEyeOpening,
+            rightOpeningReference.isFinite, rightOpeningReference > 0 {
+            rightEyeOpening / rightOpeningReference
+        } else { nil }
         let advancesFace = source == .face || source == .combined
         let event: PostureBlinkEvent?
         if advancesFace, let usableFace = faceForEvaluation {
             event = blinkTracker.consume(generation: usableFace.generation,
                                          timestamp: usableFace.capturedAt,
-                                         openingRatio: normalizedEyeOpening,
+                                         leftEyeOpeningRatio: normalizedLeftEyeOpening,
+                                         rightEyeOpeningRatio: normalizedRightEyeOpening,
                                          qualityGood: blinkGood,
                                          configuration: configuration)
         } else {
@@ -1597,11 +2014,32 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
                                      blinkRateAssessment: blinkRateAssessment)
     }
 
+    private func classifyShoulderRaise(
+        left: Double?,
+        right: Double?,
+        enterThreshold: Double
+    ) -> PostureShoulderRaiseClassification {
+        guard let left, let right,
+              enterThreshold.isFinite, enterThreshold >= 0,
+              left.isFinite, right.isFinite else {
+            return .unavailable
+        }
+        let leftRaised = left >= enterThreshold
+        let rightRaised = right >= enterThreshold
+        switch (leftRaised, rightRaised) {
+        case (true, true): return .bilateral
+        case (true, false): return .unilateralLeft
+        case (false, true): return .unilateralRight
+        case (false, false): return .none
+        }
+    }
+
     private mutating func resetBodyStateOnly() {
         torsoState.reset()
         shoulderSlopeState.reset()
         openingState.reset()
         raisedState.reset()
+        shoulderRaiseFilter.reset()
     }
 
     private mutating func resetFaceStateOnly() {

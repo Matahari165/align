@@ -276,8 +276,10 @@ private enum PostureRichSignalHarness {
         let limited = PostureRichGeometryEvaluator.make(
             result: result(limitedShoulders: true), face: neutralFace, context: context
         )
-        expect(limited.shouldersState == .partial && limited.openingState == .partial,
-               "les repères limited ne doivent pas devenir disponibles")
+        expect(limited.shouldersState == .partial && limited.openingState == .partial &&
+               limited.torsoState == .partial && limited.torsoInclinationDegrees == nil &&
+               limited.torsoAxisDeviation == nil,
+               "les repères limited ne doivent alimenter ni épaules ni torse")
 
         let samples = (0..<12).map { index in
             PostureRichGeometryMetrics(
@@ -302,6 +304,27 @@ private enum PostureRichSignalHarness {
         )
         expect(baseline?.sampleCount == 12 && baseline?.proximityScale != nil,
                "la baseline doit conserver les métriques scalaires et la proximité")
+        let legacyBaselineJSON = try! JSONSerialization.data(withJSONObject: [
+            "generation": 1,
+            "contextKey": context.key,
+            "ruleVersion": "rich-v1",
+            "torsoInclinationDegrees": NSNull(),
+            "torsoAxisDeviation": NSNull(),
+            "shoulderSlopeDegrees": NSNull(),
+            "shoulderOpeningRatio": NSNull(),
+            "leftShoulderElevation": NSNull(),
+            "rightShoulderElevation": NSNull(),
+            "proximityScale": NSNull(),
+            "sampleCount": 12,
+            "torsoInclinationMAD": NSNull(),
+            "torsoAxisMAD": NSNull(),
+            "shoulderSlopeMAD": NSNull()
+        ])
+        let decodedLegacyBaseline = try? JSONDecoder().decode(
+            PostureRichBaseline.self, from: legacyBaselineJSON
+        )
+        expect(decodedLegacyBaseline?.blinkOpeningBaseline == nil,
+               "une baseline antérieure sans repère oculaire doit rester décodable")
         let partialSamples = samples.map {
             PostureRichGeometryMetrics(
                 generation: $0.generation, sampleID: $0.sampleID, capturedAt: $0.capturedAt,
@@ -760,8 +783,83 @@ private enum PostureRichSignalHarness {
             baseline: baseline, now: 1.2
         )
         expect((rightRaisedSustained.shouldersRaised.value ?? 0) > 0 &&
-               rightRaisedSustained.shouldersRaised.isAttention,
-               "une seule épaule droite relevée ne doit pas être annulée")
+               rightRaisedSustained.shouldersRaised.isAttention &&
+               rightRaisedSustained.shouldersRaised.shoulderRaiseClassification == .unilateralRight &&
+               abs(rightRaisedSustained.shouldersRaised.leftShoulderDelta ?? 99) < 0.001 &&
+               (rightRaisedSustained.shouldersRaised.rightShoulderDelta ?? 0) >
+                   configuration.shoulderElevationEnterDelta,
+               "une seule épaule droite relevée expose ses valeurs et reste détectable")
+
+        var bilateralRaisedEvaluator = PostureRichSignalEvaluator(configuration: configuration)
+        _ = bilateralRaisedEvaluator.consume(geometry: neutral, face: neutralFace,
+                                             baseline: baseline, now: 0)
+        let bilateralRaisedOne = PostureRichGeometryEvaluator.make(
+            result: result(sampleID: 36, timestamp: 0.6,
+                           leftShoulderDeltaY: -0.030, rightShoulderDeltaY: -0.030),
+            face: face(sampleID: 36, timestamp: 0.6, contextKey: context.key), context: context
+        )
+        _ = bilateralRaisedEvaluator.consume(
+            geometry: bilateralRaisedOne,
+            face: face(sampleID: 36, timestamp: 0.6, contextKey: context.key),
+            baseline: baseline, now: 0.6
+        )
+        let bilateralRaisedSustained = bilateralRaisedEvaluator.consume(
+            geometry: PostureRichGeometryEvaluator.make(
+                result: result(sampleID: 37, timestamp: 1.2,
+                               leftShoulderDeltaY: -0.030, rightShoulderDeltaY: -0.030),
+                face: face(sampleID: 37, timestamp: 1.2, contextKey: context.key), context: context
+            ),
+            face: face(sampleID: 37, timestamp: 1.2, contextKey: context.key),
+            baseline: baseline, now: 1.2
+        )
+        expect(bilateralRaisedSustained.shouldersRaised.isAttention &&
+               bilateralRaisedSustained.shouldersRaised.shoulderRaiseClassification == .bilateral &&
+               (bilateralRaisedSustained.shouldersRaised.leftShoulderDelta ?? 0) >
+                   configuration.shoulderElevationEnterDelta &&
+               (bilateralRaisedSustained.shouldersRaised.rightShoulderDelta ?? 0) >
+                   configuration.shoulderElevationEnterDelta,
+               "deux épaules relevées sont classées bilatérales")
+
+        var jumpConfiguration = configuration
+        jumpConfiguration.shoulderElevationMaximumStep = 0.15
+        var jumpEvaluator = PostureRichSignalEvaluator(configuration: jumpConfiguration)
+        _ = jumpEvaluator.consume(geometry: neutral, face: neutralFace,
+                                  baseline: baseline, now: 0)
+        let jumped = jumpEvaluator.consume(
+            geometry: PostureRichGeometryEvaluator.make(
+                result: result(sampleID: 38, timestamp: 0.6, rightShoulderDeltaY: -0.20),
+                face: face(sampleID: 38, timestamp: 0.6, contextKey: context.key), context: context
+            ),
+            face: face(sampleID: 38, timestamp: 0.6, contextKey: context.key),
+            baseline: baseline, now: 0.6
+        )
+        expect(jumped.shouldersRaised.value == nil &&
+               jumped.shouldersRaised.quality == .limited &&
+               jumped.shouldersRaised.state == .error &&
+               jumped.shouldersRaised.shoulderRaiseClassification == .unavailable &&
+               jumped.shouldersRaised.reason.contains("saut") &&
+               !jumped.shouldersRaised.isAttention,
+               "un saut d'élévation est rejeté sans ouvrir une attention")
+        let recoveredAfterJumpOne = jumpEvaluator.consume(
+            geometry: PostureRichGeometryEvaluator.make(
+                result: result(sampleID: 39, timestamp: 1.2, rightShoulderDeltaY: -0.030),
+                face: face(sampleID: 39, timestamp: 1.2, contextKey: context.key), context: context
+            ),
+            face: face(sampleID: 39, timestamp: 1.2, contextKey: context.key),
+            baseline: baseline, now: 1.2
+        )
+        let recoveredAfterJumpTwo = jumpEvaluator.consume(
+            geometry: PostureRichGeometryEvaluator.make(
+                result: result(sampleID: 40, timestamp: 1.8, rightShoulderDeltaY: -0.030),
+                face: face(sampleID: 40, timestamp: 1.8, contextKey: context.key), context: context
+            ),
+            face: face(sampleID: 40, timestamp: 1.8, contextKey: context.key),
+            baseline: baseline, now: 1.8
+        )
+        expect(!recoveredAfterJumpOne.shouldersRaised.isAttention &&
+               recoveredAfterJumpTwo.shouldersRaised.isAttention &&
+               recoveredAfterJumpTwo.shouldersRaised.shoulderRaiseClassification == .unilateralRight,
+               "le signal reprend après deux échantillons cohérents suivant le saut")
         let stale = evaluator.consume(
             geometry: leaned,
             face: face(sampleID: 6, timestamp: 0.7, contextKey: context.key),

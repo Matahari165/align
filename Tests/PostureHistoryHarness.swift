@@ -10,7 +10,7 @@ private enum PostureHistoryHarness {
         var accumulator = PostureHistoryAccumulator()
         var calendar = Calendar(identifier: .iso8601)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        let day = Date(timeIntervalSince1970: 1_800_000_000)
+        let day = Date(timeIntervalSince1970: 1_700_000_000)
 
         // Event identity is scoped to the process launch: two launches may
         // both restart generation/episode counters, while a duplicate within
@@ -65,6 +65,21 @@ private enum PostureHistoryHarness {
                "le dénominateur doit sommer uniquement le temps fiable")
         expect(abs((daySummary.estimatedBlinksPerMinute ?? 0) - 10) < 0.000_001,
                "le taux doit diviser les vrais clignements, pas les livraisons")
+
+        var duplicateBlink = PostureHistoryAccumulator()
+        let oneBlink = PostureHistoryObservation(
+            date: day, signalID: .estimatedBlinks, sensitivity: .sensitive,
+            ruleProfileID: "blink-v1", observedDuration: 0,
+            attentionDuration: 0, beganOpportunity: false,
+            acceptedEventCount: 0, deliveredNotification: false,
+            recoveryDuration: nil, eventKey: "launch-a:blink:g1:c1:t1",
+            blinkEventCount: 1
+        )
+        duplicateBlink.ingest(oneBlink, now: day)
+        duplicateBlink.ingest(oneBlink, now: day)
+        expect(duplicateBlink.database.buckets.reduce(0) {
+            $0 + ($1.blinkEventCount ?? 0)
+        } == 1, "un même événement open-closed-open ne doit être compté qu'une fois")
 
         var insufficient = PostureHistoryAccumulator()
         insufficient.ingest(.init(
@@ -153,6 +168,35 @@ private enum PostureHistoryHarness {
         let corrupt = await store.load()
         expect(corrupt == .corrupt,
                "une corruption doit rester distincte d’un historique vide")
+
+        let semanticallyInvalid = PostureHistoryDatabase(buckets: [
+            .init(
+                bucketStart: day, signalID: .proximity, sensitivity: .sensitive,
+                ruleProfileID: "runtime-v1", observedDuration: -1,
+                attentionDuration: 0, opportunityCount: 0,
+                acceptedEventCount: 0, blinkEventCount: 0,
+                notificationCount: 0, recoveryDurations: []
+            )
+        ])
+        try await store.save(semanticallyInvalid)
+        let rejectedSemanticDatabase = await store.load()
+        expect(rejectedSemanticDatabase == .corrupt,
+               "un JSON décodable mais sémantiquement invalide doit être refusé")
+
+        try await store.erase()
+        let queuedController = await MainActor.run {
+            PostureHistoryController(store: store)
+        }
+        await MainActor.run {
+            queuedController.enqueue(delivery("queued-before-quit"), now: day)
+        }
+        await queuedController.flushPending()
+        if case .loaded(let queuedDatabase) = await store.load() {
+            expect(queuedDatabase.buckets.reduce(0) { $0 + $1.notificationCount } == 1,
+                   "flushPending doit attendre la dernière écriture avant fermeture")
+        } else {
+            expect(false, "l'écriture mise en file doit être persistée")
+        }
         print("PostureHistoryHarness: OK")
     }
 }

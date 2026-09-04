@@ -127,7 +127,10 @@ nonisolated struct TemporalObservationMachine: Sendable {
             observedAt: evidence.capturedAt,
             producedAt: now,
             episodeID: activeEpisodeID,
-            reason: nil
+            reason: nil,
+            leftShoulderDelta: evidence.leftShoulderDelta,
+            rightShoulderDelta: evidence.rightShoulderDelta,
+            shoulderRaiseClassification: evidence.shoulderRaiseClassification
         )
         return snapshot
     }

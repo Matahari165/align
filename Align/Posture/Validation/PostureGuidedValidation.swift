@@ -242,9 +242,15 @@ public struct PostureValidationSample: Codable, Equatable, Sendable {
 
 public enum PostureValidationRecordRejection: String, Codable, Equatable, Sendable {
     case finished
+    case baselineRequired
     case invalidTimestamp
     case outsidePlan
     case nonMonotonicTimestamp
+}
+
+public enum PostureValidationCompletionStatus: String, Codable, Equatable, Sendable {
+    case complete
+    case incomplete
 }
 
 public enum PostureValidationRecordResult: Codable, Equatable, Sendable {
@@ -373,6 +379,7 @@ public struct PostureValidationPhaseMetrics: Codable, Equatable, Sendable {
     public let coverage: PostureValidationRatio
     public let recall: PostureValidationRatio?
     public let falsePositiveShare: PostureValidationRatio?
+    public let reliableFalsePositiveShare: PostureValidationRatio?
     public let directionAccuracy: PostureValidationRatio?
     public let latency: PostureValidationDistribution
 
@@ -408,6 +415,13 @@ public struct PostureValidationPhaseMetrics: Codable, Equatable, Sendable {
         self.falsePositiveShare = phase.expectation.expectedAttention == nil
             ? PostureValidationRatio(numerator: predictedAttentionCount, denominator: sampleCount)
             : nil
+        let reliableSamples = samples.filter { $0.availability.isReliable }
+        self.reliableFalsePositiveShare = phase.expectation.expectedAttention == nil
+            ? PostureValidationRatio(
+                numerator: reliableSamples.filter { $0.predictedAttention != nil }.count,
+                denominator: reliableSamples.count
+            )
+            : nil
 
         let directionalSamples = samples.filter {
             $0.expected.expectedDirection != nil &&
@@ -432,6 +446,8 @@ public struct PostureValidationReport: Codable, Equatable, Sendable {
     public let mode: PostureValidationMode
     public let protocolVersion: String
     public let totalDuration: TimeInterval
+    public let completionStatus: PostureValidationCompletionStatus
+    public let coveredPhaseCount: Int
     public let recordedSampleCount: Int
     public let attentionAttemptCount: Int
     public let noAttentionAttemptCount: Int
@@ -439,6 +455,7 @@ public struct PostureValidationReport: Codable, Equatable, Sendable {
     public let coverage: PostureValidationRatio
     public let recall: PostureValidationRatio
     public let falsePositiveShare: PostureValidationRatio
+    public let reliableFalsePositiveShare: PostureValidationRatio
     public let directionAttemptCount: Int
     public let directionEligibleCount: Int
     public let directionUnknownCount: Int
@@ -451,10 +468,18 @@ public struct PostureValidationReport: Codable, Equatable, Sendable {
     public let repeatability: [String: PostureValidationRepeatabilityMetric]
     public let phases: [PostureValidationPhaseMetrics]
 
-    fileprivate init(plan: PostureValidationPlan, samples: [PostureValidationSample]) {
+    public var isConclusive: Bool { completionStatus == .complete }
+
+    fileprivate init(
+        plan: PostureValidationPlan,
+        samples: [PostureValidationSample],
+        completionStatus: PostureValidationCompletionStatus
+    ) {
         self.mode = plan.mode
         self.protocolVersion = "guided-validation-v1"
         self.totalDuration = plan.totalDuration
+        self.completionStatus = completionStatus
+        self.coveredPhaseCount = Set(samples.map(\.phaseID)).count
         self.recordedSampleCount = samples.count
 
         let attentionSamples = samples.filter { $0.expectedAttention != nil }
@@ -486,6 +511,11 @@ public struct PostureValidationReport: Codable, Equatable, Sendable {
             numerator: falsePositiveCount,
             denominator: noAttentionSamples.count
         )
+        let reliableNoAttentionSamples = noAttentionSamples.filter { $0.availability.isReliable }
+        self.reliableFalsePositiveShare = PostureValidationRatio(
+            numerator: reliableNoAttentionSamples.filter { $0.predictedAttention != nil }.count,
+            denominator: reliableNoAttentionSamples.count
+        )
 
         let directionalSamples = samples.filter { $0.expected.expectedDirection != nil }
         let eligibleDirectionalSamples = directionalSamples.filter {
@@ -511,12 +541,42 @@ public struct PostureValidationReport: Codable, Equatable, Sendable {
         self.recoveryAttemptCount = recoveryPhases.count
         var recoveryLatencies: [Double] = []
         for phase in recoveryPhases {
-            let firstReliable = samples
+            let priorAttentionWasActive = samples.contains {
+                $0.timestamp < phase.startTime &&
+                    $0.availability.isReliable &&
+                    $0.predictedAttention != nil
+            }
+            guard priorAttentionWasActive else { continue }
+            let reliableRecovery = samples
                 .filter { $0.phaseID == phase.id }
-                .filter { $0.predictedAttention == nil && $0.availability.isReliable }
-                .min { $0.timestamp < $1.timestamp }
-            if let firstReliable {
-                recoveryLatencies.append(max(0, firstReliable.timestamp - phase.startTime))
+                .filter { $0.availability.isReliable }
+                .sorted { $0.timestamp < $1.timestamp }
+            let requiredSustain = max(0.5, plan.expectedSampleInterval * 3)
+            var sustainedRecoveryStart: PostureValidationSample?
+            for (index, candidate) in reliableRecovery.enumerated() {
+                guard candidate.predictedAttention == nil else { continue }
+                let confirmationTime = candidate.timestamp + requiredSustain
+                var wasInterrupted = false
+                var wasConfirmed = false
+                for confirmation in reliableRecovery.dropFirst(index + 1) {
+                    if confirmation.timestamp < confirmationTime,
+                       confirmation.predictedAttention != nil {
+                        wasInterrupted = true
+                        break
+                    }
+                    if confirmation.timestamp >= confirmationTime,
+                       confirmation.predictedAttention == nil {
+                        wasConfirmed = true
+                        break
+                    }
+                }
+                if wasConfirmed && !wasInterrupted {
+                    sustainedRecoveryStart = candidate
+                    break
+                }
+            }
+            if let firstClear = sustainedRecoveryStart {
+                recoveryLatencies.append(max(0, firstClear.timestamp - phase.startTime))
             }
         }
         self.recoverySuccessCount = recoveryLatencies.count
@@ -574,11 +634,13 @@ public struct PostureValidationSession: Sendable {
     public let plan: PostureValidationPlan
     public private(set) var samples: [PostureValidationSample] = []
     public private(set) var isFinished = false
+    public let baselineValidated: Bool
 
     private var lastTimestamp: TimeInterval?
 
-    public init(plan: PostureValidationPlan) {
+    public init(plan: PostureValidationPlan, baselineValidated: Bool) {
         self.plan = plan
+        self.baselineValidated = baselineValidated
         self.lastTimestamp = nil
     }
 
@@ -592,6 +654,7 @@ public struct PostureValidationSession: Sendable {
         scalarValues: [String: Double] = [:]
     ) -> PostureValidationRecordResult {
         guard !isFinished else { return .rejected(.finished) }
+        guard baselineValidated else { return .rejected(.baselineRequired) }
         guard timestamp.isFinite, timestamp >= 0 else {
             return .rejected(.invalidTimestamp)
         }
@@ -619,6 +682,40 @@ public struct PostureValidationSession: Sendable {
 
     public mutating func finish() -> PostureValidationReport {
         isFinished = true
-        return PostureValidationReport(plan: plan, samples: samples)
+        let coveredPhases = Set(samples.map(\.phaseID))
+        let reachedProtocolEnd = lastTimestamp.map {
+            $0 >= plan.totalDuration - plan.expectedSampleInterval * 2
+        } ?? false
+        let completion: PostureValidationCompletionStatus =
+            baselineValidated && coveredPhases.count == plan.phases.count && reachedProtocolEnd
+                ? .complete
+                : .incomplete
+        return PostureValidationReport(
+            plan: plan,
+            samples: samples,
+            completionStatus: completion
+        )
+    }
+}
+
+/// Répétabilité réelle entre trois exécutions complètes et indépendantes.
+public struct PostureValidationThreeRunRepeatability: Codable, Equatable, Sendable {
+    public let runCount: Int
+    public let metrics: [String: PostureValidationStabilityMetric]
+
+    public init?(reports: [PostureValidationReport]) {
+        guard reports.count >= 3, reports.allSatisfy(\.isConclusive) else { return nil }
+        var mediansByMetric: [String: [Double]] = [:]
+        for report in reports {
+            for (key, metric) in report.stability {
+                if let median = metric.median {
+                    mediansByMetric[key, default: []].append(median)
+                }
+            }
+        }
+        self.runCount = reports.count
+        self.metrics = mediansByMetric
+            .filter { $0.value.count == reports.count }
+            .mapValues(PostureValidationStabilityMetric.init(values:))
     }
 }

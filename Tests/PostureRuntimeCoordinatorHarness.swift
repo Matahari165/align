@@ -82,10 +82,17 @@ private enum PostureRuntimeCoordinatorHarness {
                      "douze corps uniques doivent figer une baseline exploitable")
         precondition(coordinator.finishCalibration(), "la session explicite doit produire une baseline")
         let savedBaseline = coordinator.baselineSnapshot
+        precondition(savedBaseline?.blinkOpeningBaseline != nil,
+                     "la calibration doit conserver un repère séparé pour les deux yeux")
         var resumed = PostureRuntimeCoordinator()
         resumed.reset(generation: 8, contextKey: context.key)
         if let savedBaseline {
             resumed.restoreBaseline(savedBaseline, for: 8, contextKey: context.key)
+            precondition(
+                resumed.baselineSnapshot?.blinkOpeningBaseline ==
+                    savedBaseline.blinkOpeningBaseline,
+                "le repère oculaire gauche/droite doit survivre à la restauration"
+            )
         }
         let resumedBody = UpperBodyResult(descriptor: descriptor, state: .detected, generation: 8,
                                           sampleID: 1, capturedAt: 10, producedAt: 10.01,
@@ -112,9 +119,8 @@ private enum PostureRuntimeCoordinatorHarness {
                      "un contexte sans source ne doit rien publier")
 
         // Les cadences source-specifices ne doivent pas se bloquer entre
-        // elles : un visage d'un nouveau contexte peut continuer ses signaux
-        // propres, tandis que le corps de l'ancien contexte n'est jamais
-        // fusionné avec lui.
+        // elles, mais aucune preuve d'un autre contexte ne peut entrer dans
+        // le coordinateur courant.
         var sourceCoordinator = PostureRuntimeCoordinator()
         sourceCoordinator.reset(generation: 9, contextKey: context.key)
         let bodyA = UpperBodyResult(descriptor: descriptor, state: .detected, generation: 9,
@@ -128,8 +134,8 @@ private enum PostureRuntimeCoordinatorHarness {
             generation: 9, sampleID: 1, capturedAt: 1.1, facePointCount: 50,
             contextKey: "camera-other", signal: faceAfterLossSignal()
         )
-        precondition(sourceCoordinator.consumeFace(faceB, now: 1.11) != nil,
-                     "un tick visage source-specific reste exploitable après changement de contexte")
+        precondition(sourceCoordinator.consumeFace(faceB, now: 1.11) == nil,
+                     "un tick visage d'un autre contexte doit être rejeté")
 
         var sourceCalibration = PostureRuntimeCoordinator()
         sourceCalibration.reset(generation: 10, contextKey: context.key)
@@ -144,6 +150,43 @@ private enum PostureRuntimeCoordinatorHarness {
         }
         precondition(sourceCalibration.finishCalibration(),
                      "la calibration doit être alimentée par le chemin source-specific corps")
+
+        var isolatedSources = PostureRuntimeCoordinator()
+        isolatedSources.reset(generation: 12, contextKey: context.key)
+        if let savedBaseline {
+            isolatedSources.restoreBaseline(savedBaseline, for: 12, contextKey: context.key)
+        }
+        let isolatedFace = PostureFaceObservation(
+            generation: 12, sampleID: 1, capturedAt: 20, facePointCount: 50,
+            contextKey: context.key, signal: faceAfterLossSignal()
+        )
+        guard let faceRuntime = isolatedSources.consumeFace(isolatedFace, now: 20.01) else {
+            preconditionFailure("le visage source-specific doit être accepté")
+        }
+        let isolatedBody = UpperBodyResult(
+            descriptor: descriptor, state: .detected, generation: 12,
+            sampleID: 1, capturedAt: 20.1, producedAt: 20.11,
+            points: points, contours: []
+        )
+        guard isolatedSources.consumeBody(
+            PostureRichGeometryEvaluator.make(
+                result: isolatedBody, face: isolatedFace, context: context
+            ),
+            now: 20.11
+        ) != nil else {
+            preconditionFailure("le corps source-specific doit être accepté")
+        }
+        let faceBeforeBodyLoss = faceRuntime.snapshot.signal(.proximity)
+        guard let bodyLoss = isolatedSources.invalidateBody(at: 20.2) else {
+            preconditionFailure("l'invalidation corps doit publier")
+        }
+        precondition(bodyLoss.snapshot.signal(.torsoInclination).availability == .insufficient,
+                     "noPerson corps doit invalider le torse")
+        precondition(bodyLoss.snapshot.signal(.proximity).observedAt == faceBeforeBodyLoss.observedAt,
+                     "noPerson corps doit préserver la proximité visage")
+        precondition(bodyLoss.snapshot.signal(.estimatedBlinks).observedAt ==
+                        faceRuntime.snapshot.signal(.estimatedBlinks).observedAt,
+                     "noPerson corps doit préserver les clignements")
 
         // A no-person/error invalidation must be a hard barrier: a subsequent
         // 10 Hz face tick cannot resurrect the previous body's torso/shoulder

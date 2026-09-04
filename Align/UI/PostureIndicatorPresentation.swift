@@ -80,7 +80,13 @@ nonisolated struct PostureIndicatorPresentation: Equatable, Sendable {
             let value: String = switch result.id {
             case .apparentProximity: "Un peu près"
             case .torsoInclination: "Torse incliné"
-            case .raisedShoulders: "Épaules relevées"
+            case .raisedShoulders:
+                switch result.shoulderRaiseClassification {
+                case .some(.unilateralLeft): "Épaule gauche relevée"
+                case .some(.unilateralRight): "Épaule droite relevée"
+                case .some(.bilateral): "Deux épaules relevées"
+                case .some(.none), .some(.unavailable), nil: "Épaules relevées"
+                }
             case .shoulderSlope: "Épaules inclinées"
             case .estimatedBlinks: "Sous ton repère"
             case .closedShoulders: "Plus refermées"

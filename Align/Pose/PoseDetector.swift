@@ -152,18 +152,71 @@ nonisolated struct PoseDetectionOutput: Sendable {
     let diagnostics: PoseInferenceDiagnostics
 }
 
+/// Résultat facial atomique : la boîte, les landmarks et l'orientation viennent
+/// toujours de la même observation Vision.
+nonisolated struct FaceDetectionCandidate: Sendable {
+    let boundingBox: CGRect
+    let polylines: [PosePolyline]
+    let orientation: FaceOrientationSignal
+}
+
 nonisolated struct FaceDetectionOutput: Sendable {
     static let empty = FaceDetectionOutput(
         polylines: [],
         primaryOrientation: nil,
         resultCount: 0,
-        facesWithLandmarksCount: 0
+        facesWithLandmarksCount: 0,
+        primaryBoundingBox: nil,
+        detectedBoundingBoxes: [],
+        candidates: []
     )
 
     let polylines: [PosePolyline]
     let primaryOrientation: FaceOrientationSignal?
     let resultCount: Int
     let facesWithLandmarksCount: Int
+    /// Bounding box of the face currently exposed as primary. This is a
+    /// geometric hand-off only; it is not an identity or biometric feature.
+    let primaryBoundingBox: CGRect?
+    /// All boxes returned by the full face request, retained so a caller can
+    /// apply an explicit continuity/ambiguity policy instead of selecting by
+    /// area alone.
+    let detectedBoundingBoxes: [CGRect]
+    /// Observations complètes par visage. Un consommateur qui sélectionne une
+    /// boîte doit impérativement lire les landmarks dans le même élément.
+    let candidates: [FaceDetectionCandidate]
+
+    /// Retourne une vue de cette détection dont les landmarks correspondent
+    /// exclusivement à la boîte sélectionnée par la politique de continuité.
+    /// Une correspondance non unique est refusée : aucune autre personne ne
+    /// doit devenir la cible par défaut.
+    func resolved(to target: FaceBoxCandidate) -> Self? {
+        let matching = candidates.filter { $0.boundingBox == target.boundingBox }
+        guard matching.count == 1, let candidate = matching.first else { return nil }
+        return Self(
+            polylines: candidate.polylines,
+            primaryOrientation: candidate.orientation,
+            resultCount: resultCount,
+            facesWithLandmarksCount: facesWithLandmarksCount,
+            primaryBoundingBox: candidate.boundingBox,
+            detectedBoundingBoxes: detectedBoundingBoxes,
+            candidates: candidates
+        )
+    }
+
+    /// Conserve les diagnostics de détection, mais retire toute preuve faciale
+    /// lorsqu'aucune cible unique n'est disponible.
+    var withoutResolvedTarget: Self {
+        Self(
+            polylines: [],
+            primaryOrientation: nil,
+            resultCount: resultCount,
+            facesWithLandmarksCount: facesWithLandmarksCount,
+            primaryBoundingBox: nil,
+            detectedBoundingBoxes: detectedBoundingBoxes,
+            candidates: candidates
+        )
+    }
 }
 
 nonisolated struct BodyDetectionOutput: Sendable {
@@ -354,25 +407,27 @@ nonisolated final class PoseDetector: @unchecked Sendable {
         try handler.perform([faceRequest])
 
         let faceResults = faceRequest.results ?? []
-        let primaryFace = faceResults
-            .max(by: { area(of: $0.boundingBox) < area(of: $1.boundingBox) })
-        let facePolylines = primaryFace.map {
-            self.facePolylines(
-                from: $0,
-                orientation: orientation
-            )
-        } ?? []
-        return FaceDetectionOutput(
-            polylines: facePolylines,
-            primaryOrientation: primaryFace.map {
-                FaceOrientationSignal(
-                    rollRadians: $0.roll?.doubleValue,
-                    yawRadians: $0.yaw?.doubleValue,
-                    pitchRadians: $0.pitch?.doubleValue
+        let candidates = faceResults.map { observation in
+            FaceDetectionCandidate(
+                boundingBox: observation.boundingBox,
+                polylines: self.facePolylines(from: observation, orientation: orientation),
+                orientation: FaceOrientationSignal(
+                    rollRadians: observation.roll?.doubleValue,
+                    yawRadians: observation.yaw?.doubleValue,
+                    pitchRadians: observation.pitch?.doubleValue
                 )
-            },
+            )
+        }
+        let primaryFace = candidates
+            .max(by: { area(of: $0.boundingBox) < area(of: $1.boundingBox) })
+        return FaceDetectionOutput(
+            polylines: primaryFace?.polylines ?? [],
+            primaryOrientation: primaryFace?.orientation,
             resultCount: faceResults.count,
-            facesWithLandmarksCount: faceResults.lazy.filter { $0.landmarks != nil }.count
+            facesWithLandmarksCount: faceResults.lazy.filter { $0.landmarks != nil }.count,
+            primaryBoundingBox: primaryFace?.boundingBox,
+            detectedBoundingBoxes: candidates.map(\.boundingBox),
+            candidates: candidates
         )
     }
 
