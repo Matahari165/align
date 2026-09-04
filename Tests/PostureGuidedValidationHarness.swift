@@ -168,30 +168,40 @@ private enum PostureGuidedValidationHarness {
     static func completeReport(neutralScalar: Double) -> PostureValidationReport {
         var session = PostureValidationSession(plan: .measurement20s, baselineValidated: true)
         for phase in session.plan.phases {
-            record(
-                &session,
-                timestamp: phase.startTime + 0.1,
-                attention: phase.expectedAttention,
-                availability: .reliable,
-                direction: phase.expectedDirection,
-                scalar: phase.expectation == .neutral ? neutralScalar : nil
-            )
-            if phase.expectation == .recovery {
-                record(&session, timestamp: phase.startTime + 0.7,
-                       attention: nil, availability: .reliable)
+            for index in 0..<20 {
+                record(
+                    &session,
+                    timestamp: phase.startTime + 0.1 + Double(index),
+                    attention: phase.expectedAttention,
+                    availability: .reliable,
+                    direction: phase.expectedDirection,
+                    scalar: phase.expectation == .neutral ? neutralScalar : nil
+                )
             }
         }
         record(&session, timestamp: session.plan.totalDuration - 0.1,
                attention: nil, availability: .reliable)
-        return session.finish()
+        return session.finish(at: session.plan.totalDuration)
     }
 
     static func testCompletionAndThreeRunRepeatability() {
+        var sparse = PostureValidationSession(plan: .measurement20s, baselineValidated: true)
+        for phase in sparse.plan.phases {
+            record(&sparse, timestamp: phase.startTime + 0.1,
+                   attention: phase.expectedAttention, availability: .reliable,
+                   direction: phase.expectedDirection)
+        }
+        let sparseReport = sparse.finish(at: sparse.plan.totalDuration)
+        expect(!sparseReport.isConclusive && sparseReport.phasesMeetingReliableMinimum == 0,
+               "toucher toutes les phases avec trop peu de données ne suffit pas")
+
         let reports = [1.00, 1.02, 0.98].map {
             completeReport(neutralScalar: $0)
         }
         expect(reports.allSatisfy(\.isConclusive),
                "les 11 phases et la fin du protocole rendent le rapport concluant")
+        expect(reports.allSatisfy { $0.phasesMeetingReliableMinimum == 11 },
+               "chaque phase doit contenir assez de mesures fiables")
         let repeatability = PostureValidationThreeRunRepeatability(reports: reports)
         expect(repeatability?.runCount == 3 &&
                repeatability?.metrics["torsoScale"]?.sampleCount == 3,

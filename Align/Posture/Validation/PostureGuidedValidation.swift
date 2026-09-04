@@ -253,6 +253,17 @@ public enum PostureValidationCompletionStatus: String, Codable, Equatable, Senda
     case incomplete
 }
 
+/// Seuil minimal de preuve pour les signaux de posture soutenus. Le moteur
+/// corps vise 2 Hz au premier plan ; exiger 1 échantillon fiable par seconde
+/// tolère des pertes sans valider une phase presque vide.
+nonisolated enum PostureValidationEvidencePolicy {
+    static let minimumReliableSamplesPerSecond = 1.0
+
+    static func minimumReliableSamples(for phase: PostureValidationPhase) -> Int {
+        max(3, Int(ceil(phase.duration * minimumReliableSamplesPerSecond)))
+    }
+}
+
 public enum PostureValidationRecordResult: Codable, Equatable, Sendable {
     case accepted
     case rejected(PostureValidationRecordRejection)
@@ -281,7 +292,7 @@ public struct PostureValidationDistribution: Codable, Equatable, Sendable {
     public let p50: Double?
     public let p95: Double?
 
-    fileprivate init(values: [Double]) {
+    nonisolated fileprivate init(values: [Double]) {
         let finiteValues = values.filter(\.isFinite).sorted()
         self.count = finiteValues.count
         guard !finiteValues.isEmpty else {
@@ -300,7 +311,7 @@ public struct PostureValidationDistribution: Codable, Equatable, Sendable {
         self.p95 = Self.nearestRank(0.95, values: finiteValues)
     }
 
-    private static func nearestRank(_ quantile: Double, values: [Double]) -> Double {
+    nonisolated private static func nearestRank(_ quantile: Double, values: [Double]) -> Double {
         let rank = max(1, Int(ceil(quantile * Double(values.count))))
         return values[min(values.count, rank) - 1]
     }
@@ -312,7 +323,7 @@ public struct PostureValidationStabilityMetric: Codable, Equatable, Sendable {
     public let medianAbsoluteDeviation: Double?
     public let relativeMedianAbsoluteDeviation: Double?
 
-    fileprivate init(values: [Double]) {
+    nonisolated fileprivate init(values: [Double]) {
         let finiteValues = values.filter(\.isFinite)
         self.sampleCount = finiteValues.count
         guard let median = Self.median(finiteValues) else {
@@ -333,7 +344,7 @@ public struct PostureValidationStabilityMetric: Codable, Equatable, Sendable {
         }
     }
 
-    fileprivate static func median(_ values: [Double]) -> Double? {
+    nonisolated fileprivate static func median(_ values: [Double]) -> Double? {
         guard !values.isEmpty else { return nil }
         let sorted = values.sorted()
         let middle = sorted.count / 2
@@ -352,7 +363,7 @@ public struct PostureValidationRepeatabilityMetric: Codable, Equatable, Sendable
     public let absoluteMedianDifference: Double?
     public let relativeMedianDifference: Double?
 
-    fileprivate init(firstValues: [Double], secondValues: [Double]) {
+    nonisolated fileprivate init(firstValues: [Double], secondValues: [Double]) {
         self.firstSampleCount = firstValues.count
         self.secondSampleCount = secondValues.count
         self.firstMedian = PostureValidationStabilityMetric.median(firstValues)
@@ -448,6 +459,7 @@ public struct PostureValidationReport: Codable, Equatable, Sendable {
     public let totalDuration: TimeInterval
     public let completionStatus: PostureValidationCompletionStatus
     public let coveredPhaseCount: Int
+    public let phasesMeetingReliableMinimum: Int
     public let recordedSampleCount: Int
     public let attentionAttemptCount: Int
     public let noAttentionAttemptCount: Int
@@ -480,6 +492,12 @@ public struct PostureValidationReport: Codable, Equatable, Sendable {
         self.totalDuration = plan.totalDuration
         self.completionStatus = completionStatus
         self.coveredPhaseCount = Set(samples.map(\.phaseID)).count
+        self.phasesMeetingReliableMinimum = plan.phases.filter { phase in
+            let minimum = PostureValidationEvidencePolicy.minimumReliableSamples(for: phase)
+            return samples.filter {
+                $0.phaseID == phase.id && $0.availability.isReliable
+            }.count >= minimum
+        }.count
         self.recordedSampleCount = samples.count
 
         let attentionSamples = samples.filter { $0.expectedAttention != nil }
@@ -680,14 +698,23 @@ public struct PostureValidationSession: Sendable {
         return .accepted
     }
 
-    public mutating func finish() -> PostureValidationReport {
+    public mutating func finish(at protocolElapsed: TimeInterval? = nil) -> PostureValidationReport {
         isFinished = true
         let coveredPhases = Set(samples.map(\.phaseID))
-        let reachedProtocolEnd = lastTimestamp.map {
-            $0 >= plan.totalDuration - plan.expectedSampleInterval * 2
-        } ?? false
+        let everyPhaseHasReliableEvidence = plan.phases.allSatisfy { phase in
+            let minimum = PostureValidationEvidencePolicy.minimumReliableSamples(for: phase)
+            return samples.filter {
+                $0.phaseID == phase.id && $0.availability.isReliable
+            }.count >= minimum
+        }
+        let validElapsed = protocolElapsed.flatMap { value in
+            value.isFinite && value >= 0 ? value : nil
+        }
+        let observedEnd = max(lastTimestamp ?? 0, validElapsed ?? 0)
+        let reachedProtocolEnd = observedEnd >= plan.totalDuration
         let completion: PostureValidationCompletionStatus =
-            baselineValidated && coveredPhases.count == plan.phases.count && reachedProtocolEnd
+            baselineValidated && coveredPhases.count == plan.phases.count &&
+                everyPhaseHasReliableEvidence && reachedProtocolEnd
                 ? .complete
                 : .incomplete
         return PostureValidationReport(

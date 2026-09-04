@@ -129,6 +129,7 @@ nonisolated enum FaceTargetDecision: Equatable, Sendable {
 nonisolated struct FaceTargetContinuity: Equatable, Sendable {
     let configuration: FaceTargetContinuityConfiguration
     private(set) var target: FaceBoxCandidate? = nil
+    private(set) var lastKnownTarget: FaceBoxCandidate? = nil
     private(set) var lastTimestamp: TimeInterval? = nil
     private(set) var lastDecision: FaceTargetDecision = .unavailable(.noFace)
     private(set) var requiresExplicitRearm = false
@@ -139,6 +140,7 @@ nonisolated struct FaceTargetContinuity: Equatable, Sendable {
 
     mutating func reset() {
         target = nil
+        lastKnownTarget = nil
         lastTimestamp = nil
         lastDecision = .unavailable(.noFace)
         requiresExplicitRearm = false
@@ -148,6 +150,7 @@ nonisolated struct FaceTargetContinuity: Equatable, Sendable {
     /// perte ou une ambiguïté. Aucune reconnaissance biométrique n'est tentée.
     mutating func rearm() {
         target = nil
+        lastKnownTarget = nil
         lastTimestamp = nil
         lastDecision = .unavailable(.noTarget)
         requiresExplicitRearm = false
@@ -165,8 +168,8 @@ nonisolated struct FaceTargetContinuity: Equatable, Sendable {
         guard configuration.isValid else {
             return publish(.unavailable(.invalidConfiguration), timestamp: timestamp)
         }
-        guard !requiresExplicitRearm else {
-            return publish(.unavailable(.rearmRequired), timestamp: timestamp)
+        if requiresExplicitRearm {
+            return attemptBoundedReacquisition(candidates, at: timestamp)
         }
         switch acceptTimestamp(timestamp) {
         case .rejected:
@@ -379,6 +382,8 @@ nonisolated struct FaceTargetContinuity: Equatable, Sendable {
         timestamp: TimeInterval
     ) -> FaceTargetDecision {
         target = candidate
+        lastKnownTarget = nil
+        requiresExplicitRearm = false
         let decision = FaceTargetDecision.selected(candidate, match: match)
         lastDecision = decision
         lastTimestamp = timestamp
@@ -392,11 +397,41 @@ nonisolated struct FaceTargetContinuity: Equatable, Sendable {
         clearTarget: Bool = false,
         requireRearm: Bool = false
     ) -> FaceTargetDecision {
-        if clearTarget { target = nil }
+        if clearTarget {
+            if let target { lastKnownTarget = target }
+            target = nil
+        }
         if requireRearm { requiresExplicitRearm = true }
         if let timestamp { lastTimestamp = timestamp }
         lastDecision = decision
         return decision
+    }
+
+    /// Tolère une perte très brève sans autoriser une nouvelle personne : un
+    /// seul candidat doit revenir avant `maximumGap` et correspondre encore à
+    /// la dernière boîte connue. Après ce délai, seul `rearm()` peut repartir.
+    private mutating func attemptBoundedReacquisition(
+        _ candidates: [FaceBoxCandidate],
+        at timestamp: TimeInterval
+    ) -> FaceTargetDecision {
+        guard timestamp.isFinite,
+              let lostAt = lastTimestamp,
+              timestamp > lostAt else {
+            return publish(.unavailable(.rearmRequired), timestamp: nil)
+        }
+        guard timestamp - lostAt <= configuration.maximumGap,
+              let previous = lastKnownTarget,
+              candidates.count == 1,
+              let candidate = candidates.first,
+              let match = Self.match(
+                from: previous,
+                to: candidate,
+                configuration: configuration
+              ),
+              match.isFinite else {
+            return publish(.unavailable(.rearmRequired), timestamp: nil)
+        }
+        return select(candidate, match: match, timestamp: timestamp)
     }
 
     private static func intersectionOverUnion(_ lhs: CGRect, _ rhs: CGRect) -> CGFloat {
