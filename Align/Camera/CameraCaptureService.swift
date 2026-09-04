@@ -656,7 +656,7 @@ final class CameraCaptureService: ObservableObject {
         postureValidationProgressTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(200))
-                guard let self, let session = self.postureValidationSession,
+                guard let self, var session = self.postureValidationSession,
                       let startedAt = self.postureValidationStartedAt else { return }
                 let elapsed = ProcessInfo.processInfo.systemUptime - startedAt
                 if elapsed >= session.plan.totalDuration {
