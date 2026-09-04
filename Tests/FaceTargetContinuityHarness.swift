@@ -115,6 +115,20 @@ private enum FaceTargetContinuityHarness {
         expect(jump.reason == .trackingJump && tracked.target == nil,
                "un saut du tracker doit invalider la cible")
 
+        var transientLoss = FaceTargetContinuity()
+        _ = transientLoss.ingestFullDetection([initial], at: 3.5)
+        expect(transientLoss.ingestFullDetection([], at: 3.6).reason == .targetLost,
+               "une frame sans visage suspend la cible")
+        let recovered = transientLoss.ingestFullDetection([shifted], at: 3.7)
+        expect(recovered.candidate == shifted && !transientLoss.requiresExplicitRearm,
+               "le même visage spatialement cohérent peut revenir dans le gap borné")
+
+        var expiredLoss = FaceTargetContinuity()
+        _ = expiredLoss.ingestFullDetection([initial], at: 3.5)
+        _ = expiredLoss.ingestFullDetection([], at: 3.6)
+        expect(expiredLoss.ingestFullDetection([shifted], at: 4.2).reason == .rearmRequired,
+               "une réapparition tardive exige un réarmement explicite")
+
         var gap = FaceTargetContinuity()
         _ = gap.ingestFullDetection([initial], at: 4)
         let gapDecision = gap.ingestTrackedBox(shifted, at: 4.6)
