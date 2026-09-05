@@ -14,7 +14,8 @@ nonisolated struct PostureIndicatorPresentation: Equatable, Sendable {
         .closedShoulders,
         .apparentProximity,
         .torsoInclination,
-        .estimatedBlinks
+        .estimatedBlinks,
+        .handOnFace
     ]
 
     let title: String
@@ -87,6 +88,8 @@ nonisolated struct PostureIndicatorPresentation: Equatable, Sendable {
             return String(format: "%.1f/min", value)
         case .raisedShoulders, .closedShoulders:
             return nil
+        case .handOnFace:
+            return nil
         }
     }
 
@@ -152,9 +155,13 @@ nonisolated struct PostureIndicatorPresentation: Equatable, Sendable {
             case .headTilt: "Tête penchée sur le côté"
             case .estimatedBlinks: "Sous ton repère"
             case .closedShoulders: "À réajuster"
+            case .handOnFace: "Éloigne ta main"
             }
-            let evidence = result.id == .apparentProximity
-                ? "Proxy fiable relatif à ton repère, " : "Mesure fiable, "
+            let evidence: String = switch result.id {
+            case .apparentProximity: "Proxy fiable relatif à ton repère, "
+            case .handOnFace: "Proximité 2D fiable, "
+            default: "Mesure fiable, "
+            }
             return Self(title: title, value: value,
                         accessibilityValue: "\(evidence)correction suggérée : \(value)",
                         symbolName: "exclamationmark.circle.fill", tone: .negative,

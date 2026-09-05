@@ -187,6 +187,7 @@ struct StatisticsView: View {
                     Text("Tête–épaules").tag(PostureObservationSignalID.closedShoulders)
                     Text("Tête penchée").tag(PostureObservationSignalID.headTilt)
                     Text("Clignements").tag(PostureObservationSignalID.estimatedBlinks)
+                    Text("Main sur le visage").tag(PostureObservationSignalID.handOnFace)
                 }
                 .labelsHidden()
                 .frame(maxWidth: 170)
@@ -304,7 +305,7 @@ struct StatisticsView: View {
 
     private func observations(compact: Bool) -> some View {
         DisclosureGroup(
-            compact ? "Détail des sept observations" : "Observations",
+            compact ? "Détail des huit observations" : "Observations",
             isExpanded: compact ? $compactDetailsExpanded : .constant(true)
         ) {
             VStack(spacing: 0) {
@@ -369,6 +370,7 @@ struct StatisticsView: View {
         case .estimatedBlinks: "eye"
         case .closedShoulders: "arrow.left.and.right"
         case .headTilt: "arrow.turn.up.right"
+        case .handOnFace: "hand.raised"
         }
     }
 

@@ -10,9 +10,9 @@ private enum PostureIndicatorsPresentationHarness {
     }
 
     static func main() {
-        expect(PostureIndicatorID.allCases.count == 7,
-               "le rail doit contenir les sept observations raccordées")
-        expect(Set(PostureIndicatorID.allCases.map(\.title)).count == 7,
+        expect(PostureIndicatorID.allCases.count == 8,
+               "le rail doit contenir les huit observations raccordées")
+        expect(Set(PostureIndicatorID.allCases.map(\.title)).count == 8,
                "chaque observation doit garder un libellé unique")
         expect(PostureIndicatorID.shoulderSlope.title == "Inclinaison des épaules",
                "la pente doit être une observation principale explicite")

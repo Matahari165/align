@@ -10,6 +10,7 @@ nonisolated enum PostureIndicatorID: String, CaseIterable, Sendable {
     case estimatedBlinks
     case closedShoulders
     case headTilt
+    case handOnFace
 
     var title: String {
         switch self {
@@ -20,6 +21,7 @@ nonisolated enum PostureIndicatorID: String, CaseIterable, Sendable {
         case .estimatedBlinks: "Clignements estimés"
         case .closedShoulders: "Tête–épaules"
         case .headTilt: "Tête penchée"
+        case .handOnFace: "Main sur le visage"
         }
     }
 }
@@ -68,9 +70,11 @@ nonisolated struct PostureIndicatorResult: Equatable, Sendable {
             observedAt: nil,
             quality: .unavailable,
             hasValidBaseline: false,
-            isExperimental: id == .estimatedBlinks || id == .closedShoulders,
+            isExperimental: id == .estimatedBlinks || id == .closedShoulders || id == .handOnFace,
             freshnessTTL: id == .apparentProximity || id == .estimatedBlinks
                 ? PostureObservationEngine.proximityConfiguration.ttl
+                : id == .handOnFace
+                ? PostureObservationEngine.handFaceConfiguration.ttl
                 : PostureObservationEngine.richConfiguration.ttl
         )
     }

@@ -168,7 +168,8 @@ nonisolated struct FaceDetectionOutput: Sendable {
         facesWithLandmarksCount: 0,
         primaryBoundingBox: nil,
         detectedBoundingBoxes: [],
-        candidates: []
+        candidates: [],
+        handObservations: []
     )
 
     let polylines: [PosePolyline]
@@ -185,6 +186,30 @@ nonisolated struct FaceDetectionOutput: Sendable {
     /// Observations complètes par visage. Un consommateur qui sélectionne une
     /// boîte doit impérativement lire les landmarks dans le même élément.
     let candidates: [FaceDetectionCandidate]
+    /// Hand landmarks are intentionally kept at the frame level. They are
+    /// not assigned to a face before the continuity policy has selected the
+    /// target, which avoids silently attributing another person's hand to it.
+    let handObservations: [HandFaceHandObservation]
+
+    init(
+        polylines: [PosePolyline],
+        primaryOrientation: FaceOrientationSignal?,
+        resultCount: Int,
+        facesWithLandmarksCount: Int,
+        primaryBoundingBox: CGRect?,
+        detectedBoundingBoxes: [CGRect],
+        candidates: [FaceDetectionCandidate],
+        handObservations: [HandFaceHandObservation] = []
+    ) {
+        self.polylines = polylines
+        self.primaryOrientation = primaryOrientation
+        self.resultCount = resultCount
+        self.facesWithLandmarksCount = facesWithLandmarksCount
+        self.primaryBoundingBox = primaryBoundingBox
+        self.detectedBoundingBoxes = detectedBoundingBoxes
+        self.candidates = candidates
+        self.handObservations = handObservations
+    }
 
     /// Retourne une vue de cette détection dont les landmarks correspondent
     /// exclusivement à la boîte sélectionnée par la politique de continuité.
@@ -200,7 +225,8 @@ nonisolated struct FaceDetectionOutput: Sendable {
             facesWithLandmarksCount: facesWithLandmarksCount,
             primaryBoundingBox: candidate.boundingBox,
             detectedBoundingBoxes: detectedBoundingBoxes,
-            candidates: candidates
+            candidates: candidates,
+            handObservations: handObservations
         )
     }
 
@@ -214,9 +240,11 @@ nonisolated struct FaceDetectionOutput: Sendable {
             facesWithLandmarksCount: facesWithLandmarksCount,
             primaryBoundingBox: nil,
             detectedBoundingBoxes: detectedBoundingBoxes,
-            candidates: candidates
+            candidates: candidates,
+            handObservations: []
         )
     }
+
 }
 
 nonisolated struct BodyDetectionOutput: Sendable {
@@ -394,6 +422,11 @@ nonisolated enum VisionCoordinateMapper {
 nonisolated final class PoseDetector: @unchecked Sendable {
 
     private let faceRequest = VNDetectFaceLandmarksRequest()
+    private let handRequest: VNDetectHumanHandPoseRequest = {
+        let request = VNDetectHumanHandPoseRequest()
+        request.maximumHandCount = 2
+        return request
+    }()
     private let bodyRequest = VNDetectHumanBodyPoseRequest()
 
     func detectFace(in pixelBuffer: CVPixelBuffer) throws -> FaceDetectionOutput {
@@ -404,9 +437,13 @@ nonisolated final class PoseDetector: @unchecked Sendable {
             options: [:]
         )
 
-        try handler.perform([faceRequest])
+        // The face and hand evidence share one Vision pass and one cadence.
+        // A separate hand callback would compete with the existing face/body
+        // budget and could pair landmarks from different frames.
+        try handler.perform([faceRequest, handRequest])
 
         let faceResults = faceRequest.results ?? []
+        let handResults = handRequest.results ?? []
         let candidates = faceResults.map { observation in
             FaceDetectionCandidate(
                 boundingBox: observation.boundingBox,
@@ -427,7 +464,11 @@ nonisolated final class PoseDetector: @unchecked Sendable {
             facesWithLandmarksCount: faceResults.lazy.filter { $0.landmarks != nil }.count,
             primaryBoundingBox: primaryFace?.boundingBox,
             detectedBoundingBoxes: candidates.map(\.boundingBox),
-            candidates: candidates
+            candidates: candidates,
+            handObservations: HandFaceVisionAdapter.handObservations(
+                from: handResults,
+                orientation: orientation
+            )
         )
     }
 
@@ -503,6 +544,8 @@ nonisolated final class PoseDetector: @unchecked Sendable {
             polyline(from: landmarks.leftEyebrow, name: "leftEyebrow", boundingBox: boundingBox, orientation: orientation, isClosed: false),
             polyline(from: landmarks.rightEyebrow, name: "rightEyebrow", boundingBox: boundingBox, orientation: orientation, isClosed: false),
             polyline(from: landmarks.nose, name: "nose", boundingBox: boundingBox, orientation: orientation, isClosed: false),
+            polyline(from: landmarks.outerLips, name: "outerLips", boundingBox: boundingBox, orientation: orientation, isClosed: true),
+            polyline(from: landmarks.innerLips, name: "innerLips", boundingBox: boundingBox, orientation: orientation, isClosed: true),
             polyline(from: landmarks.medianLine, name: "medianLine", boundingBox: boundingBox, orientation: orientation, isClosed: false)
         ].compactMap { $0 }
     }

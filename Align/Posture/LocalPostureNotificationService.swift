@@ -25,6 +25,8 @@ nonisolated enum LocalPostureNotificationCopy {
             "Une épaule semble plus haute que l’autre. Réaligne tes épaules."
         case .estimatedBlinks:
             "Pense à cligner naturellement et regarde au loin quelques instants."
+        case .handOnFace:
+            "Ta main semble rester sur ton visage. Éloigne-la doucement."
         }
     }
 }

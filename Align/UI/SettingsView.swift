@@ -171,6 +171,7 @@ struct SettingsView: View {
         case .estimatedBlinks: "Clignements estimés — Estimation"
         case .closedShoulders: "Tête–épaules — Estimation"
         case .headTilt: "Tête inclinée"
+        case .handOnFace: "Main sur le visage — Estimation 2D"
         }
     }
 
@@ -206,6 +207,7 @@ struct SettingsView: View {
         case .estimatedBlinks: "Clignements estimés"
         case .closedShoulders: "Tête–épaules"
         case .headTilt: "Tête inclinée"
+        case .handOnFace: "Main sur le visage"
         }
     }
 

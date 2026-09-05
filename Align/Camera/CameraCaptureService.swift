@@ -1577,6 +1577,9 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                     self.persistedRichBaseline = baseline
                 }
                 let outcomes = Dictionary(uniqueKeysWithValues: PostureObservationSignalID.allCases.map { id in
+                    if id == .handOnFace {
+                        return (id, PostureCalibrationSignalOutcome.ready)
+                    }
                     guard ready, let baseline = self.postureRuntimeCoordinator.baselineSnapshot else {
                         return (id, PostureCalibrationSignalOutcome.unavailable("Repère insuffisant"))
                     }
@@ -1601,6 +1604,8 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                     case .closedShoulders:
                         return (id, baseline.shoulderOpeningRatio != nil
                             ? .ready : .unavailable("Ouverture des épaules insuffisante"))
+                    case .handOnFace:
+                        return (id, .ready)
                     }
                 })
                 self.onEvent(.calibration(.init(
@@ -1862,12 +1867,26 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                         if let runtime = postureRuntimeCoordinator.consumeFace(
                             observation, baseline: nil, now: faceProducedAt
                         ) {
+                            let handObservation = HandFaceContactMetric.observe(
+                                face: HandFaceVisionAdapter.faceObservation(from: face),
+                                hands: face.handObservations
+                            )
+                            let handSample = HandFaceContactSample(
+                                generation: UInt64(generation.activationID),
+                                sampleID: faceObservationSampleID,
+                                capturedAt: capturedAt,
+                                contextKey: faceContext.key,
+                                observation: handObservation
+                            )
+                            let snapshot = postureRuntimeCoordinator.consumeHandFace(
+                                handSample, now: faceProducedAt
+                            ) ?? runtime.snapshot
                             onEvent(.postureRuntime(
                                 runtime.evaluation,
-                                runtime.snapshot,
+                                snapshot,
                                 postureRuntimeCoordinator.baselineSnapshot
                             ), generation)
-                            onEvent(.postureIndicators(indicators(from: runtime.snapshot)), generation)
+                            onEvent(.postureIndicators(indicators(from: snapshot)), generation)
                         }
                     } else {
                         faceInvalidations += 1
@@ -2942,7 +2961,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                 observedAt: signal.observedAt,
                 quality: quality,
                 hasValidBaseline: hasValidBaseline,
-                isExperimental: id == .estimatedBlinks || id == .closedShoulders,
+                isExperimental: id == .estimatedBlinks || id == .closedShoulders || id == .handOnFace,
                 freshnessTTL: PostureObservationEngine.freshnessTTL(for: signalID),
                 leftShoulderDelta: signal.leftShoulderDelta,
                 rightShoulderDelta: signal.rightShoulderDelta,
@@ -2959,7 +2978,8 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             result(.shoulderSlope, .shoulderSlope),
             result(.estimatedBlinks, .estimatedBlinks),
             result(.closedShoulders, .closedShoulders),
-            result(.headTilt, .headTilt)
+            result(.headTilt, .headTilt),
+            result(.handOnFace, .handOnFace)
         ]
         return .init(generation: snapshot.generation, producedAt: snapshot.producedAt,
                      isCalibrating: postureRuntimeCoordinator.isCalibrationActive,

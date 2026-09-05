@@ -181,7 +181,7 @@ nonisolated struct PostureAlertCoordinator: Sendable {
         sensitivity: PostureRecommendationSensitivity = .sensitive,
         priority: [PostureObservationSignalID] = [
             .proximity, .raisedShoulders, .torsoInclination, .headTilt,
-            .shoulderSlope, .closedShoulders, .estimatedBlinks
+            .shoulderSlope, .closedShoulders, .estimatedBlinks, .handOnFace
         ]
     ) {
         self.baseSignalConfigurations = signalConfigurations
@@ -289,7 +289,8 @@ nonisolated struct PostureAlertCoordinator: Sendable {
             episodeID: episodeID,
             reservationID: reservationID,
             createdAt: now,
-            isExperimental: signal.signalID == .estimatedBlinks || signal.signalID == .closedShoulders,
+            isExperimental: signal.signalID == .estimatedBlinks ||
+                signal.signalID == .closedShoulders || signal.signalID == .handOnFace,
             sensitivity: sensitivity,
             ruleProfileID: "runtime-v2"
         )

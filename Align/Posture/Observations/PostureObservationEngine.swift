@@ -2,7 +2,7 @@ import Foundation
 
 nonisolated struct PostureObservationEngine: Sendable {
     static let faceSignalIDs: Set<PostureObservationSignalID> = [
-        .proximity, .estimatedBlinks
+        .proximity, .estimatedBlinks, .handOnFace
     ]
     static let bodySignalIDs: Set<PostureObservationSignalID> = [
         .torsoInclination, .raisedShoulders, .shoulderSlope, .closedShoulders, .headTilt
@@ -14,6 +14,18 @@ nonisolated struct PostureObservationEngine: Sendable {
         exitThreshold: 1.15,
         attentionPersistence: 2,
         maximumSampleGap: 0.75,
+        ttl: 0.75
+    )
+
+    /// A hand/face contact is a 2D distance observation. The engine owns the
+    /// hysteresis and persistence before notification arbitration, so a
+    /// one-second gesture cannot become a product alert.
+    static let handFaceConfiguration = TemporalObservationConfiguration(
+        direction: .below,
+        enterThreshold: 0.20,
+        exitThreshold: 0.30,
+        attentionPersistence: 2.5,
+        maximumSampleGap: 0.35,
         ttl: 0.75
     )
 
@@ -37,7 +49,8 @@ nonisolated struct PostureObservationEngine: Sendable {
             attentionPersistence: 0, maximumSampleGap: 0.25, ttl: 0.75
         ),
         .closedShoulders: Self.richConfiguration,
-        .headTilt: Self.richConfiguration
+        .headTilt: Self.richConfiguration,
+        .handOnFace: Self.handFaceConfiguration
     ]) {
         machines = [:]
         for (id, configuration) in configurations {
@@ -180,6 +193,8 @@ nonisolated struct PostureObservationEngine: Sendable {
         switch id {
         case .proximity, .estimatedBlinks:
             proximityConfiguration.ttl
+        case .handOnFace:
+            handFaceConfiguration.ttl
         case .torsoInclination, .raisedShoulders, .shoulderSlope, .closedShoulders, .headTilt:
             richConfiguration.ttl
         }
@@ -190,6 +205,9 @@ nonisolated struct PostureObservationEngine: Sendable {
         values.append(value)
         values.sort { $0.signalID.rawValue < $1.signalID.rawValue }
         snapshot = .init(generation: generation, contextKey: snapshot.contextKey,
-                         producedAt: now, signals: values)
+                         producedAt: now, signals: values,
+                         blinkEventCount: snapshot.blinkEventCount,
+                         faceAndEyesReliable: snapshot.faceAndEyesReliable,
+                         faceAndEyesObservedAt: snapshot.faceAndEyesObservedAt)
     }
 }

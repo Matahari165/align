@@ -15,7 +15,11 @@ final class AppModel: ObservableObject {
             .headTilt: .init(persistence: 15, recovery: 30, cooldown: 60, dailyMaximum: 720),
             .shoulderSlope: .init(persistence: 15, recovery: 30, cooldown: 60, dailyMaximum: 720),
             .closedShoulders: .init(persistence: 15, recovery: 30, cooldown: 60, dailyMaximum: 720),
-            .estimatedBlinks: .init(persistence: 1, recovery: 2 * 60, cooldown: 120, dailyMaximum: 720)
+            .estimatedBlinks: .init(persistence: 1, recovery: 2 * 60, cooldown: 120, dailyMaximum: 720),
+            // The observation engine already requires 2.5 s of continuous
+            // proximity; this short arbitration window only absorbs delivery
+            // jitter and must not add a second long wait.
+            .handOnFace: .init(persistence: 0.25, recovery: 5, cooldown: 60, dailyMaximum: 720)
         ],
         globalConfiguration: .normal
     )

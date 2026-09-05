@@ -31,7 +31,7 @@ struct PostureIndicatorsView: View {
         .padding(.vertical, 10)
         .background(AlignTheme.elevated.opacity(0.94))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Indicateurs de posture, sept")
+        .accessibilityLabel("Indicateurs de posture, huit")
     }
 
     private var threeColumnGrid: some View {
@@ -47,7 +47,8 @@ struct PostureIndicatorsView: View {
                 indicator(for: .torsoInclination)
             }
             GridRow {
-                indicator(for: .estimatedBlinks).gridCellColumns(3)
+                indicator(for: .estimatedBlinks).gridCellColumns(2)
+                indicator(for: .handOnFace)
             }
         }
         .frame(minWidth: 570)
@@ -68,7 +69,8 @@ struct PostureIndicatorsView: View {
                 indicator(for: .torsoInclination)
             }
             GridRow {
-                indicator(for: .estimatedBlinks).gridCellColumns(2)
+                indicator(for: .estimatedBlinks)
+                indicator(for: .handOnFace)
             }
         }
     }
@@ -152,6 +154,7 @@ struct PostureIndicatorsView: View {
         case .headTilt: "À redresser"
         case .estimatedBlinks: "Cligne naturellement"
         case .closedShoulders: "À réajuster"
+        case .handOnFace: "Éloigne ta main"
         }
     }
 
@@ -169,7 +172,7 @@ struct PostureIndicatorsView: View {
         let available = PostureIndicatorPresentation.orderedIDs.filter {
             snapshot.result(for: $0).state != .unavailable
         }.count
-        return "\(available)/7 signaux disponibles"
+        return "\(available)/8 signaux disponibles"
     }
 
     private var railStatusSymbol: String {
@@ -199,6 +202,8 @@ struct PostureIndicatorsView: View {
             "Hauteur des épaules par rapport à la base du cou et à ton repère personnel."
         case .estimatedBlinks:
             "Clignements par minute sur le temps où les deux yeux sont visibles. La référence s'apprend sur plusieurs minutes."
+        case .handOnFace:
+            "Proximité 2D entre les repères de la main et la surface du visage. Une alerte demande un maintien continu de 2,5 secondes ; ce n'est pas une preuve de contact physique."
         }
     }
 
@@ -213,6 +218,7 @@ struct PostureIndicatorsView: View {
         case .apparentProximity: return "Le visage doit être suffisamment visible et face à l'écran."
         case .raisedShoulders: return "Les épaules et la base du cou doivent être suffisamment visibles."
         case .shoulderSlope: return "Les deux épaules doivent être suffisamment visibles."
+        case .handOnFace: return "Le visage et au moins une main doivent être suffisamment visibles."
         }
     }
 

@@ -27,14 +27,14 @@ require(!content.contains("blazePoseState.displayName"), "Aucun badge d’état 
 
 for id in [
     "apparentProximity", "torsoInclination", "raisedShoulders",
-    "shoulderSlope", "closedShoulders", "estimatedBlinks", "headTilt"
+    "shoulderSlope", "closedShoulders", "estimatedBlinks", "headTilt", "handOnFace"
 ] {
     require(indicators.contains("indicator(for: .\(id))"), "Signal absent du rail complet : \(id)")
 }
 require(indicators.contains("threeColumnGrid") && indicators.contains("twoColumnGrid"),
         "Le rail doit garder les grilles compactes à trois et deux colonnes.")
 require(indicators.contains("ViewThatFits"), "Le rail doit sélectionner une grille adaptée à la largeur.")
-require(indicators.contains("Indicateurs de posture, sept"), "Le groupe VoiceOver doit annoncer sept indicateurs.")
+require(indicators.contains("Indicateurs de posture, huit"), "Le groupe VoiceOver doit annoncer huit indicateurs.")
 require(indicators.contains("case .positive: AlignTheme.accentSoft") &&
         indicators.contains("case .negative: AlignTheme.attention"),
         "Le rail doit utiliser les rôles turquoise/ambre du thème Align.")
@@ -126,14 +126,14 @@ require(cameraCapture.contains("requestAccess(for: .video)") &&
         cameraCapture.contains("case .requestingPermission") &&
         cameraCapture.contains("configureAndStart(operationID:"),
         "Le cycle permission → démarrage doit rester explicite et testable.")
-for title in ["Proximité apparente", "Torse incliné", "Épaules relevées", "Clignements estimés — Estimation"] {
+for title in ["Proximité apparente", "Torse incliné", "Épaules relevées", "Clignements estimés — Estimation", "Main sur le visage — Estimation 2D"] {
     require(settings.contains(title), "Rappel absent des réglages : \(title)")
 }
 require(!settings.contains("Toggle(\"Inclinaison des épaules") &&
         !settings.contains("Toggle(\"Épaules refermées"),
         "La pente et l'ouverture ne doivent pas devenir des rappels.")
 require(settings.contains("private let signals = PostureObservationSignalID.alertableCases"),
-        "Les réglages de rappels doivent utiliser la liste canonique de quatre signaux.")
+        "Les réglages de rappels doivent utiliser la liste canonique des signaux.")
 for choice in ["1 h", "Aujourd’hui", "Jusqu’à réactivation"] {
     require(settings.contains(choice), "Choix de suspension absent : \(choice)")
 }

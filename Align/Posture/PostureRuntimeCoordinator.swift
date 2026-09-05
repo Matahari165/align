@@ -11,6 +11,7 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
     private(set) var generation: UInt64 = 0
     private(set) var contextKey = ""
     private var lastFaceSampleID: UInt64 = 0
+    private var lastHandFaceSampleID: UInt64 = 0
     private var lastBodySampleID: UInt64 = 0
     private var evaluator: PostureRichSignalEvaluator
     private var observationEngine = PostureObservationEngine()
@@ -107,6 +108,7 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         isCalibrationActive = requestedCalibration
         self.contextKey = contextKey
         lastFaceSampleID = 0
+        lastHandFaceSampleID = 0
         lastBodySampleID = 0
         lastPublishedSample.removeAll(keepingCapacity: true)
         lastEvaluation = nil
@@ -225,6 +227,49 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         )
         lastEvaluation = evaluation
         return (evaluation, canonical)
+    }
+
+    /// Ingestion séparée de la proximité main–visage. La géométrie arrive
+    /// depuis la même frame Vision que le visage, mais sa décision temporelle
+    /// reste indépendante des métriques de posture et de leur baseline.
+    mutating func consumeHandFace(
+        _ sample: HandFaceContactSample,
+        now: TimeInterval
+    ) -> PostureObservationsSnapshot? {
+        let ttl = PostureObservationEngine.freshnessTTL(for: .handOnFace)
+        guard now.isFinite, sample.hasValidIdentity,
+              sample.generation == generation,
+              sample.contextKey == contextKey,
+              sample.sampleID > lastHandFaceSampleID,
+              sample.capturedAt <= now,
+              now - sample.capturedAt <= ttl else { return nil }
+
+        let quality: PostureObservationQuality = switch sample.observation.quality {
+        case .good: .good
+        case .limited: .limited
+        case .unavailable: .unavailable
+        }
+        let isGood = quality == .good
+        let evidence = PostureMetricEvidence(
+            signalID: .handOnFace,
+            generation: sample.generation,
+            sampleID: sample.sampleID,
+            capturedAt: sample.capturedAt,
+            producedAt: now,
+            // Keep the measured distance so the observation engine can apply
+            // its enter/exit hysteresis. A binary hint would bypass the wider
+            // exit threshold and make the rail flicker near the face.
+            normalizedValue: isGood ? sample.observation.distanceRatio : nil,
+            quality: quality,
+            calibration: .valid,
+            cameraContextID: sample.contextKey,
+            framingSignature: sample.contextKey,
+            assessmentHint: nil,
+            numericValue: sample.observation.distanceRatio,
+            observationReason: isGood ? nil : "Main ou visage insuffisant"
+        )
+        lastHandFaceSampleID = sample.sampleID
+        return observationEngine.ingest(evidence, now: now)
     }
 
     /// Ingestion explicite d'un échantillon corps. Les métriques visage ne
@@ -385,6 +430,7 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         observationEngine = PostureObservationEngine()
         lastEvaluation = nil
         lastFaceSampleID = 0
+        lastHandFaceSampleID = 0
         lastBodySampleID = 0
         lastPublishedSample.removeAll(keepingCapacity: true)
         return observationEngine.reset(generation: generation, at: now)

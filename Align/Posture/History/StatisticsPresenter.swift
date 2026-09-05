@@ -177,6 +177,7 @@ nonisolated enum StatisticsPresenter {
         case .estimatedBlinks: "Clignements estimés"
         case .closedShoulders: "Tête–épaules"
         case .headTilt: "Tête penchée"
+        case .handOnFace: "Main sur le visage"
         }
     }
 
@@ -208,7 +209,7 @@ nonisolated enum StatisticsPresenter {
         let hasData = value.observedDuration > 0
         let primary = hasData && value.eventsPerObservedHour != nil
             ? String(format: "%.1f variation/h observée", value.eventsPerObservedHour!) : "Données insuffisantes"
-        let isExperimental = value.signalID == .closedShoulders
+        let isExperimental = value.signalID == .closedShoulders || value.signalID == .handOnFace
         let secondary: String
         if !hasData {
             secondary = "Aucune information fiable"

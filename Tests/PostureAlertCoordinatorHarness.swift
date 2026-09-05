@@ -344,8 +344,8 @@ private enum PostureAlertCoordinatorHarness {
         settingsStore.save(settings)
         expect(settingsStore.load() == settings,
                "sensibilité, snooze et activation doivent survivre au redémarrage")
-        expect(PostureObservationSignalID.alertableCases.count == 7,
-               "les sept signaux affichés doivent être alertables")
+        expect(PostureObservationSignalID.alertableCases.count == 8,
+               "les huit signaux affichés doivent être alertables")
         print("PostureAlertCoordinatorHarness: OK")
     }
 }
