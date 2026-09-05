@@ -4,7 +4,7 @@ import Foundation
 /// Étage sérialisé entre les sorties CV et les alertes. Il ne possède ni caméra
 /// ni image : une instance est liée à une activation et à une génération.
 nonisolated struct PostureRuntimeCoordinator: Sendable {
-    static let ruleVersion = "rich-v1"
+    static let ruleVersion = "rich-v2"
     private(set) var generation: UInt64 = 0
     private(set) var contextKey = ""
     private var lastFaceSampleID: UInt64 = 0
@@ -20,7 +20,6 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
     private var lastBaselineFaceCapturedAt: TimeInterval?
     private var lastPublishedSample: [PostureObservationSignalID: UInt64] = [:]
     private var lastEvaluation: PostureRichEvaluation?
-    private var blinkBaselineSamples: [Double] = []
     private var blinkTargetPerMinute: Double?
     private(set) var isCalibrationActive = false
     var baselineSnapshot: PostureRichBaseline? { baseline }
@@ -48,6 +47,15 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         evaluator = PostureRichSignalEvaluator(configuration: configuration)
     }
 
+    /// Cible explicitement fournie par l'intégrateur. Une cible personnelle
+    /// ne doit jamais être déduite d'un premier débit observé : en l'absence
+    /// de cette valeur, l'évaluateur attend ses fenêtres indépendantes.
+    mutating func setBlinkTarget(_ target: Double?) {
+        guard target == nil || (target?.isFinite == true && target! > 0) else { return }
+        blinkTargetPerMinute = target
+        evaluator.setBlinkTarget(target)
+    }
+
     mutating func beginCalibration() {
         isCalibrationActive = true
         baselineSamples.removeAll(keepingCapacity: true)
@@ -57,7 +65,6 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         lastBaselineBodyCapturedAt = nil
         lastBaselineFaceSampleID = lastFaceSampleID
         lastBaselineFaceCapturedAt = nil
-        blinkBaselineSamples.removeAll(keepingCapacity: true)
         blinkTargetPerMinute = nil
         evaluator = PostureRichSignalEvaluator(configuration: Self.configuration(for: sensitivity))
         evaluator.reset()
@@ -84,7 +91,9 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
                          torsoAxisMAD: value.torsoAxisMAD,
                          shoulderSlopeMAD: value.shoulderSlopeMAD,
                          blinkOpeningBaseline: value.blinkOpeningBaseline,
-                         familySampleCounts: value.familySampleCounts)
+                         familySampleCounts: value.familySampleCounts,
+                         headTiltDegrees: value.headTiltDegrees,
+                         headTiltMAD: value.headTiltMAD)
         lastBaselineBodySampleID = 0
         lastBaselineBodyCapturedAt = nil
     }
@@ -98,7 +107,6 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         lastBodySampleID = 0
         lastPublishedSample.removeAll(keepingCapacity: true)
         lastEvaluation = nil
-        blinkBaselineSamples.removeAll(keepingCapacity: true)
         blinkTargetPerMinute = nil
         var configuration = Self.configuration(for: sensitivity)
         configuration.blinkTargetPerMinute = blinkTargetPerMinute
@@ -153,17 +161,6 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
             baseline: usableBaseline,
             now: now
         )
-        if blinkTargetPerMinute == nil,
-           let rate = rawEvaluation.blinkRate.value,
-           rate.isFinite, rate > 0,
-           rawEvaluation.blinkRate.state == .available {
-            blinkBaselineSamples.append(rate)
-            if blinkBaselineSamples.count >= 12 {
-                let sorted = blinkBaselineSamples.sorted()
-                blinkTargetPerMinute = sorted[sorted.count / 2]
-                evaluator.setBlinkTarget(blinkTargetPerMinute)
-            }
-        }
         let evaluation: PostureRichEvaluation
         if isNewBodySample || lastEvaluation == nil {
             evaluation = rawEvaluation
@@ -174,6 +171,7 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
             evaluation = PostureRichEvaluation(
                 torsoInclination: previous.torsoInclination,
                 shoulderSlope: previous.shoulderSlope,
+                headTilt: previous.headTilt,
                 shoulderOpening: previous.shoulderOpening,
                 shouldersRaised: previous.shouldersRaised,
                 proximity: rawEvaluation.proximity,
@@ -230,6 +228,7 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
     /// progressent pas artificiellement sur ce chemin.
     mutating func consumeBody(
         _ geometry: PostureRichGeometryMetrics,
+        pairedFace: PostureFaceObservation? = nil,
         baseline externalBaseline: PostureRichBaseline? = nil,
         now: TimeInterval
     ) -> (evaluation: PostureRichEvaluation, snapshot: PostureObservationsSnapshot)? {
@@ -242,7 +241,10 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
             $0.generation == generation && $0.contextKey == geometry.contextKey &&
                 $0.ruleVersion == Self.ruleVersion ? $0 : nil
         }
-        let evaluation = evaluator.consumeBody(geometry: geometry, baseline: usableBaseline, now: now)
+        let evaluation = evaluator.consumeBody(
+            geometry: geometry, pairedFace: pairedFace,
+            baseline: usableBaseline, now: now
+        )
         lastBodySampleID = geometry.sampleID
         let canonical = observationEngine.ingest(
             rich: evaluation, contextKey: geometry.contextKey, now: now,
@@ -333,7 +335,8 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
     mutating func invalidateFace(
         sampleID: UInt64,
         capturedAt: TimeInterval,
-        now: TimeInterval
+        now: TimeInterval,
+        reason: String = "Visage momentanément indisponible"
     ) -> PostureObservationsSnapshot {
         guard generation > 0, !contextKey.isEmpty, sampleID > lastFaceSampleID,
               capturedAt.isFinite, now.isFinite, now >= capturedAt else {
@@ -346,10 +349,28 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         )
         lastFaceSampleID = sampleID
         return observationEngine.invalidate(
-            PostureObservationEngine.faceSignalIDs,
+            PostureObservationEngine.faceSignalIDs.union([.headTilt]),
             at: now,
             generation: generation,
-            faceEvidenceObservedAt: capturedAt
+            faceEvidenceObservedAt: capturedAt,
+            reason: reason
+        )
+    }
+
+    /// Réarme les états transitoires après une réacquisition confirmée. Le
+    /// repère personnel de clignements et sa fenêtre glissante restent valides
+    /// dans le même contexte caméra ; seule une calibration explicite ou un
+    /// changement de génération/contexte les efface.
+    mutating func resetFaceTarget(at now: TimeInterval) -> PostureObservationsSnapshot {
+        guard generation > 0, now.isFinite else { return observationEngine.snapshot }
+        evaluator.resetFaceTarget()
+        lastEvaluation = nil
+        return observationEngine.invalidate(
+            PostureObservationEngine.faceSignalIDs.union([.headTilt]),
+            at: now,
+            generation: generation,
+            faceEvidenceObservedAt: now,
+            reason: "Nouvelle cible visage en cours de validation"
         )
     }
 

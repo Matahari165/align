@@ -96,6 +96,7 @@ nonisolated struct PostureFramingContext: Equatable, Sendable {
 nonisolated enum PostureRichSignalKind: String, CaseIterable, Hashable, Sendable {
     case torsoInclination
     case shoulderSlope
+    case headTilt
     case shoulderOpening
     case shouldersRaised
     case proximity
@@ -141,6 +142,13 @@ nonisolated struct PostureRichScalarObservation: Equatable, Sendable {
     let isEstimated2DProxy: Bool
     let isAttention: Bool
     let reason: String
+    /// Valeur brute transportable vers la couche produit. Elle reste dans
+    /// l'unité naturelle du signal (degrés, ratio ou clignements/minute).
+    let numericValue: Double?
+    /// Écart signé au repère personnel, dans la même unité quand elle existe.
+    /// Ce champ reste optionnel : l'absence de baseline n'est jamais remplacée
+    /// par un zéro artificiel.
+    let referenceDelta: Double?
     let normalizedValue: Double?
     let direction: PostureRichSignalDirection
     /// Durée continue sous le seuil, lorsqu'un évaluateur temporel la fournit.
@@ -165,6 +173,9 @@ nonisolated struct PostureRichScalarObservation: Equatable, Sendable {
         isEstimated2DProxy: Bool,
         isAttention: Bool,
         reason: String,
+        numericValue: Double? = nil,
+        numericValueProvided: Bool = false,
+        referenceDelta: Double? = nil,
         normalizedValue: Double? = nil,
         direction: PostureRichSignalDirection = .unknown,
         belowDuration: TimeInterval? = nil,
@@ -182,6 +193,8 @@ nonisolated struct PostureRichScalarObservation: Equatable, Sendable {
         self.isEstimated2DProxy = isEstimated2DProxy
         self.isAttention = isAttention
         self.reason = reason
+        self.numericValue = numericValueProvided ? numericValue : (numericValue ?? value)
+        self.referenceDelta = referenceDelta
         self.normalizedValue = normalizedValue
         self.direction = direction
         self.belowDuration = belowDuration
@@ -217,6 +230,9 @@ nonisolated struct PostureRichGeometryMetrics: Equatable, Sendable {
     /// utilise exclusivement `torsoInclinationDegrees` et son MAD en degrés.
     let torsoAxisDeviation: Double?
     let shoulderSlopeDegrees: Double?
+    /// Différence axiale entre la ligne des yeux et la ligne des épaules.
+    /// Les hanches ne sont volontairement pas requises.
+    let headTiltDegrees: Double?
     let shoulderOpeningDegrees: Double?
     let shoulderOpeningRatio: Double?
     let leftShoulderElevation: Double?
@@ -224,6 +240,10 @@ nonisolated struct PostureRichGeometryMetrics: Equatable, Sendable {
     let proximityScale: Double?
     let shouldersState: PostureRichSignalState
     let torsoState: PostureRichSignalState
+    let headTiltState: PostureRichSignalState
+    /// Qualité du ratio largeur-épaules/taille-visage. Elle ne requiert pas le
+    /// cou, contrairement à `openingState` qui décrit l'angle anatomique.
+    let openingRatioState: PostureRichSignalState
     let openingState: PostureRichSignalState
     let reason: String?
     /// Ouvertures par œil conservées pour la calibration clignement. Elles
@@ -249,7 +269,10 @@ nonisolated struct PostureRichGeometryMetrics: Equatable, Sendable {
         openingState: PostureRichSignalState,
         reason: String?,
         leftEyeOpeningRatio: Double? = nil,
-        rightEyeOpeningRatio: Double? = nil
+        rightEyeOpeningRatio: Double? = nil,
+        headTiltDegrees: Double? = nil,
+        headTiltState: PostureRichSignalState = .unavailable,
+        openingRatioState: PostureRichSignalState? = nil
     ) {
         self.generation = generation
         self.sampleID = sampleID
@@ -258,6 +281,7 @@ nonisolated struct PostureRichGeometryMetrics: Equatable, Sendable {
         self.torsoInclinationDegrees = torsoInclinationDegrees
         self.torsoAxisDeviation = torsoAxisDeviation
         self.shoulderSlopeDegrees = shoulderSlopeDegrees
+        self.headTiltDegrees = headTiltDegrees
         self.shoulderOpeningDegrees = shoulderOpeningDegrees
         self.shoulderOpeningRatio = shoulderOpeningRatio
         self.leftShoulderElevation = leftShoulderElevation
@@ -265,6 +289,9 @@ nonisolated struct PostureRichGeometryMetrics: Equatable, Sendable {
         self.proximityScale = proximityScale
         self.shouldersState = shouldersState
         self.torsoState = torsoState
+        self.headTiltState = headTiltState
+        self.openingRatioState = openingRatioState ??
+            (shoulderOpeningRatio == nil ? .unavailable : openingState)
         self.openingState = openingState
         self.reason = reason
         self.leftEyeOpeningRatio = leftEyeOpeningRatio
@@ -285,9 +312,11 @@ nonisolated struct PostureRichGeometryMetrics: Equatable, Sendable {
              shoulderOpeningDegrees: nil, shoulderOpeningRatio: nil,
              leftShoulderElevation: nil, rightShoulderElevation: nil,
              proximityScale: nil,
-             shouldersState: state, torsoState: state, openingState: state,
+             shouldersState: state, torsoState: state,
+             openingState: state,
              reason: reason, leftEyeOpeningRatio: nil,
-             rightEyeOpeningRatio: nil)
+             rightEyeOpeningRatio: nil, headTiltDegrees: nil, headTiltState: state,
+             openingRatioState: state)
     }
 }
 
@@ -319,7 +348,13 @@ nonisolated enum PostureRichGeometryEvaluator {
                                 capturedAt: result.capturedAt, contextKey: context.key,
                                 state: .stale, reason: "résultat RTMPose non frais")
         }
-        let faceMatchesContext = face.map { $0.contextKey == context.stableContextKey } ?? true
+        let faceMatchesContext = face.map {
+            $0.generation == result.generation &&
+                $0.contextKey == context.stableContextKey &&
+                $0.capturedAt.isFinite &&
+                abs($0.capturedAt - result.capturedAt) <=
+                    PostureRichSignalConfiguration().maximumFusionSkew
+        } ?? true
         let matchedFace = faceMatchesContext ? face : nil
 
         var points: [UpperBodyLandmarkID: CGPoint] = [:]
@@ -396,6 +431,44 @@ nonisolated enum PostureRichGeometryEvaluator {
             shoulderSlopeDegrees = nil
         }
 
+        // Une inclinaison relative reste valable lorsque la caméra est elle-
+        // même tournée : la rotation commune des yeux et des épaules s'annule.
+        // FaceGeometrySignal exprime le roll en coordonnées normalisées tandis
+        // que les épaules sont déjà en pixels. La conversion avant soustraction
+        // est nécessaire sur un capteur non carré (par exemple 1280x720), sinon
+        // un même roulis de caméra produit artificiellement un tilt résiduel.
+        let headTiltDegrees: Double?
+        if faceMatchesContext,
+           let eyeRoll = matchedFace?.signal.eyeLineRollDegrees,
+           let eyeRollInPixels = pixelAxialAngleDegrees(eyeRoll, context: context),
+           let shoulderSlopeDegrees {
+            headTiltDegrees = postureRelativeAxialDifferenceDegrees(
+                eyeRollInPixels, shoulderSlopeDegrees
+            )
+        } else {
+            headTiltDegrees = nil
+        }
+        // Cette qualité est calculée ici car le chemin production peut
+        // transporter la géométrie fusionnée sans conserver l'objet visage.
+        // Les mêmes minima que l'évaluateur riche empêchent alors une frame
+        // faciale pauvre ou hors domaine de devenir une référence de calibration.
+        let headTiltFaceEvidence = faceMatchesContext &&
+            (matchedFace?.facePointCount ?? 0) >= PostureRichSignalConfiguration().minimumFacePoints &&
+            (matchedFace?.signal.yawProxy.map {
+                $0.isFinite && abs($0) <= PostureRichSignalConfiguration().maximumYaw
+            } ?? false) &&
+            (matchedFace?.signal.eyeLineRollDegrees.map {
+                $0.isFinite && abs($0) <= PostureRichSignalConfiguration().maximumRollDegrees
+            } ?? false)
+        let headTiltState: PostureRichSignalState = if headTiltDegrees != nil,
+            shouldersState == .available, headTiltFaceEvidence {
+            .available
+        } else if headTiltFaceEvidence || shoulderCount > 0 {
+            .partial
+        } else {
+            .unavailable
+        }
+
         var openingDegrees: Double?
         if let neck, let leftShoulder, let rightShoulder {
             openingDegrees = angleAt(neck, leftShoulder, rightShoulder)
@@ -422,6 +495,23 @@ nonisolated enum PostureRichGeometryEvaluator {
             openingRatio = ratio.isFinite && ratio > 0 ? ratio : nil
         } else {
             openingRatio = nil
+        }
+        let openingRatioFaceQuality = matchedFace.map {
+            $0.facePointCount >= PostureRichSignalConfiguration().minimumFacePoints &&
+                ($0.signal.yawProxy.map {
+                    $0.isFinite && abs($0) <= PostureRichSignalConfiguration().maximumProximityYaw
+                } ?? false) &&
+                ($0.signal.eyeLineRollDegrees.map {
+                    $0.isFinite && abs($0) <= PostureRichSignalConfiguration().maximumRollDegrees
+                } ?? false)
+        } ?? false
+        let openingRatioState: PostureRichSignalState = if openingRatio != nil,
+            shouldersState == .available, openingRatioFaceQuality {
+            .available
+        } else if openingRatio != nil || matchedFace != nil || shoulderCount > 0 {
+            .partial
+        } else {
+            .unavailable
         }
 
         // L'élévation est un signal corporel : elle ne doit pas changer si
@@ -481,7 +571,10 @@ nonisolated enum PostureRichGeometryEvaluator {
             openingState: openingState,
             reason: reason,
             leftEyeOpeningRatio: matchedFace?.signal.leftEyeOpeningRatio,
-            rightEyeOpeningRatio: matchedFace?.signal.rightEyeOpeningRatio
+            rightEyeOpeningRatio: matchedFace?.signal.rightEyeOpeningRatio,
+            headTiltDegrees: headTiltDegrees,
+            headTiltState: headTiltState,
+            openingRatioState: openingRatioState
         )
     }
 
@@ -514,6 +607,34 @@ nonisolated enum PostureRichGeometryEvaluator {
     private static func finite(_ value: Double) -> Double? {
         value.isFinite ? value : nil
     }
+
+    private static func pixelAxialAngleDegrees(
+        _ normalizedAngle: Double,
+        context: PostureFramingContext
+    ) -> Double? {
+        guard normalizedAngle.isFinite else { return nil }
+        let radians = normalizedAngle * .pi / 180
+        let dx = cos(radians) * Double(context.pixelWidth)
+        let dy = sin(radians) * Double(context.pixelHeight)
+        guard hypot(dx, dy).isFinite, hypot(dx, dy) > 0 else { return nil }
+        var value = atan2(dy, dx) * 180 / .pi
+        if value > 90 { value -= 180 }
+        if value < -90 { value += 180 }
+        return value.isFinite ? value : nil
+    }
+}
+
+/// Différence entre deux orientations axiales (une droite n'a pas de sens
+/// gauche/droite propre). Le résultat est toujours borné à [-90°, 90°].
+private nonisolated func postureRelativeAxialDifferenceDegrees(
+    _ first: Double,
+    _ second: Double
+) -> Double? {
+    guard first.isFinite, second.isFinite else { return nil }
+    var wrapped = (first - second).truncatingRemainder(dividingBy: 180)
+    if wrapped > 90 { wrapped -= 180 }
+    if wrapped < -90 { wrapped += 180 }
+    return wrapped.isFinite ? wrapped : nil
 }
 
 /// Repère personnel d'ouverture, conservé séparément pour chaque œil. Les
@@ -531,6 +652,7 @@ nonisolated struct PostureBlinkOpeningBaseline: Equatable, Codable, Sendable {
 nonisolated struct PostureRichBaselineFamilySampleCounts: Equatable, Codable, Sendable {
     let torso: Int
     let shoulderSlope: Int
+    let headTilt: Int
     let shoulderElevation: Int
     let shoulderOpening: Int
     let proximity: Int
@@ -539,6 +661,7 @@ nonisolated struct PostureRichBaselineFamilySampleCounts: Equatable, Codable, Se
     init(
         torso: Int = 0,
         shoulderSlope: Int = 0,
+        headTilt: Int = 0,
         shoulderElevation: Int = 0,
         shoulderOpening: Int = 0,
         proximity: Int = 0,
@@ -546,6 +669,7 @@ nonisolated struct PostureRichBaselineFamilySampleCounts: Equatable, Codable, Se
     ) {
         self.torso = max(0, torso)
         self.shoulderSlope = max(0, shoulderSlope)
+        self.headTilt = max(0, headTilt)
         self.shoulderElevation = max(0, shoulderElevation)
         self.shoulderOpening = max(0, shoulderOpening)
         self.proximity = max(0, proximity)
@@ -553,7 +677,7 @@ nonisolated struct PostureRichBaselineFamilySampleCounts: Equatable, Codable, Se
     }
 
     var maximum: Int {
-        max(torso, shoulderSlope, shoulderElevation, shoulderOpening, proximity, blinkOpening)
+        max(torso, shoulderSlope, headTilt, shoulderElevation, shoulderOpening, proximity, blinkOpening)
     }
 
     var hasAnyReadyFamily: Bool { maximum > 0 }
@@ -566,6 +690,7 @@ nonisolated struct PostureRichBaseline: Equatable, Codable, Sendable {
     let torsoInclinationDegrees: Double?
     let torsoAxisDeviation: Double?
     let shoulderSlopeDegrees: Double?
+    let headTiltDegrees: Double?
     let shoulderOpeningRatio: Double?
     let leftShoulderElevation: Double?
     let rightShoulderElevation: Double?
@@ -574,6 +699,7 @@ nonisolated struct PostureRichBaseline: Equatable, Codable, Sendable {
     let torsoInclinationMAD: Double?
     let torsoAxisMAD: Double?
     let shoulderSlopeMAD: Double?
+    let headTiltMAD: Double?
     /// `nil` pour les baselines historiques.
     let familySampleCounts: PostureRichBaselineFamilySampleCounts?
     /// `nil` pour les anciennes baselines ou une calibration sans deux yeux
@@ -596,7 +722,9 @@ nonisolated struct PostureRichBaseline: Equatable, Codable, Sendable {
         torsoAxisMAD: Double?,
         shoulderSlopeMAD: Double?,
         blinkOpeningBaseline: PostureBlinkOpeningBaseline? = nil,
-        familySampleCounts: PostureRichBaselineFamilySampleCounts? = nil
+        familySampleCounts: PostureRichBaselineFamilySampleCounts? = nil,
+        headTiltDegrees: Double? = nil,
+        headTiltMAD: Double? = nil
     ) {
         self.generation = generation
         self.contextKey = contextKey
@@ -604,6 +732,7 @@ nonisolated struct PostureRichBaseline: Equatable, Codable, Sendable {
         self.torsoInclinationDegrees = torsoInclinationDegrees
         self.torsoAxisDeviation = torsoAxisDeviation
         self.shoulderSlopeDegrees = shoulderSlopeDegrees
+        self.headTiltDegrees = headTiltDegrees
         self.shoulderOpeningRatio = shoulderOpeningRatio
         self.leftShoulderElevation = leftShoulderElevation
         self.rightShoulderElevation = rightShoulderElevation
@@ -612,6 +741,7 @@ nonisolated struct PostureRichBaseline: Equatable, Codable, Sendable {
         self.torsoInclinationMAD = torsoInclinationMAD
         self.torsoAxisMAD = torsoAxisMAD
         self.shoulderSlopeMAD = shoulderSlopeMAD
+        self.headTiltMAD = headTiltMAD
         self.blinkOpeningBaseline = blinkOpeningBaseline
         self.familySampleCounts = familySampleCounts
     }
@@ -623,7 +753,7 @@ nonisolated enum PostureRichBaselineBuilder {
         faceSamples: [PostureFaceObservation] = [],
         generation: UInt64,
         contextKey: String,
-        ruleVersion: String = "rich-v1",
+        ruleVersion: String = "rich-v2",
         minimumSamples: Int = 12,
         maximumSampleGap: TimeInterval = 1.50,
         minimumFacePoints: Int = 40,
@@ -676,7 +806,7 @@ nonisolated enum PostureRichBaselineBuilder {
             // ne sont considérées comme preuve faciale que si la frame était
             // complète. Le chemin source-specific visage passe par
             // `faceSamples` et reste donc indépendant des hanches/épaules.
-            let completeSamples = samples.filter { $0.openingState == .available }
+            let completeSamples = samples.filter { $0.openingRatioState == .available }
             faceScaleSamples = completeSamples.compactMap { sample in
                 guard let value = sample.proximityScale,
                       value.isFinite, value > 0 else { return nil }
@@ -712,8 +842,21 @@ nonisolated enum PostureRichBaselineBuilder {
                 return (sample.capturedAt, left, right)
             }
         }
+        let headTiltCandidates = samples.filter { sample in
+            guard sample.headTiltState == .available,
+                  sample.headTiltDegrees?.isFinite == true else { return false }
+            guard !faceSamples.isEmpty else { return true }
+            return validFaceSamples.contains {
+                abs($0.capturedAt - sample.capturedAt) <= maximumFusionSkew
+            }
+        }
+        let headTiltSamples = coherentSamples(
+            headTiltCandidates,
+            maximumSampleGap: maximumSampleGap,
+            minimumSamples: minimumSamples
+        )
         let shoulderOpeningCandidates = samples.filter { sample in
-            guard sample.openingState == .available,
+            guard sample.openingRatioState == .available,
                   sample.shoulderOpeningRatio?.isFinite == true,
                   (sample.shoulderOpeningRatio ?? 0) > 0 else { return false }
             guard !faceSamples.isEmpty else { return true }
@@ -741,6 +884,7 @@ nonisolated enum PostureRichBaselineBuilder {
         let familySampleCounts = PostureRichBaselineFamilySampleCounts(
             torso: torsoSamples.count,
             shoulderSlope: shoulderSlopeSamples.count,
+            headTilt: headTiltSamples.count,
             shoulderElevation: shoulderElevationSamples.count,
             shoulderOpening: shoulderOpeningSamples.count,
             proximity: proximitySamples.count,
@@ -778,7 +922,9 @@ nonisolated enum PostureRichBaselineBuilder {
             torsoAxisMAD: mad(torsoSamples.compactMap(\.torsoAxisDeviation)),
             shoulderSlopeMAD: mad(shoulderSlopeSamples.compactMap(\.shoulderSlopeDegrees)),
             blinkOpeningBaseline: blinkOpeningBaseline,
-            familySampleCounts: familySampleCounts
+            familySampleCounts: familySampleCounts,
+            headTiltDegrees: median(headTiltSamples.compactMap(\.headTiltDegrees)),
+            headTiltMAD: mad(headTiltSamples.compactMap(\.headTiltDegrees))
         )
     }
 
@@ -840,6 +986,11 @@ nonisolated struct PostureRichSignalConfiguration: Equatable, Sendable {
     var torsoExitDegrees: Double = 2.5
     var shoulderSlopeEnterDegrees: Double = 0.75
     var shoulderSlopeExitDegrees: Double = 0.35
+    var headTiltEnterDegrees: Double = 8
+    var headTiltExitDegrees: Double = 5
+    /// Limite de publication du proxy 2D : au-delà, la fusion est trop
+    /// ambiguë pour être présentée comme une inclinaison relative fiable.
+    var maximumHeadTiltDegrees: Double = 45
     var shoulderOpeningEnterDelta: Double = 0.08
     var shoulderOpeningExitDelta: Double = 0.04
     var shoulderElevationEnterDelta: Double = 0.04
@@ -867,7 +1018,8 @@ nonisolated struct PostureRichSignalConfiguration: Equatable, Sendable {
     /// Une valeur personnalisée est préférable au fallback historique.
     var blinkMaximumEyeSkew: TimeInterval = 0.12
     var blinkWindow: TimeInterval = 60
-    var blinkMinimumObservable: TimeInterval = 30
+    var blinkMinimumObservable: TimeInterval = 45
+    var blinkReferenceRequiredWindows: Int = 3
     /// Pas de fréquence universelle : la cible est fournie par calibration/produit.
     var blinkTargetPerMinute: Double?
     /// Fraction de la cible personnelle déclenchant la direction `.below`.
@@ -877,11 +1029,15 @@ nonisolated struct PostureRichSignalConfiguration: Equatable, Sendable {
     var blinkLowRateDuration: TimeInterval = 5 * 60
     /// Durée au-dessus du seuil pour considérer une récupération.
     var blinkRecoveryDuration: TimeInterval = 2 * 60
-    /// Une absence visage/yeux suspend au plus cette durée avant reset.
+    /// Une absence visage/yeux plus longue casse l'épisode de débit, sans
+    /// compter le trou ni effacer la fenêtre live encore fraîche.
     var blinkMaximumSuspension: TimeInterval = 10
     /// Intervalle maximal implicitement continu à 10 Hz. Au-delà, le trou
     /// n'est jamais compté, même si une frame valide réapparaît ensuite.
     var blinkMaximumCountedInterval: TimeInterval = 0.25
+    /// Délai pratique du rappel lorsque les deux yeux restent ouverts sans
+    /// preuve de clignement. Ce n'est pas une cible médicale de fréquence.
+    var blinkPauseReminderAfter: TimeInterval = 20
 
     static var balancedSensitive: Self { Self() }
 
@@ -924,13 +1080,25 @@ nonisolated struct PostureBlinkEvent: Equatable, Sendable {
 /// les deux yeux terminent un cycle temporellement cohérent; aucune moyenne des
 /// ratios gauche/droite ne franchit la frontière CV.
 nonisolated struct PostureBlinkTracker: Equatable, Sendable {
+    private struct LiveInterval: Equatable, Sendable {
+        let startedAt: TimeInterval
+        let endedAt: TimeInterval
+    }
+
     /// Compatibilité : `.closed` signifie que les deux yeux sont actuellement
     /// fermés. Les phases détaillées sont exposées séparément ci-dessous.
     private(set) var phase: PostureBlinkPhase = .open
     private(set) var leftEyePhase: PostureBlinkPhase = .open
     private(set) var rightEyePhase: PostureBlinkPhase = .open
     private(set) var observableSeconds: TimeInterval = 0
+    /// Durée observable de la fenêtre glissante utilisée par le débit live.
+    /// Elle reste indépendante de la fenêtre terminée envoyée à la calibration.
+    private(set) var liveObservableSeconds: TimeInterval = 0
     private(set) var events: [PostureBlinkEvent] = []
+    private var liveIntervals: [LiveInterval] = []
+    private var liveEvents: [PostureBlinkEvent] = []
+    /// Fenêtre terminée, consommable une seule fois par le repère personnel.
+    private var completedWindow: PostureBlinkReferenceWindow?
     private var leftClosedStartedAt: TimeInterval?
     private var rightClosedStartedAt: TimeInterval?
     private var leftReopenedAt: TimeInterval?
@@ -941,13 +1109,18 @@ nonisolated struct PostureBlinkTracker: Equatable, Sendable {
     private var lastObservedAt: TimeInterval?
     private var generation: UInt64?
     private var windowStartedAt: TimeInterval?
+    private var liveLastValidAt: TimeInterval?
 
     mutating func reset() {
         phase = .open
         leftEyePhase = .open
         rightEyePhase = .open
         observableSeconds = 0
+        liveObservableSeconds = 0
         events.removeAll(keepingCapacity: true)
+        liveIntervals.removeAll(keepingCapacity: true)
+        liveEvents.removeAll(keepingCapacity: true)
+        completedWindow = nil
         leftClosedStartedAt = nil
         rightClosedStartedAt = nil
         leftReopenedAt = nil
@@ -958,6 +1131,12 @@ nonisolated struct PostureBlinkTracker: Equatable, Sendable {
         lastObservedAt = nil
         generation = nil
         windowStartedAt = nil
+        liveLastValidAt = nil
+    }
+
+    mutating func takeCompletedWindow() -> PostureBlinkReferenceWindow? {
+        defer { completedWindow = nil }
+        return completedWindow
     }
 
     /// API historique : il duplique explicitement la même preuve vers les
@@ -998,7 +1177,9 @@ nonisolated struct PostureBlinkTracker: Equatable, Sendable {
               configuration.blinkMaximumEyeSkew.isFinite,
               configuration.blinkMaximumEyeSkew >= 0,
               configuration.blinkMaximumCountedInterval.isFinite,
-              configuration.blinkMaximumCountedInterval > 0 else {
+              configuration.blinkMaximumCountedInterval > 0,
+              configuration.blinkWindow.isFinite,
+              configuration.blinkWindow > 0 else {
             reset()
             return nil
         }
@@ -1012,9 +1193,20 @@ nonisolated struct PostureBlinkTracker: Equatable, Sendable {
 
         if let previous = lastGoodAt {
             let gap = timestamp - previous
-            if gap > configuration.blinkMaximumSuspension || gap > configuration.blinkMaximumGap {
-                reset()
-                generation = newGeneration
+            if gap > configuration.blinkMaximumSuspension {
+                // Une longue absence casse la continuité du cycle courant,
+                // mais ne détruit pas la fenêtre glissante. Les anciennes
+                // observations seront retirées par `trimLiveHistory` selon
+                // leur âge réel, sans faire compter le trou.
+                suspendAfterGap()
+            } else if gap > configuration.blinkMaximumGap {
+                // Un trou moyen suspend la continuité, mais ne doit pas
+                // effacer les observations valides encore présentes dans la
+                // fenêtre glissante. Le trou ne contribue jamais au temps
+                // observable; il casse seulement le cycle courant.
+                lastValidAt = nil
+                liveLastValidAt = nil
+                resetCycle(awaitingBothEyesOpen: true)
             }
         }
         lastObservedAt = timestamp
@@ -1026,6 +1218,7 @@ nonisolated struct PostureBlinkTracker: Equatable, Sendable {
             // Une seule preuve faciale invalide casse le cycle, sans compter
             // l'intervalle; l'historique rate reste conservé hors suspension.
             lastValidAt = nil
+            liveLastValidAt = nil
             resetCycle(awaitingBothEyesOpen: true)
             return nil
         }
@@ -1038,8 +1231,15 @@ nonisolated struct PostureBlinkTracker: Equatable, Sendable {
                 observableSeconds += delta
             }
         }
+        recordLiveObservation(at: timestamp, configuration: configuration)
         if let windowStartedAt,
            timestamp - windowStartedAt >= configuration.blinkWindow {
+            completedWindow = PostureBlinkReferenceWindow(
+                startedAt: windowStartedAt,
+                endedAt: timestamp,
+                observableSeconds: observableSeconds,
+                blinkCount: events.count
+            )
             observableSeconds = 0
             events.removeAll(keepingCapacity: true)
             self.windowStartedAt = timestamp
@@ -1117,8 +1317,37 @@ nonisolated struct PostureBlinkTracker: Equatable, Sendable {
         let event = PostureBlinkEvent(generation: newGeneration, startedAt: startedAt,
                                       endedAt: endedAt, duration: endedAt - startedAt)
         events.append(event)
+        liveEvents.append(event)
+        trimLiveHistory(at: timestamp, window: configuration.blinkWindow)
         resetCycle(awaitingBothEyesOpen: false)
         return event
+    }
+
+    private mutating func recordLiveObservation(
+        at timestamp: TimeInterval,
+        configuration: PostureRichSignalConfiguration
+    ) {
+        if let previous = liveLastValidAt {
+            let delta = timestamp - previous
+            if delta > 0,
+               delta <= min(configuration.blinkMaximumGap,
+                            configuration.blinkMaximumCountedInterval) {
+                liveIntervals.append(LiveInterval(startedAt: previous, endedAt: timestamp))
+            }
+        }
+        liveLastValidAt = timestamp
+        trimLiveHistory(at: timestamp, window: configuration.blinkWindow)
+    }
+
+    private mutating func trimLiveHistory(at timestamp: TimeInterval, window: TimeInterval) {
+        let start = timestamp - window
+        liveIntervals.removeAll { $0.endedAt <= start }
+        liveEvents.removeAll { $0.endedAt < start }
+        liveObservableSeconds = liveIntervals.reduce(0) { total, interval in
+            let clippedStart = max(interval.startedAt, start)
+            let clippedEnd = min(interval.endedAt, timestamp)
+            return total + max(0, clippedEnd - clippedStart)
+        }
     }
 
     private mutating func resetCycle(awaitingBothEyesOpen: Bool) {
@@ -1132,9 +1361,18 @@ nonisolated struct PostureBlinkTracker: Equatable, Sendable {
         self.awaitingBothEyesOpen = awaitingBothEyesOpen
     }
 
+    /// Coupe toute continuité de clignement après un trou, sans remettre à
+    /// zéro les observations déjà valides dans la fenêtre courante.
+    private mutating func suspendAfterGap() {
+        lastValidAt = nil
+        liveLastValidAt = nil
+        lastGoodAt = nil
+        resetCycle(awaitingBothEyesOpen: true)
+    }
+
     var ratePerMinute: Double? {
-        guard observableSeconds > 0 else { return nil }
-        let value = Double(events.count) / observableSeconds * 60
+        guard liveObservableSeconds > 0 else { return nil }
+        let value = Double(liveEvents.count) / liveObservableSeconds * 60
         return value.isFinite ? value : nil
     }
 }
@@ -1429,12 +1667,42 @@ private nonisolated struct PostureShoulderRaiseTemporalFilter: Equatable, Sendab
 nonisolated struct PostureRichEvaluation: Equatable, Sendable {
     let torsoInclination: PostureRichScalarObservation
     let shoulderSlope: PostureRichScalarObservation
+    let headTilt: PostureRichScalarObservation
     let shoulderOpening: PostureRichScalarObservation
     let shouldersRaised: PostureRichScalarObservation
     let proximity: PostureRichScalarObservation
     let blinkRate: PostureRichScalarObservation
     let blinkEvent: PostureBlinkEvent?
     let blinkRateAssessment: PostureBlinkRateAssessment
+
+    init(
+        torsoInclination: PostureRichScalarObservation,
+        shoulderSlope: PostureRichScalarObservation,
+        headTilt: PostureRichScalarObservation? = nil,
+        shoulderOpening: PostureRichScalarObservation,
+        shouldersRaised: PostureRichScalarObservation,
+        proximity: PostureRichScalarObservation,
+        blinkRate: PostureRichScalarObservation,
+        blinkEvent: PostureBlinkEvent?,
+        blinkRateAssessment: PostureBlinkRateAssessment
+    ) {
+        self.torsoInclination = torsoInclination
+        self.shoulderSlope = shoulderSlope
+        self.headTilt = headTilt ??
+            .unavailable(
+                .headTilt,
+                generation: shoulderSlope.generation,
+                sampleID: shoulderSlope.sampleID,
+                capturedAt: shoulderSlope.capturedAt,
+                reason: "signal tête-épaules non calculé"
+            )
+        self.shoulderOpening = shoulderOpening
+        self.shouldersRaised = shouldersRaised
+        self.proximity = proximity
+        self.blinkRate = blinkRate
+        self.blinkEvent = blinkEvent
+        self.blinkRateAssessment = blinkRateAssessment
+    }
 }
 
 /// Persistance des états et des transitions, sans notification ni UI. Les
@@ -1455,16 +1723,18 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
     private var lastAcceptedSampleID: UInt64?
     private var torsoState = PostureRichSustainedState()
     private var shoulderSlopeState = PostureRichSustainedState()
-    private var openingState = PostureRichSustainedState()
+    private var headTiltState = PostureRichSustainedState()
+    private var openingRatioAttentionState = PostureRichSustainedState()
     private var raisedState = PostureRichSustainedState()
     private var shoulderRaiseFilter = PostureShoulderRaiseTemporalFilter()
     private var proximityState = PostureRichSustainedState()
     private var blinkTracker = PostureBlinkTracker()
     private var blinkRateTracker = PostureBlinkRateTracker()
-    /// Repère automatique établi une seule fois après une fenêtre visage/yeux
-    /// observable suffisante. Il reste local à la génération et n'est jamais
-    /// déduit d'une norme populationnelle.
-    private var automaticBlinkTargetPerMinute: Double?
+    private var blinkPause = PostureBlinkPause()
+    /// Repère automatique construit uniquement à partir de fenêtres indépendantes
+    /// et gelé après trois fenêtres fiables. Il ne se déduit jamais du premier
+    /// débit disponible.
+    private var blinkReference: PostureBlinkReference
 
     // Les deux flux ont des cadences différentes. Ces caches ne contiennent
     // que des métriques scalaires déjà dérivées (jamais d'image ni de point
@@ -1485,11 +1755,33 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
 
     init(configuration: PostureRichSignalConfiguration = .init()) {
         self.configuration = configuration
+        self.blinkReference = PostureBlinkReference(configuration: .init(
+            windowDuration: configuration.blinkWindow,
+            minimumObservableSeconds: configuration.blinkMinimumObservable,
+            requiredWindows: configuration.blinkReferenceRequiredWindows
+        ))
     }
 
     mutating func setBlinkTarget(_ target: Double?) {
         configuration.blinkTargetPerMinute = target
-        automaticBlinkTargetPerMinute = target
+    }
+
+    /// Réarme les états transitoires après une réacquisition. Le repère
+    /// personnel et les observations glissantes encore fraîches restent
+    /// conservés : une perte temporaire du cadre ne doit pas imposer une
+    /// nouvelle collecte de 45 s.
+    mutating func resetFaceTarget() {
+        proximityState.reset()
+        // `invalidateFace` a déjà cassé le cycle en cours. Conserver le
+        // tracker permet de réutiliser les secondes réellement observées qui
+        // sont encore dans la fenêtre de 60 s, sans jamais compter le trou.
+        blinkRateTracker.reset()
+        blinkPause.reset()
+        latestBlinkRateAssessment = nil
+        latestFace = nil
+        faceLastTimestamp = nil
+        faceLastSampleID = nil
+        headTiltState.reset()
     }
 
     mutating func reset() {
@@ -1497,11 +1789,12 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
         contextKey = nil
         lastAcceptedTimestamp = nil
         lastAcceptedSampleID = nil
-        torsoState.reset(); shoulderSlopeState.reset(); openingState.reset(); raisedState.reset(); proximityState.reset()
+        torsoState.reset(); shoulderSlopeState.reset(); headTiltState.reset(); openingRatioAttentionState.reset(); raisedState.reset(); proximityState.reset()
         shoulderRaiseFilter.reset()
         blinkTracker.reset()
         blinkRateTracker.reset()
-        automaticBlinkTargetPerMinute = nil
+        blinkPause.reset()
+        blinkReference.reset()
         resetBodyCache()
         resetFaceCache()
     }
@@ -1547,10 +1840,12 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
     /// mis en cache sert uniquement aux dérivés fusionnés/face-only.
     mutating func consumeBody(
         geometry: PostureRichGeometryMetrics,
+        pairedFace: PostureFaceObservation? = nil,
         baseline: PostureRichBaseline? = nil,
         now: TimeInterval
     ) -> PostureRichEvaluation {
-        consumeInternal(geometry: geometry, face: nil, baseline: baseline,
+        consumeInternal(geometry: geometry, face: nil, pairedFace: pairedFace,
+                        baseline: baseline,
                         now: now, source: .body)
     }
 
@@ -1580,6 +1875,8 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
     ) {
         guard newGeneration > 0, sampleID > 0, capturedAt.isFinite else { return }
         proximityState.reset()
+        headTiltState.reset()
+        blinkPause.reset()
         _ = blinkTracker.consume(
             generation: newGeneration,
             timestamp: capturedAt,
@@ -1604,6 +1901,7 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
     private mutating func consumeInternal(
         geometry: PostureRichGeometryMetrics?,
         face: PostureFaceObservation?,
+        pairedFace: PostureFaceObservation? = nil,
         baseline: PostureRichBaseline?,
         now: TimeInterval,
         source: EvaluationSource,
@@ -1638,13 +1936,14 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
             }
         }
         if source == .combined && (generation != idGeneration || contextKey != key) {
-            torsoState.reset(); shoulderSlopeState.reset(); openingState.reset(); raisedState.reset(); proximityState.reset()
+            torsoState.reset(); shoulderSlopeState.reset(); headTiltState.reset(); openingRatioAttentionState.reset(); raisedState.reset(); proximityState.reset()
             blinkTracker.reset()
-            // La cible automatique et l'épisode de débit sont liés au même
-            // contexte stable; aucun état de l'ancien contexte ne traverse
-            // une nouvelle génération ou un nouveau cadrage.
+            blinkPause.reset()
+            // Le repère et l'épisode de débit sont liés au même contexte
+            // stable; aucun état de l'ancien contexte ne traverse une nouvelle
+            // génération ou un nouveau cadrage.
             blinkRateTracker.reset()
-            automaticBlinkTargetPerMinute = nil
+            blinkReference.reset()
             latestBlinkRateAssessment = nil
             generation = idGeneration
             contextKey = key
@@ -1795,7 +2094,32 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
                 candidate.generation == idGeneration && now >= candidate.capturedAt &&
                     now - candidate.capturedAt <= configuration.faceTTL ? candidate : nil
             }
-        case .body, .invalidateBody:
+        case .body:
+            if let pairedFace {
+                let isPaired = pairedFace.generation == idGeneration &&
+                    pairedFace.contextKey == key &&
+                    pairedFace.capturedAt.isFinite &&
+                    now >= pairedFace.capturedAt &&
+                    now - pairedFace.capturedAt <= configuration.faceTTL &&
+                    geometry.map {
+                        abs(pairedFace.capturedAt - $0.capturedAt) <= configuration.maximumFusionSkew
+                    } == true
+                if isPaired {
+                    // Cette paire capturée avec le corps sert uniquement à la
+                    // géométrie fusionnée. Elle ne remplace pas le visage mis
+                    // en cache et n'avance donc ni clignement ni état facial.
+                    usableFace = pairedFace
+                } else {
+                    usableFace = nil
+                }
+            } else if let cached = latestFace,
+                      now >= cached.capturedAt,
+                      now - cached.capturedAt <= configuration.faceTTL {
+                usableFace = cached
+            } else {
+                usableFace = nil
+            }
+        case .invalidateBody:
             if let cached = latestFace,
                now >= cached.capturedAt,
                now - cached.capturedAt <= configuration.faceTTL {
@@ -1857,13 +2181,18 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
             if source == .body || source == .combined { torsoState.reset() }
             torsoAttention = false
         }
+        let torsoReferenceDelta: Double? = if let torsoValue,
+            let neutral = bodyBaselineUsable?.torsoInclinationDegrees {
+            torsoValue - neutral
+        } else { nil }
         let torso = PostureRichScalarObservation(
             kind: .torsoInclination, value: torsoValue,
             state: torsoReason == nil ? (bodyForEvaluation?.torsoState ?? .unavailable) : .unavailable,
             quality: torsoValue == nil ? .unavailable : (bodyForEvaluation?.torsoState == .available ? .good : .limited),
             generation: idGeneration, sampleID: idSample, capturedAt: idTimestamp,
             isEstimated2DProxy: true, isAttention: torsoAttention,
-            reason: torsoReason ?? ""
+            reason: torsoReason ?? "",
+            referenceDelta: torsoReferenceDelta
         )
 
         let slopeValue = body?.shoulderSlopeDegrees
@@ -1888,26 +2217,92 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
             if source == .body || source == .combined { shoulderSlopeState.reset() }
             slopeAttention = false
         }
+        let shoulderSlopeReferenceDelta: Double? = if let slopeValue,
+            let neutral = bodyBaselineUsable?.shoulderSlopeDegrees {
+            slopeValue - neutral
+        } else { nil }
         let shoulderSlope = PostureRichScalarObservation(
             kind: .shoulderSlope, value: slopeValue,
             state: slopeReason == nil ? (body?.shouldersState ?? .unavailable) : .unavailable,
             quality: slopeValue == nil ? .unavailable : (body?.shouldersState == .available ? .good : .limited),
             generation: idGeneration, sampleID: idSample, capturedAt: idTimestamp,
             isEstimated2DProxy: true, isAttention: slopeAttention,
-            reason: slopeReason ?? ""
+            reason: slopeReason ?? "",
+            referenceDelta: shoulderSlopeReferenceDelta
+        )
+
+        // Ce signal est produit à la cadence corps, mais sa preuve nécessite
+        // une paire visage/corps fraîche. Il compare deux droites dans le même
+        // repère image : une rotation commune de la caméra s'annule.
+        let headTiltValue: Double? = if paired { body?.headTiltDegrees } else { nil }
+        let headTiltFaceQuality = faceForEvaluation.map {
+            $0.facePointCount >= configuration.minimumFacePoints &&
+                ($0.signal.yawProxy.map { $0.isFinite && abs($0) <= configuration.maximumYaw } ?? false) &&
+                ($0.signal.eyeLineRollDegrees.map {
+                    $0.isFinite && abs($0) <= configuration.maximumRollDegrees
+                } ?? false)
+        } ?? false
+        let headTiltNeutral = bodyBaselineUsable?.headTiltDegrees
+        let headTiltReason: String? = bodyInvalidationReason ?? {
+            guard paired else { return "visage et épaules non appariés" }
+            guard headTiltFaceQuality else { return "qualité visage insuffisante" }
+            guard body?.shouldersState == .available, headTiltValue != nil else {
+                return "deux épaules et orientation visage requises"
+            }
+            guard headTiltNeutral != nil else { return "baseline tête-épaules absente" }
+            return nil
+        }()
+        let headTiltAttention: Bool
+        if let headTiltValue,
+           abs(headTiltValue) <= configuration.maximumHeadTiltDegrees,
+           body?.shouldersState == .available,
+           headTiltFaceQuality,
+           let neutral = headTiltNeutral,
+           headTiltReason == nil {
+            let dispersion = (bodyBaselineUsable?.headTiltMAD ?? 0) * 1.4826 * 2
+            if source == .face || source == .invalidateBody {
+                headTiltAttention = headTiltState.active
+            } else {
+                headTiltAttention = headTiltState.update(
+                    deviation: headTiltValue - neutral, timestamp: idTimestamp,
+                    enterThreshold: max(configuration.headTiltEnterDegrees, dispersion),
+                    exitThreshold: max(configuration.headTiltExitDegrees, dispersion * 0.5),
+                    requiredDuration: configuration.requiredDuration,
+                    maximumGap: configuration.maximumSampleGap
+                )
+            }
+        } else {
+            if source == .body || source == .combined { headTiltState.reset() }
+            headTiltAttention = false
+        }
+        let headTiltReferenceDelta: Double? = if let headTiltValue, let neutral = headTiltNeutral {
+            headTiltValue - neutral
+        } else { nil }
+        let headTilt = PostureRichScalarObservation(
+            kind: .headTilt,
+            value: headTiltValue,
+            state: headTiltReason == nil
+                ? (body?.headTiltState ?? .unavailable)
+                : .unavailable,
+            quality: headTiltValue == nil ? .unavailable
+                : (headTiltFaceQuality && body?.shouldersState == .available ? .good : .limited),
+            generation: idGeneration, sampleID: idSample, capturedAt: idTimestamp,
+            isEstimated2DProxy: true, isAttention: headTiltAttention,
+            reason: headTiltReason ?? "",
+            referenceDelta: headTiltReferenceDelta
         )
 
         let openingValue = body?.shoulderOpeningRatio
         let openingReason: String? = bodyInvalidationReason ?? (!paired ? "visage et RTMPose non appariés" :
             baselineUsable?.shoulderOpeningRatio == nil ? "baseline ouverture absente" : nil)
         let openingAttention: Bool
-        if let openingValue, body?.openingState == .available,
+        if let openingValue, body?.openingRatioState == .available,
            let neutral = baselineUsable?.shoulderOpeningRatio,
            neutral > 0, openingReason == nil {
             if source == .face || source == .invalidateBody {
-                openingAttention = openingState.active
+                openingAttention = openingRatioAttentionState.active
             } else {
-                openingAttention = openingState.update(
+                openingAttention = openingRatioAttentionState.update(
                     deviation: log(neutral / openingValue), timestamp: idTimestamp,
                     enterThreshold: configuration.shoulderOpeningEnterDelta,
                     exitThreshold: configuration.shoulderOpeningExitDelta,
@@ -1917,16 +2312,21 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
                 )
             }
         } else {
-            if source == .body || source == .combined { openingState.reset() }
+            if source == .body || source == .combined { openingRatioAttentionState.reset() }
             openingAttention = false
         }
+        let openingReferenceDelta: Double? = if let openingValue,
+            let neutral = baselineUsable?.shoulderOpeningRatio, neutral > 0 {
+            openingValue / neutral - 1
+        } else { nil }
         let opening = PostureRichScalarObservation(
             kind: .shoulderOpening, value: openingValue,
-            state: openingReason == nil ? (body?.openingState ?? .unavailable) : .unavailable,
-            quality: openingValue == nil ? .unavailable : (body?.openingState == .available ? .good : .limited),
+            state: openingReason == nil ? (body?.openingRatioState ?? .unavailable) : .unavailable,
+            quality: openingValue == nil ? .unavailable : (body?.openingRatioState == .available ? .good : .limited),
             generation: idGeneration, sampleID: idSample, capturedAt: idTimestamp,
             isEstimated2DProxy: true, isAttention: openingAttention,
-            reason: openingReason ?? ""
+            reason: openingReason ?? "",
+            referenceDelta: openingReferenceDelta
         )
 
         let leftDelta: Double? = if let value = body?.leftShoulderElevation,
@@ -2026,6 +2426,7 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
             generation: idGeneration, sampleID: idSample, capturedAt: idTimestamp,
             isEstimated2DProxy: true, isAttention: raisedAttention,
             reason: raisedReason,
+            referenceDelta: raisedValue,
             leftShoulderDelta: acceptedLeftDelta,
             rightShoulderDelta: acceptedRightDelta,
             shoulderRaiseClassification: raiseClassification
@@ -2065,7 +2466,8 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
             quality: proximityRatio == nil ? .unavailable : faceQuality ? .good : .limited,
             generation: idGeneration, sampleID: idSample, capturedAt: idTimestamp,
             isEstimated2DProxy: true, isAttention: proximityAttention,
-            reason: proximityReason
+            reason: proximityReason,
+            referenceDelta: proximityRatio.map { $0 - 1 }
         )
 
         let leftEyeOpening = faceForEvaluation?.signal.leftEyeOpeningRatio
@@ -2118,31 +2520,63 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
         let blinkValue = blinkTracker.ratePerMinute
         let blinkState: PostureRichSignalState = faceForEvaluation == nil ? .unavailable
             : !blinkGood ? .partial
-            : blinkValue == nil || blinkTracker.observableSeconds < configuration.blinkMinimumObservable
+            : blinkValue == nil || blinkTracker.liveObservableSeconds < configuration.blinkMinimumObservable
                 ? .partial : .available
-        if advancesFace, automaticBlinkTargetPerMinute == nil,
-           blinkState == .available,
-           let blinkValue,
-           blinkValue.isFinite, blinkValue > 0 {
-            automaticBlinkTargetPerMinute = blinkValue
+        if advancesFace, configuration.blinkTargetPerMinute == nil,
+           let completedWindow = blinkTracker.takeCompletedWindow() {
+            if case let .frozen(targetPerMinute) = blinkReference.ingest(completedWindow),
+               targetPerMinute.isFinite, targetPerMinute > 0 {
+                configuration.blinkTargetPerMinute = targetPerMinute
+            }
         }
         let normalizedBlinkRate: Double? = {
             guard blinkState == .available, blinkGood, let blinkValue,
-                  let target = configuration.blinkTargetPerMinute ?? automaticBlinkTargetPerMinute,
+                  let target = configuration.blinkTargetPerMinute,
                   target.isFinite, target > 0 else { return nil }
             let value = blinkValue / target
             return value.isFinite ? value : nil
         }()
-        let blinkRateAssessment: PostureBlinkRateAssessment
-        if advancesFace {
-            let assessment = blinkRateTracker.consume(
-                generation: idGeneration,
-                sampleID: idSample,
-                timestamp: idTimestamp,
-                normalizedRate: normalizedBlinkRate,
-                eligible: blinkGood && normalizedBlinkRate != nil,
-                configuration: configuration
+        let blinkPauseReminder: Bool
+        if advancesFace, let usableFace = faceForEvaluation {
+            let eyesOpen = normalizedLeftEyeOpening.map { $0 >= configuration.blinkOpenRatio } == true &&
+                normalizedRightEyeOpening.map { $0 >= configuration.blinkOpenRatio } == true
+            blinkPauseReminder = blinkPause.consume(
+                generation: usableFace.generation,
+                sampleID: usableFace.sampleID,
+                timestamp: usableFace.capturedAt,
+                eyesOpen: eyesOpen,
+                qualityGood: blinkGood,
+                maximumGap: configuration.blinkMaximumCountedInterval,
+                reminderAfter: configuration.blinkPauseReminderAfter
             )
+        } else {
+            blinkPauseReminder = blinkPause.needsReminder
+        }
+        var blinkRateAssessment: PostureBlinkRateAssessment
+        if advancesFace {
+            let assessment: PostureBlinkRateAssessment
+            if configuration.blinkTargetPerMinute != nil {
+                assessment = blinkRateTracker.consume(
+                    generation: idGeneration,
+                    sampleID: idSample,
+                    timestamp: idTimestamp,
+                    normalizedRate: normalizedBlinkRate,
+                    eligible: blinkGood && normalizedBlinkRate != nil,
+                    configuration: configuration
+                )
+            } else {
+                blinkRateTracker.reset()
+                assessment = PostureBlinkRateAssessment(
+                    normalizedValue: nil,
+                    direction: .unknown,
+                    belowDuration: 0,
+                    recoveryDuration: 0,
+                    quality: blinkState == .available && blinkGood ? .good : .limited,
+                    reason: blinkState == .available
+                        ? "débit fiable; repère personnel en cours"
+                        : "fenêtre fiable insuffisante"
+                )
+            }
             latestBlinkRateAssessment = assessment
             blinkRateAssessment = assessment
         } else {
@@ -2157,23 +2591,68 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
                 reason: "tick visage non avancé"
             )
         }
+        if blinkPauseReminder {
+            blinkRateAssessment = PostureBlinkRateAssessment(
+                normalizedValue: 0,
+                direction: .below,
+                belowDuration: 0,
+                recoveryDuration: 0,
+                quality: .good,
+                reason: "pause clignement prolongée : yeux ouverts depuis 20 secondes"
+            )
+        }
+        let effectiveBlinkState: PostureRichSignalState = blinkPauseReminder ? .available : blinkState
+        let blinkPublishedValue: Double? = blinkPauseReminder ? (blinkValue ?? 0) : blinkValue
+        let blinkNumericValue: Double? = if blinkPauseReminder &&
+            blinkTracker.liveObservableSeconds < configuration.blinkMinimumObservable {
+            nil
+        } else {
+            blinkValue
+        }
+        let blinkReason: String = {
+            if blinkPauseReminder {
+                return blinkRateAssessment.reason
+            }
+            if blinkState == .partial,
+               blinkTracker.liveObservableSeconds < configuration.blinkMinimumObservable {
+                let observedValue = blinkTracker.liveObservableSeconds.isFinite
+                    ? max(0, blinkTracker.liveObservableSeconds) : 0
+                let requiredValue = configuration.blinkMinimumObservable.isFinite
+                    ? max(0, configuration.blinkMinimumObservable) : 0
+                let observed = String(format: "%.0f", floor(observedValue))
+                let required = String(format: "%.0f", requiredValue)
+                let progress = observed + "/" + required + " s"
+                if faceForEvaluation == nil {
+                    return "Visage indisponible"
+                }
+                if !blinkGood {
+                    return "Suivi des yeux intermittent"
+                }
+                return "Yeux observés : " + progress
+            }
+            return blinkRateAssessment.reason.isEmpty
+                ? (blinkState == .partial ? "Suivi des yeux insuffisant" : "")
+                : blinkRateAssessment.reason
+        }()
         let blink = PostureRichScalarObservation(
-            kind: .blinkRate, value: blinkValue, state: blinkState,
+            kind: .blinkRate, value: blinkPublishedValue, state: effectiveBlinkState,
             quality: blinkGood ? .good : .limited,
             generation: idGeneration, sampleID: idSample, capturedAt: idTimestamp,
             isEstimated2DProxy: false,
-            // Le tracker CV a déjà calculé la durée continue; l'étage runtime
-            // consomme cette preuve sans refaire la fenêtre de cinq minutes.
-            isAttention: false,
-            reason: blinkRateAssessment.reason.isEmpty
-                ? (blinkState == .partial ? "durée visage observable insuffisante" : "")
-                : blinkRateAssessment.reason,
+            // Le tracker CV est l'autorité de l'épisode sous la cible. L'étage
+            // produit n'a donc pas à refaire une fenêtre temporelle.
+            isAttention: blinkPauseReminder || (blinkRateAssessment.direction == .below &&
+                blinkRateAssessment.belowDuration >= configuration.blinkLowRateDuration),
+            reason: blinkReason,
+            numericValue: blinkNumericValue,
+            numericValueProvided: blinkPauseReminder,
             normalizedValue: blinkRateAssessment.normalizedValue,
             direction: blinkRateAssessment.direction,
             belowDuration: blinkRateAssessment.belowDuration
         )
 
         return PostureRichEvaluation(torsoInclination: torso, shoulderSlope: shoulderSlope,
+                                     headTilt: headTilt,
                                      shoulderOpening: opening,
                                      shouldersRaised: raised, proximity: proximity,
                                      blinkRate: blink, blinkEvent: event,
@@ -2203,16 +2682,19 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
     private mutating func resetBodyStateOnly() {
         torsoState.reset()
         shoulderSlopeState.reset()
-        openingState.reset()
+        headTiltState.reset()
+        openingRatioAttentionState.reset()
         raisedState.reset()
         shoulderRaiseFilter.reset()
     }
 
     private mutating func resetFaceStateOnly() {
         proximityState.reset()
+        headTiltState.reset()
         blinkTracker.reset()
         blinkRateTracker.reset()
-        automaticBlinkTargetPerMinute = nil
+        blinkPause.reset()
+        blinkReference.reset()
         latestBlinkRateAssessment = nil
     }
 
@@ -2246,9 +2728,19 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
             normalizedValue: nil, direction: .unknown, belowDuration: 0,
             recoveryDuration: 0, quality: .unavailable, reason: reason
         )
-        return PostureRichEvaluation(torsoInclination: values[0], shoulderSlope: values[1],
-                                     shoulderOpening: values[2], shouldersRaised: values[3],
-                                     proximity: values[4], blinkRate: values[5], blinkEvent: nil,
+        func value(_ kind: PostureRichSignalKind) -> PostureRichScalarObservation {
+            values.first { $0.kind == kind } ??
+                .unavailable(kind, generation: generation, sampleID: sampleID,
+                             capturedAt: capturedAt, reason: reason)
+        }
+        return PostureRichEvaluation(
+                                     torsoInclination: value(.torsoInclination),
+                                     shoulderSlope: value(.shoulderSlope),
+                                     headTilt: value(.headTilt),
+                                     shoulderOpening: value(.shoulderOpening),
+                                     shouldersRaised: value(.shouldersRaised),
+                                     proximity: value(.proximity),
+                                     blinkRate: value(.blinkRate), blinkEvent: nil,
                                      blinkRateAssessment: blinkRateAssessment)
     }
 }

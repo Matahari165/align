@@ -3,11 +3,12 @@ import Foundation
 @main
 private enum SettingsCalibrationHarness {
     static func main() {
-        precondition(PostureObservationSignalID.allCases.count == 6,
-                     "six observations doivent être visibles et historisées")
+        precondition(PostureObservationSignalID.allCases.count == 7,
+                     "sept observations doivent être visibles et historisées")
         precondition(PostureObservationSignalID.alertableCases == [
-            .proximity, .torsoInclination, .raisedShoulders, .estimatedBlinks
-        ], "les réglages doivent exposer exactement les quatre rappels canoniques")
+            .proximity, .torsoInclination, .raisedShoulders, .estimatedBlinks,
+            .shoulderSlope, .closedShoulders, .headTilt
+        ], "les réglages doivent exposer exactement les sept rappels canoniques")
         precondition(PostureRecommendationSensitivity.defaultValue == .sensitive,
                      "Sensible doit être le défaut")
         let choices: [PostureSnoozeChoice] = [.oneHour, .today, .untilReactivation]

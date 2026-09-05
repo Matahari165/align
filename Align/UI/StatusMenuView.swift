@@ -7,6 +7,8 @@ struct StatusMenuLabel: View {
     var body: some View {
         let presentation = CameraStatusPresentation.make(for: camera)
         Image(systemName: presentation.symbolName)
+            .symbolRenderingMode(.hierarchical)
+            .foregroundStyle(AlignTheme.accent)
             .accessibilityLabel("Align — \(presentation.title)")
     }
 }

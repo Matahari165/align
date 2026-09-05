@@ -51,6 +51,8 @@ private enum FaceTargetContinuityHarness {
         let first = tracker.ingestFullDetection([initial], at: 0.1)
         expect(first.candidate == initial && tracker.target == initial,
                "une seule boîte doit être sélectionnée initialement")
+        let initialEpoch = tracker.targetEpoch
+        expect(initialEpoch > 0, "une cible sélectionnée doit avoir un epoch de continuité")
 
         let association = tracker.ingestFullDetection([shifted], at: 0.2)
         expect(association.candidate == shifted,
@@ -117,10 +119,12 @@ private enum FaceTargetContinuityHarness {
 
         var transientLoss = FaceTargetContinuity()
         _ = transientLoss.ingestFullDetection([initial], at: 3.5)
+        let transientEpoch = transientLoss.targetEpoch
         expect(transientLoss.ingestFullDetection([], at: 3.6).reason == .targetLost,
                "une frame sans visage suspend la cible")
         let recovered = transientLoss.ingestFullDetection([shifted], at: 3.7)
-        expect(recovered.candidate == shifted && !transientLoss.requiresExplicitRearm,
+        expect(recovered.candidate == shifted && !transientLoss.requiresExplicitRearm &&
+               transientLoss.targetEpoch == transientEpoch,
                "le même visage spatialement cohérent peut revenir dans le gap borné")
 
         var expiredLoss = FaceTargetContinuity()
@@ -128,6 +132,33 @@ private enum FaceTargetContinuityHarness {
         _ = expiredLoss.ingestFullDetection([], at: 3.6)
         expect(expiredLoss.ingestFullDetection([shifted], at: 4.2).reason == .rearmRequired,
                "une réapparition tardive exige un réarmement explicite")
+
+        var stableLongLoss = FaceTargetContinuity()
+        _ = stableLongLoss.ingestFullDetection([initial], at: 7)
+        let oldEpoch = stableLongLoss.targetEpoch
+        _ = stableLongLoss.ingestFullDetection([], at: 7.1)
+        expect(stableLongLoss.targetEpoch == oldEpoch && stableLongLoss.target == nil,
+               "une perte seule doit conserver l'epoch et invalider la cible précédente")
+        expect(stableLongLoss.ingestFullDetection([shifted], at: 8.0).reason == .rearmRequired &&
+               stableLongLoss.reacquisitionFrameCount == 1,
+               "une réapparition longue doit commencer une fenêtre de stabilité")
+        expect(stableLongLoss.ingestFullDetection([shifted], at: 8.4).reason == .rearmRequired &&
+               stableLongLoss.reacquisitionFrameCount == 2,
+               "deux détections ne doivent pas encore réarmer le visage")
+        _ = stableLongLoss.ingestFullDetection([shifted], at: 8.8)
+        let stableReacquired = stableLongLoss.ingestFullDetection([shifted], at: 9.1)
+        expect(stableReacquired.candidate == shifted && stableLongLoss.target == shifted &&
+               stableLongLoss.targetEpoch != oldEpoch,
+               "une cible unique stable pendant plusieurs frames doit être réacquise dans un nouvel epoch")
+
+        var jumpDuringReacquisition = FaceTargetContinuity()
+        _ = jumpDuringReacquisition.ingestFullDetection([initial], at: 9)
+        _ = jumpDuringReacquisition.ingestFullDetection([], at: 9.1)
+        _ = jumpDuringReacquisition.ingestFullDetection([shifted], at: 10)
+        let jumpReset = jumpDuringReacquisition.ingestFullDetection([farCandidate], at: 10.2)
+        expect(jumpReset.reason == .trackingJump &&
+               jumpDuringReacquisition.reacquisitionFrameCount == 0,
+               "un saut pendant la stabilité doit remettre la fenêtre à zéro")
 
         var gap = FaceTargetContinuity()
         _ = gap.ingestFullDetection([initial], at: 4)

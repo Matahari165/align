@@ -167,6 +167,91 @@ private enum PostureObservationEngineHarness {
         )
         expect(decodedLegacySnapshot?.shoulderRaiseClassification == nil,
                "un snapshot antérieur sans classification typée doit rester décodable")
+        expect(decodedLegacySnapshot?.numericValue == nil &&
+               decodedLegacySnapshot?.referenceDelta == nil,
+               "les anciennes observations sans valeurs numériques restent décodables")
+
+        var readings = PostureObservationEngine()
+        _ = readings.reset(generation: 21, at: 0)
+        let angularEvidence = PostureMetricEvidence(
+            signalID: .headTilt, generation: 21, sampleID: 1,
+            capturedAt: 1, producedAt: 1.01, normalizedValue: 0,
+            quality: .good, calibration: .valid,
+            cameraContextID: "camera", framingSignature: "frame",
+            assessmentHint: .withinReference,
+            numericValue: 2, referenceDelta: 0.5
+        )
+        let angular = readings.ingest(angularEvidence, now: 1.01).signal(.headTilt)
+        expect(angular.numericValue == 2 && angular.referenceDelta == 0.5,
+               "les mesures doivent traverser toute la chaîne canonique")
+        let expiredReading = readings.expire(at: 4, generation: 21).signal(.headTilt)
+        expect(expiredReading.numericValue == nil && expiredReading.referenceDelta == nil,
+               "une mesure périmée doit perdre ses valeurs affichables")
+
+        let learningEvidence = PostureMetricEvidence(
+            signalID: .estimatedBlinks, generation: 21, sampleID: 1,
+            capturedAt: 4, producedAt: 4.01, normalizedValue: nil,
+            quality: .good, calibration: .missing,
+            cameraContextID: "camera", framingSignature: "frame",
+            numericValue: 8
+        )
+        let learning = readings.ingest(learningEvidence, now: 4.01).signal(.estimatedBlinks)
+        expect(learning.numericValue == 8 && learning.assessment == nil &&
+               learning.availability == .needsCalibration && learning.episodeID == nil,
+               "un taux en apprentissage reste informatif sans autoriser un rappel")
+        let collectingEvidence = PostureMetricEvidence(
+            signalID: .estimatedBlinks, generation: 21, sampleID: 2,
+            capturedAt: 4.2, producedAt: 4.21, normalizedValue: nil,
+            quality: .limited, calibration: .missing,
+            cameraContextID: "camera", framingSignature: "frame",
+            observationReason: "Yeux observés : 1.0/45 s"
+        )
+        let collecting = readings.ingest(collectingEvidence, now: 4.21)
+            .signal(.estimatedBlinks)
+        expect(collecting.availability == .needsCalibration &&
+               collecting.quality == .limited &&
+               collecting.observedAt == 4.2 &&
+               collecting.numericValue == nil,
+               "une progression limitée conserve sa preuve datée sans inventer un taux")
+        let limitedValidEvidence = PostureMetricEvidence(
+            signalID: .estimatedBlinks, generation: 21, sampleID: 3,
+            capturedAt: 4.3, producedAt: 4.31, normalizedValue: nil,
+            quality: .limited, calibration: .valid,
+            cameraContextID: "camera", framingSignature: "frame",
+            observationReason: "Yeux observés : 2/45 s"
+        )
+        let limitedValid = readings.ingest(limitedValidEvidence, now: 4.31)
+            .signal(.estimatedBlinks)
+        expect(limitedValid.availability == .insufficient &&
+               limitedValid.observedAt == 4.3 &&
+               limitedValid.numericValue == nil,
+               "une preuve limitée après calibration conserve aussi sa fraîcheur")
+        let expiredCollecting = readings.expire(at: 5.1, generation: 21)
+            .signal(.estimatedBlinks)
+        expect(expiredCollecting.observedAt == nil &&
+               expiredCollecting.availability == .insufficient,
+               "une progression de clignements périmée disparaît après son TTL")
+        let sourceTemplate = rich(bodySample: 3, faceSample: 3, at: 2)
+        let unreferencedRate = PostureRichEvaluation(
+            torsoInclination: sourceTemplate.torsoInclination,
+            shoulderSlope: sourceTemplate.shoulderSlope,
+            shoulderOpening: sourceTemplate.shoulderOpening,
+            shouldersRaised: sourceTemplate.shouldersRaised,
+            proximity: sourceTemplate.proximity,
+            blinkRate: .init(kind: .blinkRate, value: 8, state: .available,
+                             quality: .good, generation: 11, sampleID: 3, capturedAt: 2,
+                             isEstimated2DProxy: false, isAttention: false, reason: "learning",
+                             numericValue: 8, normalizedValue: nil),
+            blinkEvent: nil, blinkRateAssessment: sourceTemplate.blinkRateAssessment
+        )
+        let bodyCalibratedEyesLearning = sourceEngine.ingest(
+            rich: unreferencedRate, contextKey: "camera-source", now: 2.01,
+            calibration: .valid, signalIDs: PostureObservationEngine.faceSignalIDs
+        ).signal(.estimatedBlinks)
+        expect(bodyCalibratedEyesLearning.availability == .needsCalibration &&
+               bodyCalibratedEyesLearning.assessment == nil &&
+               bodyCalibratedEyesLearning.numericValue == 8,
+               "une calibration corporelle valide ne doit pas fabriquer un repère de clignements")
         print("PostureObservationEngineHarness: OK")
     }
 }

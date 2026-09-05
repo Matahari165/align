@@ -26,14 +26,14 @@ require(!content.contains("blazePoseState.displayName"), "Aucun badge d’état 
 
 for id in [
     "apparentProximity", "torsoInclination", "raisedShoulders",
-    "shoulderSlope", "closedShoulders", "estimatedBlinks"
+    "shoulderSlope", "closedShoulders", "estimatedBlinks", "headTilt"
 ] {
     require(indicators.contains("indicator(for: .\(id))"), "Signal absent du rail complet : \(id)")
 }
 require(indicators.contains("threeColumnGrid") && indicators.contains("twoColumnGrid"),
-        "Le rail doit proposer les dispositions 3 × 2 et 2 × 3.")
+        "Le rail doit garder les grilles compactes à trois et deux colonnes.")
 require(indicators.contains("ViewThatFits"), "Le rail doit sélectionner une grille adaptée à la largeur.")
-require(indicators.contains("Indicateurs de posture, six"), "Le groupe VoiceOver doit annoncer six indicateurs.")
+require(indicators.contains("Indicateurs de posture, sept"), "Le groupe VoiceOver doit annoncer sept indicateurs.")
 require(indicators.contains("case .positive: AlignTheme.ivory") &&
         indicators.contains("case .negative: AlignTheme.copper"),
         "Le rail doit utiliser les rôles premium ivoire/cuivre issus du presenter fiabilisé.")
@@ -121,7 +121,7 @@ require(cameraCapture.contains("requestAccess(for: .video)") &&
         cameraCapture.contains("case .requestingPermission") &&
         cameraCapture.contains("configureAndStart(operationID:"),
         "Le cycle permission → démarrage doit rester explicite et testable.")
-for title in ["Proximité apparente", "Torse incliné", "Épaules relevées", "Clignements estimés — Expérimental"] {
+for title in ["Proximité apparente", "Torse incliné", "Épaules relevées", "Clignements estimés — Estimation"] {
     require(settings.contains(title), "Rappel absent des réglages : \(title)")
 }
 require(!settings.contains("Toggle(\"Inclinaison des épaules") &&

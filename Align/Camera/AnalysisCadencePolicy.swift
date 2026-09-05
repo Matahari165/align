@@ -272,11 +272,21 @@ nonisolated struct AnalysisPresentationState: Equatable, Sendable {
 
     var faceInterval: TimeInterval {
         if isBenchmarkRunning { return 0.2 }
-        return isForegroundVisible ? 0.1 : 0.5
+        // Les clignements sont un signal temporel : une cadence de 2 Hz
+        // saute facilement toute la phase fermée d'un œil. Le visage reste
+        // donc à 10 Hz même lorsque la fenêtre est en arrière-plan. Le rendu
+        // visuel, lui, reste désactivé par `publishesVisualUpdates`.
+        return 0.1
     }
 
     var upperBodyInterval: TimeInterval {
         isForegroundVisible ? 0.5 : 1.0
+    }
+
+    /// Eight seconds of calibration require at least twelve body samples.
+    /// Keep the acquisition cadence independent of foreground visibility.
+    func upperBodyInterval(isCalibrating: Bool) -> TimeInterval {
+        isCalibrating ? 0.5 : upperBodyInterval
     }
 
     var publishesVisualUpdates: Bool {

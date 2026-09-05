@@ -5,7 +5,7 @@ nonisolated struct PostureObservationEngine: Sendable {
         .proximity, .estimatedBlinks
     ]
     static let bodySignalIDs: Set<PostureObservationSignalID> = [
-        .torsoInclination, .raisedShoulders, .shoulderSlope, .closedShoulders
+        .torsoInclination, .raisedShoulders, .shoulderSlope, .closedShoulders, .headTilt
     ]
 
     static let proximityConfiguration = TemporalObservationConfiguration(
@@ -36,7 +36,8 @@ nonisolated struct PostureObservationEngine: Sendable {
             direction: .below, enterThreshold: 0.4, exitThreshold: 0.6,
             attentionPersistence: 0, maximumSampleGap: 0.25, ttl: 0.75
         ),
-        .closedShoulders: Self.richConfiguration
+        .closedShoulders: Self.richConfiguration,
+        .headTilt: Self.richConfiguration
     ]) {
         machines = [:]
         for (id, configuration) in configurations {
@@ -54,7 +55,7 @@ nonisolated struct PostureObservationEngine: Sendable {
     ) -> PostureObservationsSnapshot {
         let values = [evaluation.proximity, evaluation.torsoInclination,
                       evaluation.shouldersRaised, evaluation.shoulderSlope, evaluation.blinkRate,
-                      evaluation.shoulderOpening]
+                      evaluation.shoulderOpening, evaluation.headTilt]
         for value in values {
             let id: PostureObservationSignalID
             switch value.kind {
@@ -64,13 +65,13 @@ nonisolated struct PostureObservationEngine: Sendable {
             case .shoulderSlope: id = .shoulderSlope
             case .blinkRate: id = .estimatedBlinks
             case .shoulderOpening: id = .closedShoulders
+            case .headTilt: id = .headTilt
             }
             guard signalIDs.contains(id) else { continue }
             let usable = value.quality == .good && value.value?.isFinite == true &&
                 value.state == .available
-            let evidenceCalibration: PostureCalibrationState = if id == .estimatedBlinks,
-                                                                  value.normalizedValue?.isFinite == true {
-                .valid
+            let evidenceCalibration: PostureCalibrationState = if id == .estimatedBlinks {
+                value.normalizedValue?.isFinite == true ? .valid : .missing
             } else {
                 calibration
             }
@@ -81,19 +82,17 @@ nonisolated struct PostureObservationEngine: Sendable {
                 quality: usable ? .good : .limited,
                 calibration: evidenceCalibration, cameraContextID: contextKey,
                 framingSignature: contextKey,
-                assessmentHint: usable ? (
-                    value.kind == .blinkRate
-                        ? (value.direction == .below &&
-                           (value.belowDuration ?? 0) >= Self.blinkLowRateDuration
-                            ? .attention : .withinReference)
-                        : (value.isAttention ? .attention : .withinReference)
-                ) : nil,
+                assessmentHint: usable
+                    ? (value.isAttention ? .attention : .withinReference) : nil,
                 leftShoulderDelta: id == .raisedShoulders
                     ? evaluation.shouldersRaised.leftShoulderDelta : nil,
                 rightShoulderDelta: id == .raisedShoulders
                     ? evaluation.shouldersRaised.rightShoulderDelta : nil,
                 shoulderRaiseClassification: id == .raisedShoulders
-                    ? evaluation.shouldersRaised.shoulderRaiseClassification : nil
+                    ? evaluation.shouldersRaised.shoulderRaiseClassification : nil,
+                numericValue: value.numericValue,
+                referenceDelta: value.referenceDelta,
+                observationReason: value.reason.isEmpty ? nil : value.reason
             )
             _ = ingest(evidence, now: now)
         }
@@ -156,12 +155,13 @@ nonisolated struct PostureObservationEngine: Sendable {
         _ signalIDs: Set<PostureObservationSignalID>,
         at now: TimeInterval,
         generation: UInt64,
-        faceEvidenceObservedAt: TimeInterval? = nil
+        faceEvidenceObservedAt: TimeInterval? = nil,
+        reason: String = "Observation en attente"
     ) -> PostureObservationsSnapshot {
         guard generation == self.generation, now.isFinite else { return snapshot }
         for id in signalIDs {
             guard var machine = machines[id] else { continue }
-            let value = machine.reset(generation: generation, at: now)
+            let value = machine.reset(generation: generation, at: now, reason: reason)
             machines[id] = machine
             publish(value, at: now)
         }
@@ -180,7 +180,7 @@ nonisolated struct PostureObservationEngine: Sendable {
         switch id {
         case .proximity, .estimatedBlinks:
             proximityConfiguration.ttl
-        case .torsoInclination, .raisedShoulders, .shoulderSlope, .closedShoulders:
+        case .torsoInclination, .raisedShoulders, .shoulderSlope, .closedShoulders, .headTilt:
             richConfiguration.ttl
         }
     }

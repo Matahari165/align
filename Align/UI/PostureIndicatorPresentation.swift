@@ -8,12 +8,13 @@ nonisolated enum PostureIndicatorTone: Equatable, Sendable {
 
 nonisolated struct PostureIndicatorPresentation: Equatable, Sendable {
     static let orderedIDs: [PostureIndicatorID] = [
+        .shoulderSlope,
+        .raisedShoulders,
+        .headTilt,
+        .closedShoulders,
         .apparentProximity,
         .torsoInclination,
-        .raisedShoulders,
-        .shoulderSlope,
-        .estimatedBlinks,
-        .closedShoulders
+        .estimatedBlinks
     ]
 
     let title: String
@@ -23,17 +24,85 @@ nonisolated struct PostureIndicatorPresentation: Equatable, Sendable {
     let tone: PostureIndicatorTone
     let isExperimental: Bool
 
+    /// The rail uses the same semantic value for VoiceOver and for compact
+    /// layouts, but gives the primary state and its optional measurement
+    /// different visual weight.
+    var primaryValue: String {
+        guard let separator = value.range(of: " · ") else { return value }
+        return String(value[..<separator.lowerBound])
+    }
+
+    var secondaryValue: String? {
+        guard let separator = value.range(of: " · ") else { return nil }
+        let suffix = String(value[separator.upperBound...])
+        return suffix.isEmpty ? nil : suffix
+    }
+
     static func make(
         for result: PostureIndicatorResult,
         producedAt: TimeInterval,
         freshnessTTL: TimeInterval? = nil
+    ) -> Self {
+        let ttl = freshnessTTL ?? result.freshnessTTL
+        let fresh = ttl.isFinite && ttl > 0 && result.quality == .good && producedAt.isFinite &&
+            (result.observedAt.map { $0.isFinite && producedAt >= $0 && producedAt - $0 <= ttl } ?? false)
+        if result.id == .estimatedBlinks, result.state == .needsCalibration,
+           fresh, let rate = result.numericValue, rate.isFinite, rate >= 0 {
+            return presentation(title: result.id.title,
+                                value: String(format: "%.1f/min · repère en cours", rate),
+                                symbol: "eye", experimental: true)
+        }
+        if result.id == .estimatedBlinks,
+           result.state == .needsCalibration || result.state == .unavailable {
+            let recent = ttl.isFinite && ttl > 0 && producedAt.isFinite &&
+                (result.observedAt.map { $0.isFinite && producedAt >= $0 && producedAt - $0 <= ttl } ?? false)
+            let reason = result.reason ?? ""
+            let readableReason = reason.hasPrefix("Yeux observés :") ||
+                reason.hasPrefix("Suivi des yeux trop intermittent") ||
+                reason.hasPrefix("Suivi des yeux intermittent")
+            return presentation(title: result.id.title,
+                                value: recent && readableReason ? reason : "Yeux non mesurables",
+                                symbol: "eye", experimental: true)
+        }
+        let base = basePresentation(for: result, producedAt: producedAt, freshnessTTL: ttl)
+        guard fresh, result.hasValidBaseline,
+              result.state == .normal || result.state == .attention || result.state == .pending,
+              let numeric = numericText(for: result) else { return base }
+        return Self(title: base.title, value: "\(base.value) · \(numeric)",
+                    accessibilityValue: "\(base.accessibilityValue), \(numeric)",
+                    symbolName: base.symbolName, tone: base.tone,
+                    isExperimental: base.isExperimental)
+    }
+
+    private static func numericText(for result: PostureIndicatorResult) -> String? {
+        switch result.id {
+        case .headTilt, .shoulderSlope, .torsoInclination:
+            guard let delta = result.referenceDelta, delta.isFinite else { return nil }
+            return String(format: "%+.1f°", delta)
+        case .apparentProximity:
+            guard let value = result.numericValue, value.isFinite else { return nil }
+            return String(format: "×%.2f", value)
+        case .estimatedBlinks:
+            guard let value = result.numericValue, value.isFinite, value >= 0 else { return nil }
+            return String(format: "%.1f/min", value)
+        case .raisedShoulders, .closedShoulders:
+            return nil
+        }
+    }
+
+    private static func basePresentation(
+        for result: PostureIndicatorResult,
+        producedAt: TimeInterval,
+        freshnessTTL: TimeInterval?
     ) -> Self {
         let experimental = result.isExperimental
         let title = result.id.title
 
         switch result.state {
         case .needsCalibration:
-            return presentation(title: title, value: "À calibrer", symbol: "scope",
+            return presentation(title: title,
+                                value: "À calibrer",
+                                symbol: "scope",
                                 experimental: experimental)
         case .calibrating:
             return presentation(title: title, value: "Calibration…", symbol: "hourglass",
@@ -59,18 +128,10 @@ nonisolated struct PostureIndicatorPresentation: Equatable, Sendable {
                                 symbol: "circle.dotted", experimental: true,
                                 reliableObservation: true)
         case .attention where result.id == .estimatedBlinks:
-            return Self(title: title, value: "Sous ton repère",
-                        accessibilityValue: "Estimation expérimentale fiable, sous ton repère personnel",
+            return Self(title: title, value: "Pense à cligner",
+                        accessibilityValue: "Clignements observés : rappel de cligner naturellement",
                         symbolName: "exclamationmark.circle.fill", tone: .negative,
                         isExperimental: true)
-        case .attention where result.id == .closedShoulders:
-            return presentation(title: title, value: "Plus refermées",
-                                symbol: "arrow.left.and.right", experimental: true,
-                                reliableObservation: true)
-        case .attention where result.id == .shoulderSlope:
-            return presentation(title: title, value: "Plus inclinées",
-                                symbol: "line.diagonal", experimental: true,
-                                reliableObservation: true)
         case .normal:
             return Self(title: title, value: "Dans ton repère",
                         accessibilityValue: "Mesure fiable, dans ton repère",
@@ -79,7 +140,7 @@ nonisolated struct PostureIndicatorPresentation: Equatable, Sendable {
         case .attention:
             let value: String = switch result.id {
             case .apparentProximity: "Un peu près"
-            case .torsoInclination: "Torse incliné"
+            case .torsoInclination: "Buste penché sur le côté"
             case .raisedShoulders:
                 switch result.shoulderRaiseClassification {
                 case .some(.unilateralLeft): "Épaule gauche relevée"
@@ -87,16 +148,17 @@ nonisolated struct PostureIndicatorPresentation: Equatable, Sendable {
                 case .some(.bilateral): "Deux épaules relevées"
                 case .some(.none), .some(.unavailable), nil: "Épaules relevées"
                 }
-            case .shoulderSlope: "Épaules inclinées"
+            case .shoulderSlope: "Une épaule plus haute"
+            case .headTilt: "Tête penchée sur le côté"
             case .estimatedBlinks: "Sous ton repère"
-            case .closedShoulders: "Plus refermées"
+            case .closedShoulders: "À réajuster"
             }
             let evidence = result.id == .apparentProximity
                 ? "Proxy fiable relatif à ton repère, " : "Mesure fiable, "
             return Self(title: title, value: value,
                         accessibilityValue: "\(evidence)correction suggérée : \(value)",
                         symbolName: "exclamationmark.circle.fill", tone: .negative,
-                        isExperimental: false)
+                        isExperimental: experimental)
         case .needsCalibration, .calibrating, .unavailable:
             preconditionFailure("Ces états sont traités avant la preuve.")
         }
@@ -116,7 +178,7 @@ nonisolated struct PostureIndicatorPresentation: Equatable, Sendable {
 
     private static func unavailable(title: String, experimental: Bool) -> Self {
         let accessibility = experimental
-            ? "Expérimental, Aucune information fiable"
+            ? "Estimation, Aucune information fiable"
             : "Aucune information fiable"
         return Self(title: title, value: "—", accessibilityValue: accessibility,
              symbolName: "minus.circle", tone: .neutral, isExperimental: experimental)
@@ -129,7 +191,7 @@ nonisolated struct PostureIndicatorPresentation: Equatable, Sendable {
         experimental: Bool,
         reliableObservation: Bool = false
     ) -> Self {
-        let maturity = experimental ? "Expérimental, " : ""
+        let maturity = experimental ? "Estimation, " : ""
         let quality = reliableObservation ? "Observation fiable, " : ""
         let accessibility = maturity + quality + value
         return Self(title: title, value: value, accessibilityValue: accessibility,

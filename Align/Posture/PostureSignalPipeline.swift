@@ -9,6 +9,7 @@ nonisolated enum PostureIndicatorID: String, CaseIterable, Sendable {
     case shoulderSlope
     case estimatedBlinks
     case closedShoulders
+    case headTilt
 
     var title: String {
         switch self {
@@ -17,7 +18,8 @@ nonisolated enum PostureIndicatorID: String, CaseIterable, Sendable {
         case .raisedShoulders: "Épaules relevées"
         case .shoulderSlope: "Inclinaison des épaules"
         case .estimatedBlinks: "Clignements estimés"
-        case .closedShoulders: "Épaules refermées"
+        case .closedShoulders: "Tête–épaules"
+        case .headTilt: "Tête penchée"
         }
     }
 }
@@ -54,6 +56,9 @@ nonisolated struct PostureIndicatorResult: Equatable, Sendable {
     var leftShoulderDelta: Double? = nil
     var rightShoulderDelta: Double? = nil
     var shoulderRaiseClassification: PostureShoulderRaiseClassification? = nil
+    var numericValue: Double? = nil
+    var referenceDelta: Double? = nil
+    var reason: String? = nil
 
     static func unavailable(_ id: PostureIndicatorID) -> Self {
         .init(
@@ -63,8 +68,7 @@ nonisolated struct PostureIndicatorResult: Equatable, Sendable {
             observedAt: nil,
             quality: .unavailable,
             hasValidBaseline: false,
-            isExperimental: id == .estimatedBlinks || id == .shoulderSlope ||
-                id == .closedShoulders,
+            isExperimental: id == .estimatedBlinks || id == .closedShoulders,
             freshnessTTL: id == .apparentProximity || id == .estimatedBlinks
                 ? PostureObservationEngine.proximityConfiguration.ttl
                 : PostureObservationEngine.richConfiguration.ttl

@@ -35,16 +35,31 @@ private enum AnalysisCadenceHarness {
             isWindowMiniaturized: false,
             benchmarkExperiment: nil
         ))
-        expect(!cadence.shouldAnalyze(at: 10.59), "l’arrière-plan ne doit pas dépasser 2 Hz")
-        expect(cadence.shouldAnalyze(at: 10.6), "l’arrière-plan doit accepter 2 Hz")
+        expect(!cadence.shouldAnalyze(at: 10.19), "le visage en arrière-plan ne doit pas dépasser 10 Hz")
+        expect(cadence.shouldAnalyze(at: 10.2), "le visage en arrière-plan doit conserver 10 Hz")
         expect(!cadence.presentation.publishesVisualUpdates, "le rendu fréquent doit être coupé en arrière-plan")
+        var calibrationCadence = UpperBodyCadenceController()
+        var calibrationSamples = 0
+        for frame in 0..<240 {
+            let time = 20 + Double(frame) / 30
+            let interval = cadence.presentation.upperBodyInterval(isCalibrating: true)
+            if calibrationCadence.isDue(at: time, interval: interval) {
+                calibrationCadence.recordAttempt(at: time)
+                calibrationSamples += 1
+            }
+        }
+        expect(calibrationSamples >= 12,
+               "huit secondes de calibration doivent fournir douze corps même en arrière-plan")
+        expect(cadence.presentation.upperBodyInterval(isCalibrating: false) == 1,
+               "la fin de calibration doit restaurer la cadence corporelle économique")
+
 
         cadence.updatePresentation(AnalysisPresentationState(
             isApplicationActive: true,
             isWindowMiniaturized: true,
             benchmarkExperiment: nil
         ))
-        expect(approximately(cadence.presentation.faceInterval, 0.5), "une fenêtre réduite doit utiliser 2 Hz")
+        expect(approximately(cadence.presentation.faceInterval, 0.1), "une fenêtre réduite doit conserver 10 Hz visage")
 
         cadence.updatePresentation(AnalysisPresentationState(
             isApplicationActive: false,

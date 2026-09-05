@@ -51,6 +51,11 @@ nonisolated struct FaceTargetContinuityConfiguration: Equatable, Sendable {
     /// Marge minimale entre les deux meilleurs candidats ; sous cette marge,
     /// la cible devient indisponible au lieu de basculer vers un autre visage.
     var minimumWinnerMargin: CGFloat = 0.12
+    /// Après une perte longue, une nouvelle cible doit rester stable avant de
+    /// réarmer les métriques faciales.
+    var reacquisitionMinimumDuration: TimeInterval = 1.0
+    /// Nombre minimal de détections réelles dans cette fenêtre de stabilité.
+    var reacquisitionMinimumFrames: Int = 3
 
     var isValid: Bool {
         maximumGap.isFinite && maximumGap > 0 &&
@@ -62,7 +67,10 @@ nonisolated struct FaceTargetContinuityConfiguration: Equatable, Sendable {
             minimumAssociationScore.isFinite &&
             (0...1).contains(minimumAssociationScore) &&
             minimumWinnerMargin.isFinite &&
-            (0...1).contains(minimumWinnerMargin)
+            (0...1).contains(minimumWinnerMargin) &&
+            reacquisitionMinimumDuration.isFinite &&
+            reacquisitionMinimumDuration > 0 &&
+            reacquisitionMinimumFrames >= 2
     }
 
     static let `default` = Self()
@@ -133,27 +141,54 @@ nonisolated struct FaceTargetContinuity: Equatable, Sendable {
     private(set) var lastTimestamp: TimeInterval? = nil
     private(set) var lastDecision: FaceTargetDecision = .unavailable(.noFace)
     private(set) var requiresExplicitRearm = false
+    /// Epoch de continuité à copier avec une observation faciale. Une perte
+    /// brève conserve l'epoch ; un reset explicite ou une nouvelle cible
+    /// validée en crée un nouveau afin d'isoler les preuves incompatibles.
+    private(set) var targetEpoch: UInt64 = 0
+    /// Progression observable de la réacquisition stable pour les diagnostics.
+    private(set) var reacquisitionFrameCount = 0
+    private(set) var reacquisitionStartedAt: TimeInterval? = nil
+    private(set) var reacquisitionLastTimestamp: TimeInterval? = nil
+    private var reacquisitionCandidate: FaceBoxCandidate?
+    private var requiresStableReacquisition = false
+
+    var reacquisitionObservedDuration: TimeInterval? {
+        guard let startedAt = reacquisitionStartedAt,
+              let lastTimestamp = reacquisitionLastTimestamp else { return nil }
+        let duration = lastTimestamp - startedAt
+        return duration.isFinite && duration >= 0 ? duration : nil
+    }
+
+    var isReacquisitionPending: Bool {
+        requiresExplicitRearm && reacquisitionCandidate != nil
+    }
 
     init(configuration: FaceTargetContinuityConfiguration = .default) {
         self.configuration = configuration
     }
 
     mutating func reset() {
+        targetEpoch &+= 1
         target = nil
         lastKnownTarget = nil
         lastTimestamp = nil
         lastDecision = .unavailable(.noFace)
         requiresExplicitRearm = false
+        requiresStableReacquisition = false
+        clearReacquisition()
     }
 
     /// Autorise explicitement l'acquisition d'une nouvelle personne après une
     /// perte ou une ambiguïté. Aucune reconnaissance biométrique n'est tentée.
     mutating func rearm() {
+        targetEpoch &+= 1
         target = nil
         lastKnownTarget = nil
         lastTimestamp = nil
         lastDecision = .unavailable(.noTarget)
         requiresExplicitRearm = false
+        requiresStableReacquisition = false
+        clearReacquisition()
     }
 
     /// Sélectionne une cible à partir d'une détection complète.
@@ -169,7 +204,7 @@ nonisolated struct FaceTargetContinuity: Equatable, Sendable {
             return publish(.unavailable(.invalidConfiguration), timestamp: timestamp)
         }
         if requiresExplicitRearm {
-            return attemptBoundedReacquisition(candidates, at: timestamp)
+            return attemptReacquisition(candidates, at: timestamp)
         }
         switch acceptTimestamp(timestamp) {
         case .rejected:
@@ -278,7 +313,8 @@ nonisolated struct FaceTargetContinuity: Equatable, Sendable {
     }
 
     /// Rejette explicitement une frame de tracking absente ou techniquement
-    /// invalide. La prochaine détection complète repartira sans ancienne cible.
+    /// invalide. La prochaine détection complète devra réacquérir une cible
+    /// stable avant de republier des métriques faciales.
     mutating func ingestTrackingMiss(at timestamp: TimeInterval) -> FaceTargetDecision {
         guard configuration.isValid else {
             return publish(.unavailable(.invalidConfiguration), timestamp: timestamp)
@@ -381,9 +417,12 @@ nonisolated struct FaceTargetContinuity: Equatable, Sendable {
         match: FaceTargetMatch?,
         timestamp: TimeInterval
     ) -> FaceTargetDecision {
+        if targetEpoch == 0 { targetEpoch = 1 }
         target = candidate
         lastKnownTarget = nil
         requiresExplicitRearm = false
+        requiresStableReacquisition = false
+        clearReacquisition()
         let decision = FaceTargetDecision.selected(candidate, match: match)
         lastDecision = decision
         lastTimestamp = timestamp
@@ -401,7 +440,16 @@ nonisolated struct FaceTargetContinuity: Equatable, Sendable {
             if let target { lastKnownTarget = target }
             target = nil
         }
-        if requireRearm { requiresExplicitRearm = true }
+        if requireRearm {
+            requiresExplicitRearm = true
+            if case .ambiguous = decision {
+                requiresStableReacquisition = true
+            } else if case .unavailable(let reason) = decision,
+                      reason == .trackingGap || reason == .trackingJump {
+                requiresStableReacquisition = true
+            }
+            clearReacquisition()
+        }
         if let timestamp { lastTimestamp = timestamp }
         lastDecision = decision
         return decision
@@ -409,29 +457,94 @@ nonisolated struct FaceTargetContinuity: Equatable, Sendable {
 
     /// Tolère une perte très brève sans autoriser une nouvelle personne : un
     /// seul candidat doit revenir avant `maximumGap` et correspondre encore à
-    /// la dernière boîte connue. Après ce délai, seul `rearm()` peut repartir.
-    private mutating func attemptBoundedReacquisition(
+    /// la dernière boîte connue. Après ce délai, une cible unique doit rester
+    /// stable pendant une seconde et plusieurs détections réelles.
+    private mutating func attemptReacquisition(
         _ candidates: [FaceBoxCandidate],
         at timestamp: TimeInterval
     ) -> FaceTargetDecision {
         guard timestamp.isFinite,
               let lostAt = lastTimestamp,
               timestamp > lostAt else {
-            return publish(.unavailable(.rearmRequired), timestamp: nil)
+            return publishReacquisition(.unavailable(.rearmRequired), timestamp: timestamp)
         }
-        guard timestamp - lostAt <= configuration.maximumGap,
-              let previous = lastKnownTarget,
-              candidates.count == 1,
-              let candidate = candidates.first,
-              let match = Self.match(
-                from: previous,
-                to: candidate,
-                configuration: configuration
-              ),
-              match.isFinite else {
-            return publish(.unavailable(.rearmRequired), timestamp: nil)
+
+        guard candidates.count == 1 else {
+            requiresStableReacquisition = true
+            clearReacquisition()
+            let decision: FaceTargetDecision = candidates.isEmpty
+                ? .unavailable(.rearmRequired) : .ambiguous
+            return publishReacquisition(decision, timestamp: timestamp)
         }
-        return select(candidate, match: match, timestamp: timestamp)
+        guard let candidate = candidates.first,
+              FaceBoxCandidate.isValid(candidate.boundingBox) else {
+            requiresStableReacquisition = true
+            clearReacquisition()
+            return publishReacquisition(.unavailable(.invalidCandidate), timestamp: timestamp)
+        }
+
+        let gap = timestamp - lostAt
+        if !requiresStableReacquisition,
+           gap <= configuration.maximumGap,
+           let previous = lastKnownTarget,
+           let match = Self.match(from: previous, to: candidate,
+                                  configuration: configuration), match.isFinite {
+            // Perte brève : la cible est encore associable à sa boîte connue.
+            return select(candidate, match: match, timestamp: timestamp)
+        }
+
+        if gap > configuration.maximumGap {
+            requiresStableReacquisition = true
+        }
+        if let previous = reacquisitionCandidate {
+            guard timestamp - (reacquisitionLastTimestamp ?? timestamp) <=
+                    configuration.maximumGap,
+                  let match = Self.match(from: previous, to: candidate,
+                                         configuration: configuration),
+                  match.isFinite else {
+                // Un saut ou un trou remet la fenêtre de stabilité à zéro.
+                requiresStableReacquisition = true
+                clearReacquisition()
+                return publishReacquisition(.unavailable(.trackingJump), timestamp: timestamp)
+            }
+            reacquisitionCandidate = candidate
+            reacquisitionFrameCount += 1
+        } else {
+            reacquisitionCandidate = candidate
+            reacquisitionStartedAt = timestamp
+            reacquisitionFrameCount = 1
+        }
+        reacquisitionLastTimestamp = timestamp
+        lastTimestamp = timestamp
+        if let startedAt = reacquisitionStartedAt,
+           timestamp - startedAt >= configuration.reacquisitionMinimumDuration,
+           reacquisitionFrameCount >= configuration.reacquisitionMinimumFrames {
+            let match = lastKnownTarget.flatMap {
+                Self.match(from: $0, to: candidate, configuration: configuration)
+            }
+            if requiresStableReacquisition {
+                if targetEpoch == 0 { targetEpoch = 1 } else { targetEpoch &+= 1 }
+            }
+            return select(candidate, match: match, timestamp: timestamp)
+        }
+        return publishReacquisition(.unavailable(.rearmRequired), timestamp: timestamp)
+    }
+
+    private mutating func publishReacquisition(
+        _ decision: FaceTargetDecision,
+        timestamp: TimeInterval
+    ) -> FaceTargetDecision {
+        lastTimestamp = timestamp
+        lastDecision = decision
+        requiresExplicitRearm = true
+        return decision
+    }
+
+    private mutating func clearReacquisition() {
+        reacquisitionCandidate = nil
+        reacquisitionStartedAt = nil
+        reacquisitionLastTimestamp = nil
+        reacquisitionFrameCount = 0
     }
 
     private static func intersectionOverUnion(_ lhs: CGRect, _ rhs: CGRect) -> CGFloat {

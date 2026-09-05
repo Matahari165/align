@@ -9,6 +9,9 @@
 - Les modes de posture sont `Automatique`, `Assis` et `Debout`; `Automatique` reste le mode normal.
 - Le cadrage de référence est la position de travail habituelle de Jeremy, écran incliné pour le confort des yeux. Le suivi des épaules doit être évalué dans ce cadrage rapproché, sans imposer de reculer ou de rendre les hanches visibles.
 - Les calibrations et la disponibilité sont propres à chaque mesure : des hanches hors champ ne doivent pas empêcher les mesures d'épaules. Masquer l'aperçu en arrière-plan ne signifie pas que la détection est perdue.
+- Le suivi visuel actuel est le socle accepté. La priorité est d'exploiter ces repères : écarts au repère personnel, affichage compréhensible, évolution et rappels fréquents pour les écarts persistants.
+- Jeremy préfère des rappels fréquents, répétables tant que l'écart persiste, avec les pauses existantes. Une observation incertaine ou périmée ne doit jamais déclencher un rappel de correction.
+- Le rapport tête–épaules ne distingue pas à lui seul tête avancée et épaules refermées : garder une seule indication et un conseil commun, sans présenter deux diagnostics indépendants.
 
 ## Machine et contraintes techniques
 

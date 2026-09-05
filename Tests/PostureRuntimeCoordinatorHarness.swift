@@ -249,7 +249,7 @@ private enum PostureRuntimeCoordinatorHarness {
             generation: 12, sampleID: 1, capturedAt: 20, facePointCount: 50,
             contextKey: context.key, signal: faceAfterLossSignal()
         )
-        guard let faceRuntime = isolatedSources.consumeFace(isolatedFace, now: 20.01) else {
+        guard isolatedSources.consumeFace(isolatedFace, now: 20.01) != nil else {
             preconditionFailure("le visage source-specific doit être accepté")
         }
         let isolatedBody = UpperBodyResult(
@@ -265,7 +265,14 @@ private enum PostureRuntimeCoordinatorHarness {
         ) != nil else {
             preconditionFailure("le corps source-specific doit être accepté")
         }
-        let faceBeforeBodyLoss = faceRuntime.snapshot.signal(.proximity)
+        let resetTarget = isolatedSources.resetFaceTarget(at: 20.15)
+        precondition(resetTarget.signal(.proximity).availability == .insufficient &&
+                     resetTarget.signal(.estimatedBlinks).availability == .insufficient &&
+                     resetTarget.signal(.headTilt).availability == .insufficient &&
+                     resetTarget.signal(.shoulderSlope).availability == .available,
+                     "une nouvelle cible visage invalide ses signaux et conserve les épaules")
+        let faceBeforeBodyLoss = resetTarget.signal(.proximity)
+        let blinkBeforeBodyLoss = resetTarget.signal(.estimatedBlinks)
         guard let bodyLoss = isolatedSources.invalidateBody(at: 20.2) else {
             preconditionFailure("l'invalidation corps doit publier")
         }
@@ -274,9 +281,8 @@ private enum PostureRuntimeCoordinatorHarness {
         precondition(bodyLoss.snapshot.signal(.proximity).observedAt == faceBeforeBodyLoss.observedAt,
                      "noPerson corps doit préserver la proximité visage")
         precondition(bodyLoss.snapshot.signal(.estimatedBlinks).observedAt ==
-                        faceRuntime.snapshot.signal(.estimatedBlinks).observedAt,
+                        blinkBeforeBodyLoss.observedAt,
                      "noPerson corps doit préserver les clignements")
-
         // A no-person/error invalidation must be a hard barrier: a subsequent
         // 10 Hz face tick cannot resurrect the previous body's torso/shoulder
         // evidence or advance an alertable body signal.

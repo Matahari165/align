@@ -41,7 +41,8 @@ nonisolated struct TemporalObservationMachine: Sendable {
         snapshot = .unavailable(signalID, generation: 0, at: 0, reason: "Non activé")
     }
 
-    mutating func reset(generation: UInt64, at now: TimeInterval) -> PostureSignalSnapshot {
+    mutating func reset(generation: UInt64, at now: TimeInterval,
+                        reason: String = "Observation en attente") -> PostureSignalSnapshot {
         self.generation = generation
         lastSampleID = 0
         lastCapturedAt = nil
@@ -49,7 +50,7 @@ nonisolated struct TemporalObservationMachine: Sendable {
         isAttention = false
         activeEpisodeID = nil
         snapshot = .unavailable(signalID, generation: generation, at: now,
-                                reason: "Observation en attente")
+                                reason: reason)
         return snapshot
     }
 
@@ -130,7 +131,9 @@ nonisolated struct TemporalObservationMachine: Sendable {
             reason: nil,
             leftShoulderDelta: evidence.leftShoulderDelta,
             rightShoulderDelta: evidence.rightShoulderDelta,
-            shoulderRaiseClassification: evidence.shoulderRaiseClassification
+            shoulderRaiseClassification: evidence.shoulderRaiseClassification,
+            numericValue: evidence.numericValue.flatMap { $0.isFinite ? $0 : nil },
+            referenceDelta: evidence.referenceDelta.flatMap { $0.isFinite ? $0 : nil }
         )
         return snapshot
     }
@@ -154,7 +157,23 @@ nonisolated struct TemporalObservationMachine: Sendable {
     ) -> PostureSignalSnapshot {
         clearTransient()
         snapshot = .unavailable(signalID, generation: evidence.generation, at: now,
-                                availability: availability, reason: reason)
+                                availability: availability,
+                                reason: evidence.observationReason ?? reason)
+        // Le rail clignement peut être en collecte sans encore avoir de
+        // référence personnelle. Conserver le timestamp, même avec une
+        // qualité limitée, permet à l'UI d'expirer une progression réelle au
+        // lieu de laisser indéfiniment « Observation… » à l'écran.
+        if signalID == .estimatedBlinks,
+           (availability == .needsCalibration || availability == .insufficient) {
+            snapshot = .init(signalID: signalID, generation: evidence.generation,
+                             availability: availability, assessment: nil,
+                             quality: evidence.quality,
+                             observedAt: evidence.capturedAt, producedAt: now,
+                             episodeID: nil, reason: evidence.observationReason ?? reason,
+                             numericValue: evidence.quality == .good
+                                ? evidence.numericValue.flatMap { $0.isFinite ? $0 : nil }
+                                : nil)
+        }
         return snapshot
     }
 

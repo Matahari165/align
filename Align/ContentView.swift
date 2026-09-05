@@ -31,8 +31,9 @@ struct ContentView: View {
                                 .font(.caption.weight(.bold))
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 5)
-                                .background(.black.opacity(0.72), in: Capsule())
-                                .foregroundStyle(.white)
+                                .background(AlignTheme.canvas.opacity(0.94), in: Capsule())
+                                .overlay(Capsule().stroke(AlignTheme.hairline, lineWidth: 1))
+                                .foregroundStyle(AlignTheme.accentSoft)
                             Spacer()
                         }
                         Spacer()
@@ -41,8 +42,9 @@ struct ContentView: View {
                                 .font(.caption.monospaced())
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 4)
-                                .background(.black.opacity(0.68), in: Capsule())
-                                .foregroundStyle(.white)
+                                .background(AlignTheme.elevated.opacity(0.92), in: Capsule())
+                                .overlay(Capsule().stroke(AlignTheme.hairline, lineWidth: 1))
+                                .foregroundStyle(AlignTheme.ivory)
                             Spacer()
                         }
                     }
@@ -55,10 +57,10 @@ struct ContentView: View {
 
                 if camera.state != .running {
                     Rectangle()
-                        .fill(.black.opacity(0.78))
+                        .fill(AlignTheme.canvas.opacity(0.92))
                     Image(systemName: CameraStatusPresentation.make(for: camera).symbolName)
                         .font(.system(size: 30))
-                        .foregroundStyle(.white.opacity(0.86))
+                        .foregroundStyle(AlignTheme.accentSoft.opacity(0.86))
                         .accessibilityHidden(true)
                 }
 
@@ -139,16 +141,23 @@ struct ContentView: View {
     private var statusBand: some View {
         let presentation = activePresentation
         return HStack(spacing: 12) {
-            Image(systemName: presentation.symbolName)
-                .font(.title3)
-                .accessibilityHidden(true)
+            ZStack {
+                Circle()
+                    .fill(AlignTheme.accent.opacity(0.14))
+                Image(systemName: presentation.symbolName)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(AlignTheme.accent)
+            }
+            .frame(width: 27, height: 27)
+            .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(presentation.title)
                     .font(.headline)
+                    .foregroundStyle(AlignTheme.ivory)
                 Text(presentation.explanation)
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(AlignTheme.quiet)
                     .lineLimit(2)
             }
 
@@ -163,6 +172,7 @@ struct ContentView: View {
                 .fill(AlignTheme.hairline)
                 .frame(height: 1)
         }
+        .controlSize(.small)
     }
 
     @ViewBuilder

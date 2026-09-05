@@ -8,6 +8,8 @@ struct SettingsView: View {
     let onClose: () -> Void
     @FocusState private var closeFocused: Bool
     @State private var confirmsErase = false
+    @State private var testingNotification = false
+    @State private var notificationTestMessage: String?
 
     private let signals = PostureObservationSignalID.alertableCases
 
@@ -25,7 +27,7 @@ struct SettingsView: View {
                 Text(sensitivityDescription(appModel.recommendationSensitivity))
                     .font(.caption).foregroundStyle(.secondary)
                 if appModel.recommendationSensitivity == .sensitive {
-                    Text("Ce mode peut rappeler plus souvent afin de limiter les variations manquées.")
+                    Text("Les rappels peuvent revenir fréquemment pendant un même épisode, uniquement quand le signal est fiable, disponible et récent.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -40,6 +42,25 @@ struct SettingsView: View {
                 switch camera.proximityNotificationAuthorization {
                 case .authorized:
                     Label("Notifications activées", systemImage: "bell.badge")
+                    Text("Pour garder les rappels à l’écran jusqu’à leur fermeture, choisis le style Persistant dans macOS. Le son se règle au même endroit.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Link("Son et affichage dans macOS…", destination: notificationSettingsURL)
+                    Button("Tester un rappel") {
+                        testingNotification = true
+                        notificationTestMessage = nil
+                        Task { @MainActor in
+                            let sent = await appModel.sendTestNotification()
+                            testingNotification = false
+                            notificationTestMessage = sent
+                                ? "Rappel de test envoyé."
+                                : "Le rappel de test n’a pas pu être envoyé."
+                        }
+                    }
+                    .disabled(testingNotification)
+                    if let notificationTestMessage {
+                        Text(notificationTestMessage)
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 case .denied:
                     Label("Notifications désactivées dans macOS", systemImage: "bell.slash")
                     Link("Ouvrir Réglages Système…", destination: notificationSettingsURL)
@@ -146,9 +167,10 @@ struct SettingsView: View {
         case .proximity: "Proximité apparente"
         case .torsoInclination: "Torse incliné"
         case .raisedShoulders: "Épaules relevées"
-        case .shoulderSlope: "Inclinaison des épaules — Observation sans rappel"
-        case .estimatedBlinks: "Clignements estimés — Expérimental"
-        case .closedShoulders: "Épaules refermées — Expérimental, sans rappel"
+        case .shoulderSlope: "Épaules inclinées"
+        case .estimatedBlinks: "Clignements estimés — Estimation"
+        case .closedShoulders: "Tête–épaules — Estimation"
+        case .headTilt: "Tête inclinée"
         }
     }
 
@@ -182,7 +204,8 @@ struct SettingsView: View {
         case .raisedShoulders: "Épaules"
         case .shoulderSlope: "Inclinaison des épaules"
         case .estimatedBlinks: "Clignements estimés"
-        case .closedShoulders: "Épaules refermées"
+        case .closedShoulders: "Tête–épaules"
+        case .headTilt: "Tête inclinée"
         }
     }
 

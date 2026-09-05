@@ -24,11 +24,12 @@ private enum PostureRichSignalHarness {
         faceScaleMultiplier: Double = 1,
         eyeOpeningRatio: Double = 0.30,
         yawProxy: Double? = 0,
-        eyeLineRollDegrees: Double? = 0
+        eyeLineRollDegrees: Double? = 0,
+        facePointCount: Int = 50
     ) -> PostureFaceObservation {
         PostureFaceObservation(
             generation: generation, sampleID: sampleID, capturedAt: timestamp,
-            facePointCount: 50, contextKey: contextKey,
+            facePointCount: facePointCount, contextKey: contextKey,
             signal: FaceGeometrySignal(
                 eyeLineRollDegrees: eyeLineRollDegrees, yawProxy: yawProxy, pitchProxy: 0,
                 interocularDistance: 0.10 * faceScaleMultiplier,
@@ -36,6 +37,63 @@ private enum PostureRichSignalHarness {
                 leftEyeOpeningRatio: eyeOpeningRatio, rightEyeOpeningRatio: eyeOpeningRatio,
                 innerBrowDistanceRatio: 0.40, faceCenter: CGPoint(x: 0.5, y: 0.3)
             )
+        )
+    }
+
+    static func rotatedFaceFromPolylines(
+        generation: UInt64 = 1,
+        sampleID: UInt64 = 1,
+        timestamp: TimeInterval = 0,
+        context: PostureFramingContext,
+        cameraRollDegrees: CGFloat
+    ) -> PostureFaceObservation {
+        let center = CGPoint(x: 0.5, y: 0.38)
+        let leftEye = [
+            CGPoint(x: 0.422, y: 0.300), CGPoint(x: 0.458, y: 0.300),
+            CGPoint(x: 0.458, y: 0.312), CGPoint(x: 0.422, y: 0.312)
+        ]
+        let rightEye = [
+            CGPoint(x: 0.542, y: 0.300), CGPoint(x: 0.578, y: 0.300),
+            CGPoint(x: 0.578, y: 0.312), CGPoint(x: 0.542, y: 0.312)
+        ]
+        let contour = (0..<40).map { index in
+            let angle = 2 * CGFloat.pi * CGFloat(index) / 40
+            return CGPoint(x: center.x + 0.15 * cos(angle),
+                           y: center.y + 0.22 * sin(angle))
+        }
+        let basePolylines = [
+            PosePolyline(name: "leftEye", locations: leftEye, source: .face, isClosed: true),
+            PosePolyline(name: "rightEye", locations: rightEye, source: .face, isClosed: true),
+            PosePolyline(name: "nose", locations: [CGPoint(x: 0.5, y: 0.38)], source: .face, isClosed: false),
+            PosePolyline(name: "medianLine", locations: [CGPoint(x: 0.5, y: 0.22), CGPoint(x: 0.5, y: 0.50)], source: .face, isClosed: false),
+            PosePolyline(name: "leftEyebrow", locations: [CGPoint(x: 0.42, y: 0.27), CGPoint(x: 0.46, y: 0.27)], source: .face, isClosed: false),
+            PosePolyline(name: "rightEyebrow", locations: [CGPoint(x: 0.54, y: 0.27), CGPoint(x: 0.58, y: 0.27)], source: .face, isClosed: false),
+            PosePolyline(name: "faceContour", locations: contour, source: .face, isClosed: true)
+        ]
+        let radians = Double(cameraRollDegrees) * .pi / 180
+        let cosine = cos(radians)
+        let sine = sin(radians)
+        func rotate(_ point: CGPoint) -> CGPoint {
+            let pixelX = Double(point.x) * Double(context.pixelWidth)
+            let pixelY = Double(point.y) * Double(context.pixelHeight)
+            let centerX = Double(center.x) * Double(context.pixelWidth)
+            let centerY = Double(center.y) * Double(context.pixelHeight)
+            let dx = pixelX - centerX
+            let dy = pixelY - centerY
+            return CGPoint(
+                x: (dx * cosine - dy * sine + centerX) / Double(context.pixelWidth),
+                y: (dx * sine + dy * cosine + centerY) / Double(context.pixelHeight)
+            )
+        }
+        let polylines = basePolylines.map { polyline in
+            PosePolyline(name: polyline.name, locations: polyline.locations.map(rotate),
+                         source: polyline.source, isClosed: polyline.isClosed)
+        }
+        let signal = FaceGeometrySignal.from(polylines: polylines)!
+        return PostureFaceObservation(
+            generation: generation, sampleID: sampleID, capturedAt: timestamp,
+            facePointCount: polylines.reduce(0) { $0 + $1.locations.count },
+            contextKey: context.key, signal: signal
         )
     }
 
@@ -48,20 +106,26 @@ private enum PostureRichSignalHarness {
         leftShoulderDeltaY: CGFloat? = nil,
         rightShoulderDeltaY: CGFloat? = nil,
         includeHips: Bool = true,
+        includeNeck: Bool = true,
         limitedShoulders: Bool = false,
-        cameraRollDegrees: CGFloat = 0
+        cameraRollDegrees: CGFloat = 0,
+        cameraRollPixelWidth: CGFloat = 1600,
+        cameraRollPixelHeight: CGFloat = 900
     ) -> UpperBodyResult {
         let descriptor = UpperBodyEngineDescriptor(
             id: "harness", displayName: "Harness", version: "1", runtime: "test"
         )
         var points = [
             point(.nose, 0.50, 0.20), point(.leftEar, 0.44, 0.22),
-            point(.rightEar, 0.56, 0.22), point(.neck, 0.50, 0.36),
+            point(.rightEar, 0.56, 0.22),
             point(.leftShoulder, 0.35, 0.50 + (leftShoulderDeltaY ?? 0),
                   quality: limitedShoulders ? .limited : .good),
             point(.rightShoulder, 0.65, 0.50 + (rightShoulderDeltaY ?? shoulderDeltaY),
                   quality: limitedShoulders ? .limited : .good)
         ]
+        if includeNeck {
+            points.append(point(.neck, 0.50, 0.36))
+        }
         if includeHips {
             points.append(point(.leftHip, 0.40 + hipOffset, 0.80))
             points.append(point(.rightHip, 0.60 + hipOffset, 0.80))
@@ -72,15 +136,15 @@ private enum PostureRichSignalHarness {
             let sine = sin(radians)
             points = points.map { bodyPoint in
                 let source = bodyPoint.location
-                let pixelX = source.x * 1600
-                let pixelY = source.y * 900
-                let dx = pixelX - 800
-                let dy = pixelY - 450
-                let rotatedX = dx * cosine - dy * sine + 800
-                let rotatedY = dx * sine + dy * cosine + 450
+                let pixelX = source.x * cameraRollPixelWidth
+                let pixelY = source.y * cameraRollPixelHeight
+                let dx = pixelX - cameraRollPixelWidth / 2
+                let dy = pixelY - cameraRollPixelHeight / 2
+                let rotatedX = dx * cosine - dy * sine + cameraRollPixelWidth / 2
+                let rotatedY = dx * sine + dy * cosine + cameraRollPixelHeight / 2
                 return UpperBodyPoint(
                     id: bodyPoint.id,
-                    location: CGPoint(x: rotatedX / 1600, y: rotatedY / 900),
+                    location: CGPoint(x: rotatedX / cameraRollPixelWidth, y: rotatedY / cameraRollPixelHeight),
                     confidence: bodyPoint.confidence,
                     quality: bodyPoint.quality,
                     provenance: bodyPoint.provenance
@@ -134,6 +198,92 @@ private enum PostureRichSignalHarness {
                "le torse complet doit produire un angle")
         expect(neutral.shoulderOpeningRatio != nil && neutral.leftShoulderElevation != nil,
                "les proxys d'ouverture et d'élévation doivent être finis")
+        let noNeck = PostureRichGeometryEvaluator.make(
+            result: result(includeNeck: false), face: neutralFace, context: context
+        )
+        expect(noNeck.openingState == .partial &&
+               noNeck.openingRatioState == .available &&
+               noNeck.shoulderOpeningRatio != nil,
+               "le ratio épaules/visage reste disponible sans cou, tandis que l'angle reste partiel")
+        var noNeckSamples: [PostureRichGeometryMetrics] = []
+        for index in 0..<12 {
+            noNeckSamples.append(PostureRichGeometryEvaluator.make(
+                result: result(sampleID: UInt64(1200 + index),
+                               timestamp: Double(index) * 0.1,
+                               includeNeck: false),
+                face: face(sampleID: UInt64(1200 + index),
+                           timestamp: Double(index) * 0.1,
+                           contextKey: context.key),
+                context: context
+            ))
+        }
+        let noNeckBaseline = PostureRichBaselineBuilder.make(
+            samples: noNeckSamples, generation: 1, contextKey: context.key
+        )
+        expect(noNeckBaseline?.shoulderOpeningRatio != nil &&
+               noNeckBaseline?.familySampleCounts?.shoulderOpening == 12,
+               "le ratio épaules/visage doit pouvoir être calibré sans cou")
+        expect(neutral.headTiltState == .available &&
+               abs(neutral.headTiltDegrees ?? 99) < 0.001,
+               "la tête neutre doit être mesurée relativement à la ligne des épaules")
+        let lowPointHeadTilt = PostureRichGeometryEvaluator.make(
+            result: result(),
+            face: face(contextKey: context.key, facePointCount: 12),
+            context: context
+        )
+        expect(lowPointHeadTilt.headTiltDegrees != nil &&
+               lowPointHeadTilt.headTiltState != .available,
+               "un visage trop pauvre ne doit pas rendre la géométrie tête-épaules disponible")
+        let yawOutOfDomainHeadTilt = PostureRichGeometryEvaluator.make(
+            result: result(),
+            face: face(contextKey: context.key, yawProxy: 0.5),
+            context: context
+        )
+        expect(yawOutOfDomainHeadTilt.headTiltDegrees != nil &&
+               yawOutOfDomainHeadTilt.headTiltState != .available,
+               "un yaw hors domaine ne doit pas alimenter headTilt")
+        let tiltedFaceGeometry = PostureRichGeometryEvaluator.make(
+            result: result(),
+            face: rotatedFaceFromPolylines(context: context, cameraRollDegrees: 8),
+            context: context
+        )
+        expect(tiltedFaceGeometry.headTiltState == .available &&
+               abs((tiltedFaceGeometry.headTiltDegrees ?? 99) - 8) < 0.5,
+               "une rotation de tête seule doit produire environ huit degrés relatifs")
+        let rolledTogetherContext = PostureFramingContext(
+            pixelWidth: 1280, pixelHeight: 720, revision: "camera-roll-shared"
+        )!
+        let rolledTogether = PostureRichGeometryEvaluator.make(
+            result: result(cameraRollDegrees: 8, cameraRollPixelWidth: 1280,
+                           cameraRollPixelHeight: 720),
+            face: rotatedFaceFromPolylines(context: rolledTogetherContext,
+                                           cameraRollDegrees: 8),
+            context: rolledTogetherContext
+        )
+        expect(abs(rolledTogether.headTiltDegrees ?? 99) < 1.0 &&
+               abs(rolledTogether.shoulderSlopeDegrees ?? 99) > 7,
+               "un roulis commun 1280x720 doit s'annuler après conversion pixel des yeux")
+        let noHipHead = PostureRichGeometryEvaluator.make(
+            result: result(includeHips: false), face: neutralFace, context: context
+        )
+        expect(noHipHead.headTiltState == .available && noHipHead.headTiltDegrees != nil,
+               "l'inclinaison tête-épaules ne doit pas exiger les hanches")
+        let staleFaceGeometry = PostureRichGeometryEvaluator.make(
+            result: result(timestamp: 0),
+            face: face(timestamp: 1.0, contextKey: context.key),
+            context: context
+        )
+        expect(staleFaceGeometry.shoulderOpeningRatio == nil &&
+               staleFaceGeometry.headTiltState != .available,
+               "un visage trop éloigné temporellement ne doit pas devenir une référence corps")
+        let otherGenerationFaceGeometry = PostureRichGeometryEvaluator.make(
+            result: result(generation: 1, timestamp: 0),
+            face: face(generation: 2, timestamp: 0, contextKey: context.key),
+            context: context
+        )
+        expect(otherGenerationFaceGeometry.shoulderOpeningRatio == nil &&
+               otherGenerationFaceGeometry.headTiltState != .available,
+               "un visage d'une autre génération ne doit pas être fusionné au corps")
         let jitterSamples = (0..<12).map { index in
             let jitterContext = index.isMultiple(of: 2) ? roiJitterA : roiJitterB
             return PostureRichGeometryEvaluator.make(
@@ -296,7 +446,9 @@ private enum PostureRichSignalHarness {
                 shouldersState: neutral.shouldersState,
                 torsoState: neutral.torsoState,
                 openingState: neutral.openingState,
-                reason: neutral.reason
+                reason: neutral.reason,
+                headTiltDegrees: neutral.headTiltDegrees,
+                headTiltState: neutral.headTiltState
             )
         }
         let baseline = PostureRichBaselineBuilder.make(
@@ -304,6 +456,48 @@ private enum PostureRichSignalHarness {
         )
         expect(baseline?.sampleCount == 12 && baseline?.proximityScale != nil,
                "la baseline doit conserver les métriques scalaires et la proximité")
+        expect(baseline?.headTiltDegrees != nil &&
+               baseline?.familySampleCounts?.headTilt == 12 &&
+               baseline?.headTiltMAD != nil,
+               "l'inclinaison tête-épaules doit avoir une maturité et une dispersion propres")
+        var invalidHeadTiltSamples: [PostureRichGeometryMetrics] = []
+        var invalidHeadTiltFaces: [PostureFaceObservation] = []
+        for index in 0..<12 {
+            let sampleID = UInt64(700 + index)
+            let timestamp = Double(index) * 0.1
+            let invalidFace = face(sampleID: sampleID, timestamp: timestamp,
+                                   contextKey: context.key, yawProxy: 0.5,
+                                   facePointCount: 12)
+            invalidHeadTiltFaces.append(invalidFace)
+            invalidHeadTiltSamples.append(PostureRichGeometryEvaluator.make(
+                result: result(sampleID: sampleID, timestamp: timestamp),
+                face: invalidFace, context: context
+            ))
+        }
+        let invalidHeadTiltBaseline = PostureRichBaselineBuilder.make(
+            samples: invalidHeadTiltSamples, faceSamples: invalidHeadTiltFaces,
+            generation: 1, contextKey: context.key
+        )
+        expect(invalidHeadTiltBaseline?.familySampleCounts?.headTilt == 0 &&
+               invalidHeadTiltBaseline?.headTiltDegrees == nil,
+               "yaw hors domaine ou points insuffisants ne doivent pas calibrer headTilt")
+        var headTiltEvaluatorConfiguration = PostureRichSignalConfiguration()
+        headTiltEvaluatorConfiguration.requiredDuration = 0
+        headTiltEvaluatorConfiguration.headTiltEnterDegrees = 7.5
+        var headTiltEvaluator = PostureRichSignalEvaluator(
+            configuration: headTiltEvaluatorConfiguration
+        )
+        let headTiltEvaluation = headTiltEvaluator.consume(
+            geometry: tiltedFaceGeometry,
+            face: face(contextKey: context.key, eyeLineRollDegrees: 12),
+            baseline: baseline,
+            now: 0.1
+        )
+        expect(headTiltEvaluation.headTilt.quality == .good &&
+               abs((headTiltEvaluation.headTilt.numericValue ?? 99) - 8) < 0.5 &&
+               abs((headTiltEvaluation.headTilt.referenceDelta ?? 99) - 8) < 0.5 &&
+               headTiltEvaluation.headTilt.isAttention,
+               "le signal tête doit publier sa valeur brute, son écart calibré et son attention persistante")
         let noHipSamples = (0..<12).map { index in
             PostureRichGeometryEvaluator.make(
                 result: result(generation: 3, sampleID: UInt64(index + 1),
@@ -376,6 +570,24 @@ private enum PostureRichSignalHarness {
         expect(bodyWithInvalidFaceBaseline?.shoulderOpeningRatio == nil &&
                bodyWithInvalidFaceBaseline?.familySampleCounts?.shoulderOpening == 0,
                "un visage hors domaine ne doit pas devenir la référence ouverture des épaules")
+        var limitedOpeningSamples: [PostureRichGeometryMetrics] = []
+        for index in 0..<12 {
+            let sampleID = UInt64(1100 + index)
+            let timestamp = Double(index) * 0.1
+            limitedOpeningSamples.append(PostureRichGeometryEvaluator.make(
+                result: result(sampleID: sampleID, timestamp: timestamp,
+                               limitedShoulders: true),
+                face: face(sampleID: sampleID, timestamp: timestamp,
+                           contextKey: context.key), context: context
+            ))
+        }
+        let limitedOpeningBaseline = PostureRichBaselineBuilder.make(
+            samples: limitedOpeningSamples, generation: 1, contextKey: context.key
+        )
+        expect(limitedOpeningBaseline == nil ||
+               (limitedOpeningBaseline?.shoulderOpeningRatio == nil &&
+                limitedOpeningBaseline?.familySampleCounts?.shoulderOpening == 0),
+               "des épaules de qualité insuffisante ne doivent pas calibrer le ratio")
         let slowBodySamples = samples.enumerated().map { index, sample in
             PostureRichGeometryMetrics(
                 generation: sample.generation, sampleID: sample.sampleID,
@@ -495,11 +707,51 @@ private enum PostureRichSignalHarness {
                 baseline: baseline, now: sample.0
             )
         }
-        expect(automaticBlinkEvaluation?.blinkRate.direction == .below &&
-               automaticBlinkEvaluation?.blinkRate.normalizedValue != nil &&
-               (automaticBlinkEvaluation?.blinkRate.belowDuration ?? 0) >= 0.3 &&
+        expect(automaticBlinkEvaluation?.blinkRate.state == .available &&
+               automaticBlinkEvaluation?.blinkRate.value != nil &&
+               automaticBlinkEvaluation?.blinkRate.normalizedValue == nil &&
+               automaticBlinkEvaluation?.blinkRate.direction == .unknown &&
                automaticBlinkEvaluation?.blinkRate.isAttention == false,
-               "le débit automatique produit une durée sous seuil exploitable")
+               "un débit fiable sans trois fenêtres de référence ne doit pas prétendre être sous la cible")
+
+        var pauseConfiguration = automaticBlinkConfiguration
+        pauseConfiguration.blinkMinimumObservable = 30
+        pauseConfiguration.blinkPauseReminderAfter = 2
+        pauseConfiguration.blinkMaximumCountedInterval = 0.25
+        var pauseEvaluator = PostureRichSignalEvaluator(configuration: pauseConfiguration)
+        var pauseEvaluation: PostureRichEvaluation?
+        for index in 0...20 {
+            let timestamp = Double(index) * 0.1
+            pauseEvaluation = pauseEvaluator.consume(
+                geometry: automaticBody,
+                face: face(sampleID: UInt64(900 + index), timestamp: timestamp,
+                           contextKey: context.key),
+                baseline: baseline, now: timestamp
+            )
+        }
+        expect(pauseEvaluation?.blinkRate.state == .available &&
+               pauseEvaluation?.blinkRate.value == 0 &&
+               pauseEvaluation?.blinkRate.numericValue == nil &&
+               pauseEvaluation?.blinkRate.normalizedValue == 0 &&
+               pauseEvaluation?.blinkRate.isAttention == true &&
+               pauseEvaluation?.blinkRate.reason.contains("pause") == true,
+               "un rappel d'yeux ouverts peut être fiable avant la maturité du débit sans inventer une fréquence")
+        let afterPauseGap = pauseEvaluator.consume(
+            geometry: automaticBody,
+            face: face(sampleID: 922, timestamp: 3.0,
+                       contextKey: context.key),
+            baseline: baseline, now: 3.0
+        )
+        expect(afterPauseGap.blinkRate.isAttention == false,
+               "un gap facial réinitialise le rappel de pause")
+        let afterClosedEyes = pauseEvaluator.consume(
+            geometry: automaticBody,
+            face: face(sampleID: 923, timestamp: 3.1,
+                       contextKey: context.key, eyeOpeningRatio: 0.15),
+            baseline: baseline, now: 3.1
+        )
+        expect(afterClosedEyes.blinkRate.isAttention == false,
+               "la fermeture des yeux réinitialise le rappel de pause")
         let contextBReset = automaticBlinkEvaluator.consume(
             geometry: PostureRichGeometryEvaluator.make(
                 result: result(generation: 2, sampleID: 800, timestamp: 0),
@@ -601,7 +853,7 @@ private enum PostureRichSignalHarness {
         expect(tenHzEvaluation?.blinkRate.direction == .below &&
                tenHzEvaluation?.blinkRate.normalizedValue == 0 &&
                (tenHzEvaluation?.blinkRate.belowDuration ?? 0) >= 0.3 &&
-               tenHzEvaluation?.blinkRate.isAttention == false &&
+               tenHzEvaluation?.blinkRate.isAttention == true &&
                (tenHzEvaluation?.blinkRateAssessment.belowDuration ?? 0) > 0.2,
                "les visages 10 Hz doivent fournir direction, ratio et durée sous seuil malgré un corps plus lent")
         let noFaceEvaluation = tenHzEvaluator.consume(
@@ -1023,6 +1275,129 @@ private enum PostureRichSignalHarness {
                                               configuration: configuration)
         expect(tenHzBlink.map { abs($0.duration - 0.1) < 0.001 } == true,
                "à 10 Hz un cycle fermé-ouvert conserve sa durée réelle")
+
+        var rollingRateConfiguration = configuration
+        rollingRateConfiguration.blinkWindow = 1.0
+        var rollingRateBlink = PostureBlinkTracker()
+        for index in 0...11 {
+            _ = rollingRateBlink.consume(
+                generation: 1, timestamp: Double(index) * 0.1,
+                openingRatio: 1.0, qualityGood: true,
+                configuration: rollingRateConfiguration
+            )
+        }
+        let completedRollingWindow = rollingRateBlink.takeCompletedWindow()
+        expect(completedRollingWindow?.observableSeconds ?? 0 > 0.9,
+               "la fenêtre de référence terminée conserve sa durée observée")
+        expect(rollingRateBlink.observableSeconds < 0.2 &&
+               rollingRateBlink.liveObservableSeconds > 0.9 &&
+               rollingRateBlink.ratePerMinute != nil,
+               "le débit live reste mature après le renouvellement de la fenêtre de référence")
+
+        var interruptedRateConfiguration = rollingRateConfiguration
+        interruptedRateConfiguration.blinkMaximumGap = 0.25
+        interruptedRateConfiguration.blinkMaximumSuspension = 2.0
+        var interruptedRateBlink = PostureBlinkTracker()
+        for index in 0...10 {
+            _ = interruptedRateBlink.consume(
+                generation: 1, timestamp: Double(index) * 0.1,
+                openingRatio: 1.0, qualityGood: true,
+                configuration: interruptedRateConfiguration
+            )
+        }
+        _ = interruptedRateBlink.consume(
+            generation: 1, timestamp: 1.1,
+            openingRatio: 1.0, qualityGood: false,
+            configuration: interruptedRateConfiguration
+        )
+        _ = interruptedRateBlink.consume(
+            generation: 1, timestamp: 1.7,
+            openingRatio: 1.0, qualityGood: true,
+            configuration: interruptedRateConfiguration
+        )
+        for index in 18...27 {
+            _ = interruptedRateBlink.consume(
+                generation: 1, timestamp: Double(index) * 0.1,
+                openingRatio: 1.0, qualityGood: true,
+                configuration: interruptedRateConfiguration
+            )
+        }
+        expect(interruptedRateBlink.liveObservableSeconds > 0.9 &&
+               interruptedRateBlink.ratePerMinute != nil,
+               "une interruption faciale moyenne conserve le débit valide sans compter le trou")
+
+        var suspendedRateBlink = PostureBlinkTracker()
+        _ = suspendedRateBlink.consume(
+            generation: 1, timestamp: 0,
+            openingRatio: 1.0, qualityGood: true,
+            configuration: interruptedRateConfiguration
+        )
+        _ = suspendedRateBlink.consume(
+            generation: 1, timestamp: 0.1,
+            openingRatio: 1.0, qualityGood: true,
+            configuration: interruptedRateConfiguration
+        )
+        _ = suspendedRateBlink.consume(
+            generation: 1, timestamp: 3.0,
+            openingRatio: 1.0, qualityGood: true,
+            configuration: interruptedRateConfiguration
+        )
+        expect(suspendedRateBlink.liveObservableSeconds < 0.001 &&
+               suspendedRateBlink.ratePerMinute == nil,
+               "les secondes live trop anciennes doivent sortir naturellement de la fenêtre")
+
+        var interruptedEvaluatorConfiguration = configuration
+        interruptedEvaluatorConfiguration.blinkWindow = 10
+        interruptedEvaluatorConfiguration.blinkMinimumObservable = 5
+        interruptedEvaluatorConfiguration.blinkMaximumGap = 0.25
+        interruptedEvaluatorConfiguration.blinkMaximumSuspension = 2
+        var interruptedEvaluator = PostureRichSignalEvaluator(
+            configuration: interruptedEvaluatorConfiguration
+        )
+        var interruptedEvaluation: PostureRichEvaluation?
+        for index in 0...10 {
+            let timestamp = Double(index) * 0.1
+            interruptedEvaluation = interruptedEvaluator.consume(
+                geometry: automaticBody,
+                face: face(sampleID: UInt64(2000 + index), timestamp: timestamp,
+                           contextKey: context.key),
+                baseline: baseline, now: timestamp
+            )
+        }
+        let interruptedQualityEvaluation = interruptedEvaluator.consume(
+            geometry: automaticBody,
+            face: face(sampleID: 2011, timestamp: 1.1,
+                       contextKey: context.key, facePointCount: 12),
+            baseline: baseline, now: 1.1
+        )
+        expect(interruptedQualityEvaluation.blinkRate.state == .partial &&
+               interruptedQualityEvaluation.blinkRate.reason == "Suivi des yeux intermittent",
+               "une qualité faciale insuffisante expose une raison courte et compréhensible")
+        let interruptedResumeEvaluation = interruptedEvaluator.consume(
+            geometry: automaticBody,
+            face: face(sampleID: 2017, timestamp: 1.7,
+                       contextKey: context.key),
+            baseline: baseline, now: 1.7
+        )
+        expect(interruptedResumeEvaluation.blinkRate.state == .partial &&
+               interruptedResumeEvaluation.blinkRate.reason.hasPrefix("Yeux observés") &&
+               interruptedResumeEvaluation.blinkRate.reason.contains("/5 s"),
+               "la reprise affiche les secondes valides sans compter l'interruption")
+        interruptedEvaluation = interruptedResumeEvaluation
+        for index in 17...60 {
+            let timestamp = Double(index) * 0.1
+            interruptedEvaluation = interruptedEvaluator.consume(
+                geometry: automaticBody,
+                face: face(sampleID: UInt64(2000 + index), timestamp: timestamp,
+                           contextKey: context.key),
+                baseline: baseline, now: timestamp
+            )
+        }
+        expect(interruptedEvaluation?.blinkRate.state == .available &&
+               interruptedEvaluation?.blinkRate.value != nil &&
+               interruptedEvaluation?.blinkRate.reason.contains("insuffisante") == false,
+               "après une interruption moyenne, le débit clignement redevient disponible avec les secondes valides cumulées")
+
         var strictGapConfiguration = configuration
         strictGapConfiguration.blinkMaximumSuspension = 1.0
         var longGapBlink = PostureBlinkTracker()
@@ -1040,8 +1415,71 @@ private enum PostureRichSignalHarness {
         _ = longGapBlink.consume(generation: 1, timestamp: 1.3,
                                  openingRatio: 1.0, qualityGood: false,
                                  configuration: strictGapConfiguration)
-        expect(longGapBlink.events.isEmpty && longGapBlink.observableSeconds == 0,
-               "un long trou de qualité réinitialise événements et dénominateur")
+        expect(longGapBlink.events.count == 1 && longGapBlink.observableSeconds > 0,
+               "un long trou de qualité casse le cycle sans effacer la fenêtre valide")
+
+        var rearmedEvaluatorConfiguration = configuration
+        rearmedEvaluatorConfiguration.blinkTargetPerMinute = 20
+        rearmedEvaluatorConfiguration.blinkMinimumObservable = 0
+        rearmedEvaluatorConfiguration.blinkWindow = 10
+        var rearmedEvaluator = PostureRichSignalEvaluator(
+            configuration: rearmedEvaluatorConfiguration
+        )
+        _ = rearmedEvaluator.consume(
+            geometry: automaticBody,
+            face: face(sampleID: 3000, timestamp: 0, contextKey: context.key),
+            baseline: baseline, now: 0
+        )
+        _ = rearmedEvaluator.consume(
+            geometry: automaticBody,
+            face: face(sampleID: 3001, timestamp: 0.1, contextKey: context.key),
+            baseline: baseline, now: 0.1
+        )
+        rearmedEvaluator.resetFaceTarget()
+        let rearmedEvaluation = rearmedEvaluator.consume(
+            geometry: automaticBody,
+            face: face(sampleID: 3002, timestamp: 0.2, contextKey: context.key),
+            baseline: baseline, now: 0.2
+        )
+        expect(rearmedEvaluation.blinkRate.state == .available &&
+               rearmedEvaluation.blinkRate.normalizedValue == 0,
+               "une réacquisition dans le même contexte doit conserver la cible et les secondes live")
+
+        var learnedReferenceConfiguration = configuration
+        learnedReferenceConfiguration.blinkTargetPerMinute = nil
+        learnedReferenceConfiguration.blinkWindow = 1
+        learnedReferenceConfiguration.blinkMinimumObservable = 0.5
+        learnedReferenceConfiguration.blinkReferenceRequiredWindows = 1
+        learnedReferenceConfiguration.blinkMaximumGap = 0.25
+        learnedReferenceConfiguration.blinkMaximumSuspension = 2
+        var learnedReferenceEvaluator = PostureRichSignalEvaluator(
+            configuration: learnedReferenceConfiguration
+        )
+        var learnedReferenceEvaluation: PostureRichEvaluation?
+        for index in 0...10 {
+            let timestamp = Double(index) * 0.1
+            let openingRatio = index == 1 ? 0.15 : 0.30
+            learnedReferenceEvaluation = learnedReferenceEvaluator.consume(
+                geometry: automaticBody,
+                face: face(sampleID: UInt64(3100 + index), timestamp: timestamp,
+                           contextKey: context.key, eyeOpeningRatio: openingRatio),
+                baseline: baseline, now: timestamp
+            )
+        }
+        expect(learnedReferenceEvaluation?.blinkRate.normalizedValue != nil,
+               "la fenêtre de référence doit réellement produire une cible")
+        learnedReferenceEvaluator.invalidateFace(
+            generation: 1, sampleID: 3111, capturedAt: 1.1
+        )
+        learnedReferenceEvaluator.resetFaceTarget()
+        let learnedReferenceResume = learnedReferenceEvaluator.consume(
+            geometry: automaticBody,
+            face: face(sampleID: 3112, timestamp: 1.2, contextKey: context.key),
+            baseline: baseline, now: 1.2
+        )
+        expect(learnedReferenceResume.blinkRate.state == .available &&
+               learnedReferenceResume.blinkRate.normalizedValue != nil,
+               "une perte/reprise ne doit pas effacer la référence personnelle apprise")
 
         var rateConfiguration = configuration
         rateConfiguration.blinkTargetPerMinute = 20

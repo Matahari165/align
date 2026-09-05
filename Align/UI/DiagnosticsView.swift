@@ -36,6 +36,7 @@ struct DiagnosticsView: View {
             postureValidationControls
         }
         .padding(20)
+        .background(AlignTheme.canvas)
         .frame(minWidth: 480, idealWidth: 560, minHeight: 220)
         .onAppear {
             closeButtonFocused = true

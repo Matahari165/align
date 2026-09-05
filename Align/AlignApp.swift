@@ -174,12 +174,19 @@ private final class AlignAppDelegate: NSObject, NSApplicationDelegate {
 }
 
 enum AlignTheme {
-    static let canvas = Color(red: 0.086, green: 0.09, blue: 0.082)
-    static let elevated = Color(red: 0.125, green: 0.13, blue: 0.118)
-    static let copper = Color(red: 0.76, green: 0.48, blue: 0.29)
-    static let ivory = Color(red: 0.95, green: 0.93, blue: 0.87)
-    static let quiet = Color(red: 0.64, green: 0.63, blue: 0.58)
-    static let hairline = Color.white.opacity(0.10)
+    // The icon uses a deep navy field with a single luminous teal mark. The UI
+    // keeps that relationship: dark neutrals carry the surface, teal signals
+    // reliable state and action, and amber is reserved for posture deviations.
+    static let canvas = Color(red: 0.025, green: 0.075, blue: 0.105)
+    static let elevated = Color(red: 0.045, green: 0.125, blue: 0.155)
+    static let surface = Color(red: 0.070, green: 0.175, blue: 0.195)
+    static let accent = Color(red: 0.145, green: 0.805, blue: 0.825)
+    static let accentStrong = Color(red: 0.075, green: 0.590, blue: 0.650)
+    static let accentSoft = Color(red: 0.680, green: 0.940, blue: 0.920)
+    static let attention = Color(red: 0.980, green: 0.690, blue: 0.350)
+    static let ivory = Color(red: 0.900, green: 0.955, blue: 0.945)
+    static let quiet = Color(red: 0.580, green: 0.710, blue: 0.720)
+    static let hairline = Color(red: 0.350, green: 0.820, blue: 0.820).opacity(0.18)
 }
 
 @main
@@ -190,7 +197,7 @@ struct AlignApp: App {
     var body: some Scene {
         Window("Align", id: "main") {
             ContentView(appModel: appModel)
-                .tint(AlignTheme.copper)
+                .tint(AlignTheme.accent)
                 .preferredColorScheme(.dark)
         }
         .defaultSize(width: 760, height: 560)
@@ -199,7 +206,7 @@ struct AlignApp: App {
             StatisticsView(history: appModel.history) {
                 NSApp.keyWindow?.close()
             }
-            .tint(AlignTheme.copper)
+            .tint(AlignTheme.accent)
             .preferredColorScheme(.dark)
         }
         .defaultSize(width: 720, height: 560)
@@ -208,7 +215,7 @@ struct AlignApp: App {
             SettingsView(appModel: appModel, camera: appModel.camera) {
                 NSApp.keyWindow?.close()
             }
-            .tint(AlignTheme.copper)
+            .tint(AlignTheme.accent)
             .preferredColorScheme(.dark)
         }
         .defaultSize(width: 620, height: 560)

@@ -3,8 +3,8 @@ import Foundation
 @main
 private enum PostureSignalPipelineHarness {
     static func main() {
-        precondition(PostureIndicatorsSnapshot.initial.indicators.count == 6,
-                     "le contrat de présentation contient six observations")
+        precondition(PostureIndicatorsSnapshot.initial.indicators.count == 7,
+                     "le contrat de présentation contient sept observations")
         precondition(PostureIndicatorsSnapshot.initial.indicators.allSatisfy {
             $0.state == .unavailable && $0.observedAt == nil
         }, "l'état initial ne doit inventer aucune preuve")
@@ -12,7 +12,7 @@ private enum PostureSignalPipelineHarness {
                      "la durée produit de calibration reste explicite")
         precondition(PostureIndicatorID.allCases == [
             .apparentProximity, .torsoInclination, .raisedShoulders,
-            .shoulderSlope, .estimatedBlinks, .closedShoulders
+            .shoulderSlope, .estimatedBlinks, .closedShoulders, .headTilt
         ], "le DTO remplace l'ancien pipeline évaluateur sans chemin legacy actif")
         print("PostureSignalPipelineHarness: OK")
     }

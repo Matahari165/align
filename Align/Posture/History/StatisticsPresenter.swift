@@ -17,6 +17,12 @@ nonisolated struct StatisticsSignalRow: Equatable, Sendable, Identifiable {
     let accessibilityLabel: String
 }
 
+nonisolated struct StatisticsCoverageMetric: Equatable, Sendable, Identifiable {
+    let id: String
+    let title: String
+    let value: String
+}
+
 nonisolated enum StatisticsContentState: Equatable, Sendable {
     case loading
     case empty(String)
@@ -32,6 +38,7 @@ nonisolated struct StatisticsViewState: Equatable, Sendable {
     let coverageTitle: String
     let coverageDetail: String
     let coverageAccessibilityLabel: String
+    let coverageMetrics: [StatisticsCoverageMetric]
     let insights: [PostureInsight]
     let series: [StatisticsSeriesPoint]
     let rows: [StatisticsSignalRow]
@@ -93,15 +100,17 @@ nonisolated enum PostureInsights {
         if let previousDate = calendar.date(byAdding: component, value: -1, to: date),
            let previous = PostureHistoryQuery.summary(database: database, period: period, containing: previousDate, calendar: calendar),
            comparable && isComparable(database: database, interval: previous.interval),
+           profiles(database: database, interval: summary.interval) ==
+                profiles(database: database, interval: previous.interval),
            previous.totalCoverage > 0,
            summary.totalCoverage > 0,
-           let current = summary.signals.first(where: { $0.signalID == .torsoInclination })?.eventsPerObservedHour,
-           let old = previous.signals.first(where: { $0.signalID == .torsoInclination })?.eventsPerObservedHour {
+           let current = summary.signals.first(where: { $0.signalID == .shoulderSlope })?.eventsPerObservedHour,
+           let old = previous.signals.first(where: { $0.signalID == .shoulderSlope })?.eventsPerObservedHour {
             let direction = current <= old ? "moins fréquentes" : "plus fréquentes"
             values.append(.init(
-                id: "trend-torso",
+                id: "trend-shoulders",
                 title: "Tendance observée",
-                detail: String(format: "Les variations du torse sont %@ cette période : %.1f par heure observée, contre %.1f précédemment. Basé sur %@ observées.", direction, current, old, StatisticsPresenter.duration(summary.totalCoverage))
+                detail: String(format: "Les déséquilibres des épaules sont %@ cette période : %.1f par heure observée, contre %.1f précédemment. Basé sur %@ observées.", direction, current, old, StatisticsPresenter.duration(summary.totalCoverage))
             ))
         }
         values.append(contentsOf: make(summary: summary, comparable: comparable))
@@ -112,6 +121,11 @@ nonisolated enum PostureInsights {
         let values = database.buckets.filter { interval.contains($0.bucketStart) }
         return Set(values.map(\.sensitivity)).count <= 1 && Set(values.map(\.ruleProfileID)).count <= 1
     }
+
+    private static func profiles(database: PostureHistoryDatabase, interval: DateInterval) -> Set<String> {
+        Set(database.buckets.filter { interval.contains($0.bucketStart) }
+            .map { "\($0.ruleProfileID)-\($0.sensitivity.rawValue)" })
+    }
 }
 
 nonisolated enum StatisticsPresenter {
@@ -120,7 +134,7 @@ nonisolated enum StatisticsPresenter {
         database: PostureHistoryDatabase,
         period: PostureHistoryPeriod,
         date: Date,
-        selectedSignal: PostureObservationSignalID = .torsoInclination,
+        selectedSignal: PostureObservationSignalID = .shoulderSlope,
         calendar: Calendar = .current
     ) -> StatisticsViewState {
         if case .loading = loadResult { return terminal(.loading, period: period, date: date) }
@@ -140,8 +154,13 @@ nonisolated enum StatisticsPresenter {
             state: contentState,
             periodLabel: periodLabel(period, date: date, calendar: calendar),
             coverageTitle: summary.totalCoverage > 0 ? "\(duration(summary.totalCoverage)) observées" : "Données insuffisantes",
-            coverageDetail: "Visage et deux yeux fiables \(duration(summary.faceAndEyesCoverage)) · Haut du corps fiable \(duration(summary.upperBodyCoverage))",
+            coverageDetail: "Seul le temps réellement fiable est compté.",
             coverageAccessibilityLabel: "Couverture fiable. Total \(duration(summary.totalCoverage)). Visage et deux yeux \(duration(summary.faceAndEyesCoverage)). Haut du corps \(duration(summary.upperBodyCoverage)).",
+            coverageMetrics: [
+                .init(id: "total", title: "Total fiable", value: duration(summary.totalCoverage)),
+                .init(id: "face", title: "Visage + yeux", value: duration(summary.faceAndEyesCoverage)),
+                .init(id: "body", title: "Haut du corps", value: duration(summary.upperBodyCoverage))
+            ],
             insights: PostureInsights.make(summary: summary, database: database, period: period, date: date, calendar: calendar),
             series: series(database: database, summary: summary, period: period, date: date, signalID: selectedSignal, calendar: calendar),
             rows: rows,
@@ -156,7 +175,8 @@ nonisolated enum StatisticsPresenter {
         case .raisedShoulders: "Épaules relevées"
         case .shoulderSlope: "Inclinaison des épaules"
         case .estimatedBlinks: "Clignements estimés"
-        case .closedShoulders: "Épaules refermées"
+        case .closedShoulders: "Tête–épaules"
+        case .headTilt: "Tête penchée"
         }
     }
 
@@ -179,22 +199,19 @@ nonisolated enum StatisticsPresenter {
                 String(format: "%.1f/min · visage et deux yeux fiables", $0)
             } ?? "Données insuffisantes"
             let secondary = summary.estimatedBlinkObservedDuration > 0
-                ? "Expérimental · \(duration(summary.estimatedBlinkObservedDuration)) fiables"
-                : "Expérimental · Aucune information fiable"
+                ? "Estimation · \(duration(summary.estimatedBlinkObservedDuration)) fiables · \(value.notificationCount) rappel(s)"
+                : "Estimation · Aucune information fiable"
             return .init(id: value.signalID, title: title(value.signalID), experimental: true,
                          primary: primary, secondary: secondary,
-                         accessibilityLabel: "Clignements estimés, expérimental. \(primary). \(secondary).")
+                         accessibilityLabel: "Clignements estimés. \(primary). \(secondary).")
         }
         let hasData = value.observedDuration > 0
         let primary = hasData && value.eventsPerObservedHour != nil
             ? String(format: "%.1f variation/h observée", value.eventsPerObservedHour!) : "Données insuffisantes"
-        let isExperimental = value.signalID == .shoulderSlope ||
-            value.signalID == .closedShoulders
+        let isExperimental = value.signalID == .closedShoulders
         let secondary: String
         if !hasData {
             secondary = "Aucune information fiable"
-        } else if isExperimental {
-            secondary = "Expérimental · aucun rappel"
         } else {
             secondary = "\(value.notificationCount) rappel(s) · retour médian \(value.medianRecoveryDuration.map(shortDuration) ?? "indisponible")"
         }
@@ -204,7 +221,7 @@ nonisolated enum StatisticsPresenter {
             experimental: isExperimental,
             primary: primary,
             secondary: secondary,
-            accessibilityLabel: "\(title(value.signalID))\(isExperimental ? ", expérimental" : ""). \(primary). \(secondary)."
+            accessibilityLabel: "\(title(value.signalID))\(isExperimental ? ", estimation" : ""). \(primary). \(secondary)."
         )
     }
 
@@ -248,6 +265,6 @@ nonisolated enum StatisticsPresenter {
     }
 
     private static func terminal(_ state: StatisticsContentState, period: PostureHistoryPeriod, date: Date) -> StatisticsViewState {
-        .init(state: state, periodLabel: periodLabel(period, date: date, calendar: .current), coverageTitle: "Données indisponibles", coverageDetail: "", coverageAccessibilityLabel: "Couverture indisponible", insights: [], series: [], rows: [], blinkDetail: "Données insuffisantes")
+        .init(state: state, periodLabel: periodLabel(period, date: date, calendar: .current), coverageTitle: "Données indisponibles", coverageDetail: "", coverageAccessibilityLabel: "Couverture indisponible", coverageMetrics: [], insights: [], series: [], rows: [], blinkDetail: "Données insuffisantes")
     }
 }

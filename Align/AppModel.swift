@@ -6,12 +6,16 @@ import AVFoundation
 final class AppModel: ObservableObject {
     let camera: CameraCaptureService
     let history: PostureHistoryController
+    private let notificationService: LocalPostureNotificationService
     private var alertCoordinator = PostureAlertCoordinator(
         signalConfigurations: [
-            .proximity: .init(persistence: 30, recovery: 20, cooldown: 30 * 60, dailyMaximum: 6),
-            .torsoInclination: .init(persistence: 45, recovery: 30, cooldown: 30 * 60, dailyMaximum: 6),
-            .raisedShoulders: .init(persistence: 45, recovery: 30, cooldown: 30 * 60, dailyMaximum: 6),
-            .estimatedBlinks: .init(persistence: 1, recovery: 2 * 60, cooldown: 60 * 60, dailyMaximum: 2)
+            .proximity: .init(persistence: 15, recovery: 20, cooldown: 60, dailyMaximum: 720),
+            .torsoInclination: .init(persistence: 15, recovery: 30, cooldown: 60, dailyMaximum: 720),
+            .raisedShoulders: .init(persistence: 15, recovery: 30, cooldown: 60, dailyMaximum: 720),
+            .headTilt: .init(persistence: 15, recovery: 30, cooldown: 60, dailyMaximum: 720),
+            .shoulderSlope: .init(persistence: 15, recovery: 30, cooldown: 60, dailyMaximum: 720),
+            .closedShoulders: .init(persistence: 15, recovery: 30, cooldown: 60, dailyMaximum: 720),
+            .estimatedBlinks: .init(persistence: 1, recovery: 2 * 60, cooldown: 120, dailyMaximum: 720)
         ],
         globalConfiguration: .normal
     )
@@ -42,6 +46,10 @@ final class AppModel: ObservableObject {
 
     var recommendationSensitivity: PostureRecommendationSensitivity { alertSettings.sensitivity }
 
+    func sendTestNotification() async -> Bool {
+        await notificationService.deliverTestNotification()
+    }
+
     /// Démarre la caméra une seule fois à l’ouverture de la fenêtre principale.
     /// Un arrêt volontaire ne pourra donc pas être annulé par un nouveau rendu SwiftUI.
     func attemptAutomaticCameraStart() {
@@ -69,6 +77,7 @@ final class AppModel: ObservableObject {
     init() {
         camera = CameraCaptureService()
         history = PostureHistoryController()
+        notificationService = LocalPostureNotificationService()
         alertSettings = PostureAlertSettingsStore().load()
         alertCoordinator.setSensitivity(alertSettings.sensitivity)
         restoreAlertDeliveryState()
@@ -87,6 +96,7 @@ final class AppModel: ObservableObject {
     init(camera: CameraCaptureService) {
         self.camera = camera
         history = PostureHistoryController()
+        notificationService = LocalPostureNotificationService()
         alertSettings = PostureAlertSettingsStore().load()
         alertCoordinator.setSensitivity(alertSettings.sensitivity)
         restoreAlertDeliveryState()
@@ -171,13 +181,16 @@ final class AppModel: ObservableObject {
         }
         let now = Date().timeIntervalSince1970
         coverageWallOffset = coverageWallOffset ?? (now - snapshot.producedAt)
-        if let candidate = alertCoordinator.consume(snapshot, now: now) {
+        if let candidate = alertCoordinator.consume(
+            snapshot, now: now, freshnessNow: ProcessInfo.processInfo.systemUptime
+        ) {
             let request = PostureAlertCandidate(
                 identifier: "\(candidate.identifier).s\(launchSessionID)",
                 signalID: candidate.signalID,
                 generation: candidate.generation,
                 contextKey: candidate.contextKey,
                 episodeID: candidate.episodeID,
+                reservationID: candidate.reservationID,
                 createdAt: candidate.createdAt,
                 isExperimental: candidate.isExperimental,
                 sensitivity: candidate.sensitivity,
@@ -197,26 +210,26 @@ final class AppModel: ObservableObject {
                     self.pendingDeliveryRequests.removeValue(forKey: request.identifier)
                     return
                 }
-                let delivered = await LocalPostureNotificationService().deliver(candidate: request)
+                let delivered = await self.notificationService.deliver(candidate: request)
                 guard self.runtimeAcceptsObservations,
                       token == self.runtimeToken,
                       candidate.generation == self.lastObservationGeneration,
                       candidate.contextKey == self.lastObservationContextKey,
                       self.pendingDeliveryRequests[request.identifier] != nil,
                       self.alertCoordinator.ownsReservation(candidate, now: Date().timeIntervalSince1970) else {
-                    await LocalPostureNotificationService().retract(identifier: request.identifier)
+                    await self.notificationService.retract(identifier: request.identifier)
                     self.alertCoordinator.releaseDelivery(candidate, now: Date().timeIntervalSince1970)
                     self.pendingDeliveryRequests.removeValue(forKey: request.identifier)
                     return
                 }
                 if delivered {
                     guard self.alertCoordinator.commitDelivery(candidate, now: Date().timeIntervalSince1970) else {
-                        await LocalPostureNotificationService().retract(identifier: request.identifier)
+                        await self.notificationService.retract(identifier: request.identifier)
                         self.pendingDeliveryRequests.removeValue(forKey: request.identifier)
                         return
                     }
                     self.pendingDeliveryRequests.removeValue(forKey: request.identifier)
-                    let historyKey = "\(self.launchSessionID):alert:source=runtime:g\(candidate.generation):c\(self.observationContextEpoch):s=\(candidate.signalID.rawValue):e\(candidate.episodeID)"
+                    let historyKey = "\(self.launchSessionID):alert:source=runtime:g\(candidate.generation):c\(self.observationContextEpoch):s=\(candidate.signalID.rawValue):e\(candidate.episodeID):r\(candidate.reservationID)"
                     guard self.lastHistoryKey.insert(historyKey).inserted else { return }
                     self.persistAlertDeliveryState()
                     let observation = PostureHistoryObservation(
@@ -269,7 +282,7 @@ final class AppModel: ObservableObject {
                     : nil
                 let transition = PostureHistoryObservation(
                     date: Date(timeIntervalSince1970: now), signalID: signal.signalID,
-                    sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v1",
+                    sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v2",
                     observedDuration: 0, attentionDuration: 0,
                     beganOpportunity: signal.assessment == .attention &&
                         signal.episodeID != previous.episodeID,
@@ -316,7 +329,7 @@ final class AppModel: ObservableObject {
             if lastHistoryKey.insert(eventKey).inserted {
                 let observation = PostureHistoryObservation(
                     date: Date(timeIntervalSince1970: now), signalID: .estimatedBlinks,
-                    sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v1",
+                    sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v2",
                     observedDuration: 0, attentionDuration: 0, beganOpportunity: false,
                     acceptedEventCount: 0, deliveredNotification: false,
                     recoveryDuration: nil, eventKey: eventKey,
@@ -363,7 +376,7 @@ final class AppModel: ObservableObject {
             pendingDeliveryRequests.removeValue(forKey: identifier)
             alertCoordinator.releaseDelivery(candidate, now: Date().timeIntervalSince1970)
             Task { @MainActor in
-                await LocalPostureNotificationService().retract(identifier: identifier)
+                await self.notificationService.retract(identifier: identifier)
             }
         }
     }
@@ -384,7 +397,7 @@ final class AppModel: ObservableObject {
         objectWillChange.send()
         history.enqueueControlEvent(.init(
             date: Date(), signalID: nil, action: .sensitivityChanged,
-            sensitivity: value, ruleProfileID: "runtime-v1"
+            sensitivity: value, ruleProfileID: "runtime-v2"
         ))
     }
 
@@ -402,7 +415,7 @@ final class AppModel: ObservableObject {
         history.enqueueControlEvent(.init(
             date: Date(), signalID: id,
             action: enabled ? .reactivated : .disabled,
-            sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v1"
+            sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v2"
         ))
     }
 
@@ -426,7 +439,7 @@ final class AppModel: ObservableObject {
         objectWillChange.send()
         history.enqueueControlEvent(.init(
             date: now, signalID: id, action: .snoozed,
-            sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v1"
+            sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v2"
         ))
     }
 
@@ -440,7 +453,7 @@ final class AppModel: ObservableObject {
         objectWillChange.send()
         history.enqueueControlEvent(.init(
             date: Date(), signalID: id, action: .reactivated,
-            sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v1"
+            sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v2"
         ))
     }
 
@@ -524,7 +537,7 @@ final class AppModel: ObservableObject {
             date: Date(timeIntervalSince1970: wallNow - duration),
             signalID: signal.signalID,
             sensitivity: alertCoordinator.sensitivity,
-            ruleProfileID: "runtime-v1",
+            ruleProfileID: "runtime-v2",
             observedDuration: duration,
             attentionDuration: assessment == .attention ? duration : 0,
             beganOpportunity: false,

@@ -79,22 +79,50 @@ enum PostureIndicatorPresentationHarness {
             for: result(.closedShoulders, state: .attention, experimental: true, ttl: 2),
             producedAt: now
         )
-        expect(slope.tone == .neutral && slope.value == "Plus inclinées",
-               "la pente expérimentale doit rester visible sans force d'alerte")
-        expect(opening.tone == .neutral && opening.value == "Plus refermées",
-               "l'ouverture expérimentale doit rester visible sans force d'alerte")
+        expect(slope.tone == .negative && slope.value == "Une épaule plus haute",
+               "un déséquilibre fiable doit maintenant permettre un rappel")
+        expect(opening.tone == .negative && opening.value == "À réajuster",
+               "le rapport tête-épaules doit proposer une action sans affirmer sa cause")
 
         let blink = PostureIndicatorPresentation.make(
             for: result(.estimatedBlinks, state: .attention, experimental: true),
             producedAt: now
         )
-        expect(blink.tone == .negative && blink.value == "Sous ton repère",
+        expect(blink.tone == .negative && blink.value == "Pense à cligner",
                "l'alerte canonique clignements doit rester actionnable et honnête")
 
         expect(PostureIndicatorPresentation.orderedIDs == [
-            .apparentProximity, .torsoInclination, .raisedShoulders,
-            .shoulderSlope, .estimatedBlinks, .closedShoulders
+            .shoulderSlope, .raisedShoulders, .headTilt, .closedShoulders,
+            .apparentProximity, .torsoInclination, .estimatedBlinks
         ], "l'ordre du rail doit rester stable")
+
+        var head = result(.headTilt, state: .attention, ttl: 2)
+        head.referenceDelta = 8
+        let headPresentation = PostureIndicatorPresentation.make(for: head, producedAt: now)
+        expect(headPresentation.value.contains("+8.0°") && headPresentation.tone == .negative,
+               "l'écart angulaire personnel doit être lisible")
+        let expiredHead = PostureIndicatorPresentation.make(for: head, producedAt: 13)
+        expect(expiredHead.value == "—", "un angle périmé doit disparaître")
+
+        var learning = result(.estimatedBlinks, state: .needsCalibration, baseline: false)
+        learning.numericValue = 8
+        let learningPresentation = PostureIndicatorPresentation.make(for: learning, producedAt: now)
+        expect(learningPresentation.value.contains("8.0/min") &&
+               learningPresentation.value.contains("repère en cours") &&
+               learningPresentation.tone == .neutral,
+               "un taux observable sans référence ne signifie pas que les clignements suffisent")
+        expect(PostureIndicatorPresentation.make(for: learning, producedAt: 12).value == "Yeux non mesurables",
+               "un ancien taux ne doit pas survivre pendant l'apprentissage")
+        var collecting = result(.estimatedBlinks, state: .needsCalibration,
+                                quality: .limited, baseline: false)
+        collecting.reason = "Yeux observés : 12/45 s"
+        expect(PostureIndicatorPresentation.make(for: collecting, producedAt: now).value == collecting.reason,
+               "la collecte doit expliquer sa progression sans prétendre mesurer un taux")
+        expect(PostureIndicatorPresentation.make(for: collecting, producedAt: 12).value == "Yeux non mesurables",
+               "une progression périmée ne doit pas rester affichée")
+        collecting.reason = "camera-context-internal"
+        expect(PostureIndicatorPresentation.make(for: collecting, producedAt: now).value == "Yeux non mesurables",
+               "une raison technique ne doit pas fuir dans le rail produit")
         print("PostureIndicatorPresentationHarness: OK")
     }
 }

@@ -32,8 +32,8 @@ nonisolated struct PostureGlobalAlertConfiguration: Equatable, Codable, Sendable
 
     static let normal = Self(
         mode: .normal,
-        minimumIntervalBetweenSignals: 10 * 60,
-        dailyMaximum: 6,
+        minimumIntervalBetweenSignals: 30,
+        dailyMaximum: 1_440,
         dailyWindow: 24 * 60 * 60
     )
 
@@ -49,6 +49,9 @@ nonisolated struct PostureAlertCandidate: Equatable, Codable, Sendable {
     let generation: UInt64
     let contextKey: String
     let episodeID: UInt64
+    /// Identifie une réservation précise, y compris quand le même épisode
+    /// reste actif et produit plusieurs rappels.
+    let reservationID: UInt64
     let createdAt: TimeInterval
     let isExperimental: Bool
     let sensitivity: PostureRecommendationSensitivity
@@ -60,16 +63,18 @@ nonisolated struct PostureAlertCandidate: Equatable, Codable, Sendable {
         generation: UInt64,
         contextKey: String = "",
         episodeID: UInt64,
+        reservationID: UInt64,
         createdAt: TimeInterval,
         isExperimental: Bool,
         sensitivity: PostureRecommendationSensitivity = .sensitive,
-        ruleProfileID: String = "runtime-v1"
+        ruleProfileID: String = "runtime-v2"
     ) {
         self.identifier = identifier
         self.signalID = signalID
         self.generation = generation
         self.contextKey = contextKey
         self.episodeID = episodeID
+        self.reservationID = reservationID
         self.createdAt = createdAt
         self.isExperimental = isExperimental
         self.sensitivity = sensitivity
@@ -165,6 +170,7 @@ nonisolated struct PostureAlertCoordinator: Sendable {
     let priority: [PostureObservationSignalID]
 
     private var states: [PostureObservationSignalID: SignalAlertState] = [:]
+    private var nextReservationID: UInt64 = 0
     private(set) var controls: [PostureObservationSignalID: PostureAlertControl]
     private(set) var globalDeliveries: [TimeInterval] = []
     private(set) var sensitivity: PostureRecommendationSensitivity
@@ -174,7 +180,8 @@ nonisolated struct PostureAlertCoordinator: Sendable {
         globalConfiguration: PostureGlobalAlertConfiguration,
         sensitivity: PostureRecommendationSensitivity = .sensitive,
         priority: [PostureObservationSignalID] = [
-            .proximity, .raisedShoulders, .torsoInclination, .estimatedBlinks
+            .proximity, .raisedShoulders, .torsoInclination, .headTilt,
+            .shoulderSlope, .closedShoulders, .estimatedBlinks
         ]
     ) {
         self.baseSignalConfigurations = signalConfigurations
@@ -188,9 +195,12 @@ nonisolated struct PostureAlertCoordinator: Sendable {
 
     mutating func consume(
         _ snapshot: PostureObservationsSnapshot,
-        now: TimeInterval
+        now: TimeInterval,
+        freshnessNow: TimeInterval? = nil
     ) -> PostureAlertCandidate? {
         guard globalConfiguration.isValid, now.isFinite else { return nil }
+        let evidenceNow = freshnessNow ?? snapshot.producedAt
+        guard evidenceNow.isFinite else { return nil }
         globalDeliveries.removeAll { now < $0 || now - $0 > globalConfiguration.dailyWindow }
 
         var eligible: [(Int, PostureSignalSnapshot, PostureSignalAlertConfiguration)] = []
@@ -206,18 +216,27 @@ nonisolated struct PostureAlertCoordinator: Sendable {
                 state.contextKey = snapshot.contextKey
             }
             updateRecovery(signal, configuration: configuration, now: now, state: &state)
+            let isFresh = signal.observedAt.map { observedAt in
+                observedAt.isFinite && evidenceNow >= observedAt &&
+                    evidenceNow - observedAt <= PostureObservationEngine.freshnessTTL(for: signal.signalID)
+            } ?? false
             if signal.availability == .available,
                signal.assessment == .attention,
                signal.quality == .good,
+               isFresh,
                let episodeID = signal.episodeID {
                 if state.attentionEpisodeID != episodeID {
+                    state.reservedEpisodeID = nil
+                    state.reservedReservationID = nil
                     state.attentionEpisodeID = episodeID
                     state.attentionSince = now
                 }
-                if state.deliveredEpisodeID != episodeID,
-                   state.reservedEpisodeID == nil,
+                let ttl = PostureObservationEngine.freshnessTTL(for: signal.signalID)
+                let evidenceAge = signal.observedAt.map { evidenceNow - $0 } ?? .infinity
+                let freshnessRemaining = ttl - evidenceAge
+                state.freshnessExpiresAt = now + freshnessRemaining
+                if state.reservedEpisodeID == nil,
                    now >= state.retryNotBefore,
-                   !state.requiresRecovery,
                    now - (state.attentionSince ?? now) >= configuration.persistence,
                    state.deliveryTimes.filter({ now >= $0 && now - $0 <= 24 * 60 * 60 }).count <
                        configuration.dailyMaximum,
@@ -228,28 +247,51 @@ nonisolated struct PostureAlertCoordinator: Sendable {
             } else {
                 state.attentionSince = nil
                 state.attentionEpisodeID = nil
+                state.reservedEpisodeID = nil
+                state.reservedReservationID = nil
+                state.freshnessExpiresAt = nil
             }
             states[signal.signalID] = state
         }
 
         guard globalDeliveries.count < globalConfiguration.dailyMaximum,
               globalDeliveries.last.map({ now - $0 >= globalConfiguration.minimumIntervalBetweenSignals }) ?? true,
-              let (_, signal, _) = eligible.min(by: { $0.0 < $1.0 }),
+              let (_, signal, _) = eligible.min(by: { lhs, rhs in
+                  let lhsState = states[lhs.1.signalID] ?? .init()
+                  let rhsState = states[rhs.1.signalID] ?? .init()
+                  switch (lhsState.lastScheduledAt, rhsState.lastScheduledAt) {
+                  case (nil, nil):
+                      return lhs.0 < rhs.0
+                  case (nil, .some):
+                      return true
+                  case (.some, nil):
+                      return false
+                  case let (.some(lhsAt), .some(rhsAt)) where lhsAt != rhsAt:
+                      return lhsAt < rhsAt
+                  default:
+                      return lhs.0 < rhs.0
+                  }
+              }),
               let episodeID = signal.episodeID else { return nil }
 
         var state = states[signal.signalID] ?? .init()
+        nextReservationID &+= 1
+        let reservationID = nextReservationID
         state.reservedEpisodeID = episodeID
+        state.reservedReservationID = reservationID
+        state.lastScheduledAt = now
         states[signal.signalID] = state
         return PostureAlertCandidate(
-            identifier: "posture.\(signal.signalID.rawValue).g\(snapshot.generation).e\(episodeID)",
+            identifier: "posture.\(signal.signalID.rawValue).g\(snapshot.generation).e\(episodeID).r\(reservationID)",
             signalID: signal.signalID,
             generation: snapshot.generation,
             contextKey: snapshot.contextKey,
             episodeID: episodeID,
+            reservationID: reservationID,
             createdAt: now,
-            isExperimental: signal.signalID == .estimatedBlinks,
+            isExperimental: signal.signalID == .estimatedBlinks || signal.signalID == .closedShoulders,
             sensitivity: sensitivity,
-            ruleProfileID: "runtime-v1"
+            ruleProfileID: "runtime-v2"
         )
     }
 
@@ -259,6 +301,8 @@ nonisolated struct PostureAlertCoordinator: Sendable {
               state.generation == candidate.generation,
               state.contextKey == candidate.contextKey,
               state.reservedEpisodeID == candidate.episodeID,
+              state.reservedReservationID == candidate.reservationID,
+              state.freshnessExpiresAt.map({ now <= $0 }) ?? false,
               controls[candidate.signalID, default: .init()].permits(at: now)
         else { return false }
         return true
@@ -271,8 +315,17 @@ nonisolated struct PostureAlertCoordinator: Sendable {
               var state = states[candidate.signalID],
               state.generation == candidate.generation,
               state.contextKey == candidate.contextKey,
-              state.reservedEpisodeID == candidate.episodeID else { return false }
+              state.reservedEpisodeID == candidate.episodeID,
+              state.reservedReservationID == candidate.reservationID else { return false }
+        guard state.freshnessExpiresAt.map({ now <= $0 }) ?? false else {
+            state.reservedEpisodeID = nil
+            state.reservedReservationID = nil
+            state.freshnessExpiresAt = nil
+            states[candidate.signalID] = state
+            return false
+        }
         state.reservedEpisodeID = nil
+        state.reservedReservationID = nil
         state.retryNotBefore = 0
         state.deliveredEpisodeID = candidate.episodeID
         state.requiresRecovery = true
@@ -290,8 +343,10 @@ nonisolated struct PostureAlertCoordinator: Sendable {
         guard var state = states[candidate.signalID],
               state.generation == candidate.generation,
               state.contextKey == candidate.contextKey,
-              state.reservedEpisodeID == candidate.episodeID else { return }
+              state.reservedEpisodeID == candidate.episodeID,
+              state.reservedReservationID == candidate.reservationID else { return }
         state.reservedEpisodeID = nil
+        state.reservedReservationID = nil
         state.retryNotBefore = now + 5
         states[candidate.signalID] = state
     }
@@ -340,7 +395,7 @@ nonisolated struct PostureAlertCoordinator: Sendable {
         let persistenceScale: Double = switch value {
         case .discreet: 1.5
         case .balanced: 1.0
-        case .sensitive: 1.25
+        case .sensitive: 0.5
         }
         signalConfigurations = baseSignalConfigurations.mapValues { configuration in
             .init(
@@ -398,6 +453,7 @@ nonisolated struct PostureAlertCoordinator: Sendable {
         states[id]?.recoverySince = nil
         states[id]?.reservedEpisodeID = nil
         states[id]?.retryNotBefore = 0
+        states[id]?.freshnessExpiresAt = nil
     }
 
     private func updateRecovery(
@@ -427,7 +483,10 @@ private nonisolated struct SignalAlertState: Sendable {
     var requiresRecovery = false
     var recoverySince: TimeInterval?
     var reservedEpisodeID: UInt64?
+    var reservedReservationID: UInt64?
+    var freshnessExpiresAt: TimeInterval?
     var retryNotBefore: TimeInterval = 0
+    var lastScheduledAt: TimeInterval?
     var deliveryTimes: [TimeInterval] = []
 
     /// Efface uniquement l'épisode lié au runtime courant. Les quotas et
@@ -440,6 +499,9 @@ private nonisolated struct SignalAlertState: Sendable {
         deliveredEpisodeID = nil
         recoverySince = nil
         reservedEpisodeID = nil
+        reservedReservationID = nil
+        freshnessExpiresAt = nil
         retryNotBefore = 0
+        lastScheduledAt = nil
     }
 }

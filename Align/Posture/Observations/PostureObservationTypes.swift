@@ -7,12 +7,12 @@ nonisolated enum PostureObservationSignalID: String, CaseIterable, Codable, Hash
     case shoulderSlope
     case estimatedBlinks
     case closedShoulders
+    case headTilt
 
-    /// Les rappels produit restent strictement bornés à ces quatre signaux.
-    /// `closedShoulders` est une observation expérimentale locale, jamais une
-    /// autorisation de notification.
+    /// Les rappels utilisent exclusivement des observations fiables et calibrées.
     static let alertableCases: [Self] = [
-        .proximity, .torsoInclination, .raisedShoulders, .estimatedBlinks
+        .proximity, .torsoInclination, .raisedShoulders, .estimatedBlinks,
+        .shoulderSlope, .closedShoulders, .headTilt
     ]
 }
 
@@ -67,6 +67,9 @@ nonisolated struct PostureMetricEvidence: Equatable, Codable, Sendable {
     var leftShoulderDelta: Double? = nil
     var rightShoulderDelta: Double? = nil
     var shoulderRaiseClassification: PostureShoulderRaiseClassification? = nil
+    var numericValue: Double? = nil
+    var referenceDelta: Double? = nil
+    var observationReason: String? = nil
 
     var hasValidIdentity: Bool {
         generation > 0 && sampleID > 0 && capturedAt.isFinite && producedAt.isFinite &&
@@ -87,6 +90,8 @@ nonisolated struct PostureSignalSnapshot: Equatable, Codable, Sendable {
     var leftShoulderDelta: Double? = nil
     var rightShoulderDelta: Double? = nil
     var shoulderRaiseClassification: PostureShoulderRaiseClassification? = nil
+    var numericValue: Double? = nil
+    var referenceDelta: Double? = nil
 
     static func unavailable(
         _ id: PostureObservationSignalID,

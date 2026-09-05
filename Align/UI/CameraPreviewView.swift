@@ -40,55 +40,73 @@ final class CameraPreviewNSView: NSView {
     private var blazePoseLabelLayers: [CATextLayer] = []
 
     init(session: AVCaptureSession) {
-        let alignCopper = NSColor(
-            calibratedRed: 0.76,
-            green: 0.48,
-            blue: 0.29,
+        let alignNavy = NSColor(
+            calibratedRed: 0.025,
+            green: 0.075,
+            blue: 0.105,
             alpha: 1
         )
-        let alignIvory = NSColor(
-            calibratedRed: 0.95,
-            green: 0.93,
-            blue: 0.87,
+        let alignTeal = NSColor(
+            calibratedRed: 0.145,
+            green: 0.805,
+            blue: 0.825,
+            alpha: 1
+        )
+        let alignAqua = NSColor(
+            calibratedRed: 0.680,
+            green: 0.940,
+            blue: 0.920,
+            alpha: 1
+        )
+        let alignAmber = NSColor(
+            calibratedRed: 0.980,
+            green: 0.690,
+            blue: 0.350,
+            alpha: 1
+        )
+        let alignQuiet = NSColor(
+            calibratedRed: 0.580,
+            green: 0.710,
+            blue: 0.720,
             alpha: 1
         )
         previewLayer = AVCaptureVideoPreviewLayer(session: session)
         super.init(frame: .zero)
 
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.cgColor
+        layer?.backgroundColor = alignNavy.cgColor
 
         previewLayer.videoGravity = .resizeAspectFill
         configureUnmirroredPreviewConnection()
         mirroredContentLayer.anchorPoint = .zero
         jointLayer.masksToBounds = true
         faceShapeLayer.fillColor = NSColor.clear.cgColor
-        faceShapeLayer.strokeColor = NSColor.systemCyan.cgColor
+        faceShapeLayer.strokeColor = alignAqua.cgColor
         faceShapeLayer.lineWidth = 1.5
         faceShapeLayer.lineJoin = .round
         faceShapeLayer.lineCap = .round
-        bodyShapeLayer.fillColor = alignCopper.cgColor
-        bodyShapeLayer.strokeColor = alignIvory.withAlphaComponent(0.84).cgColor
+        bodyShapeLayer.fillColor = alignTeal.withAlphaComponent(0.88).cgColor
+        bodyShapeLayer.strokeColor = alignAqua.withAlphaComponent(0.84).cgColor
         bodyShapeLayer.lineWidth = 1
         silhouetteShapeLayer.fillColor = NSColor.clear.cgColor
-        silhouetteShapeLayer.strokeColor = NSColor.systemPink.cgColor
+        silhouetteShapeLayer.strokeColor = alignAmber.cgColor
         silhouetteShapeLayer.lineWidth = 2
         silhouetteShapeLayer.lineDashPattern = [6, 4]
         silhouetteShapeLayer.lineJoin = .round
         silhouetteShapeLayer.lineCap = .round
-        blazePoseShapeLayer.fillColor = alignCopper.cgColor
-        blazePoseShapeLayer.strokeColor = alignCopper.cgColor
+        blazePoseShapeLayer.fillColor = alignTeal.cgColor
+        blazePoseShapeLayer.strokeColor = alignTeal.cgColor
         blazePoseShapeLayer.lineWidth = 3
         blazePoseShapeLayer.lineCap = .round
-        configureDevelopmentLayer(upperBodyHeadShapeLayer, color: .systemCyan, lineWidth: 2)
-        configureLimitedLayer(upperBodyHeadLimitedShapeLayer, color: .systemCyan)
-        configureDevelopmentLayer(upperBodyShoulderShapeLayer, color: alignCopper, lineWidth: 2)
-        configureLimitedLayer(upperBodyShoulderLimitedShapeLayer, color: alignCopper)
-        configureDevelopmentLayer(upperBodyTorsoShapeLayer, color: alignIvory, lineWidth: 1.5)
-        configureLimitedLayer(upperBodyTorsoLimitedShapeLayer, color: alignIvory)
-        configureDevelopmentLayer(upperBodyDerivedShapeLayer, color: .systemPurple, lineWidth: 2)
+        configureDevelopmentLayer(upperBodyHeadShapeLayer, color: alignAqua, lineWidth: 2)
+        configureLimitedLayer(upperBodyHeadLimitedShapeLayer, color: alignAqua)
+        configureDevelopmentLayer(upperBodyShoulderShapeLayer, color: alignTeal, lineWidth: 2)
+        configureLimitedLayer(upperBodyShoulderLimitedShapeLayer, color: alignTeal)
+        configureDevelopmentLayer(upperBodyTorsoShapeLayer, color: alignAqua, lineWidth: 1.5)
+        configureLimitedLayer(upperBodyTorsoLimitedShapeLayer, color: alignAqua)
+        configureDevelopmentLayer(upperBodyDerivedShapeLayer, color: alignAmber, lineWidth: 2)
         upperBodyDerivedShapeLayer.lineDashPattern = [6, 4]
-        configureDevelopmentLayer(upperBodyROIShapeLayer, color: .lightGray, lineWidth: 1)
+        configureDevelopmentLayer(upperBodyROIShapeLayer, color: alignQuiet, lineWidth: 1)
         upperBodyROIShapeLayer.fillColor = NSColor.clear.cgColor
         upperBodyROIShapeLayer.lineDashPattern = [2, 3]
         jointLayer.addSublayer(faceShapeLayer)
@@ -313,8 +331,18 @@ final class CameraPreviewNSView: NSView {
             label.string = point.name
             label.fontSize = point.name == "CENTRE ESTIMÉ" ? 10 : 13
             label.font = NSFont.systemFont(ofSize: label.fontSize, weight: .bold)
-            label.foregroundColor = NSColor.white.cgColor
-            label.backgroundColor = NSColor.black.withAlphaComponent(0.65).cgColor
+            label.foregroundColor = NSColor(
+                calibratedRed: 0.680,
+                green: 0.940,
+                blue: 0.920,
+                alpha: 1
+            ).cgColor
+            label.backgroundColor = NSColor(
+                calibratedRed: 0.025,
+                green: 0.075,
+                blue: 0.105,
+                alpha: 0.86
+            ).cgColor
             label.alignmentMode = .center
             label.cornerRadius = 4
             label.contentsScale = window?.backingScaleFactor ?? 2
