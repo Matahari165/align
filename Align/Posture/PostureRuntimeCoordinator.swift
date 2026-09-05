@@ -370,7 +370,7 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
             at: now,
             generation: generation,
             faceEvidenceObservedAt: now,
-            reason: "Nouvelle cible visage en cours de validation"
+            reason: "Visage en cours de réacquisition"
         )
     }
 
