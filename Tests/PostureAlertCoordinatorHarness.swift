@@ -250,6 +250,12 @@ private enum PostureAlertCoordinatorHarness {
         ], at: 0), now: 0) == nil,
                "une observation limitée ne doit jamais produire un rappel")
 
+        var limitedShoulderSlope = coordinator([.shoulderSlope], config: reliabilityConfig)
+        expect(limitedShoulderSlope.consume(snapshot([
+            signal(.shoulderSlope, at: 0, availability: .available, quality: .limited)
+        ], at: 0), now: 0) == nil,
+               "une pente d'épaules limitée par le cadrage ne doit jamais produire un rappel")
+
         var unavailable = coordinator([.proximity], config: reliabilityConfig)
         expect(unavailable.consume(snapshot([
             signal(.proximity, at: 0, availability: .insufficient, quality: .unavailable)

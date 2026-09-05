@@ -17,6 +17,7 @@ nonisolated final class RTMPoseUpperBodyAdapter: UpperBodyPoseEngine, @unchecked
     private let confidenceThreshold: Float
     private var runner: OpaquePointer?
     private var activeGeneration: UInt64?
+    private var shoulderStabilizer = UpperBodyShoulderStabilizer()
 
     init(
         modelURL: URL? = nil,
@@ -41,6 +42,7 @@ nonisolated final class RTMPoseUpperBodyAdapter: UpperBodyPoseEngine, @unchecked
     func activate(generation: UInt64) {
         deactivate()
         activeGeneration = generation
+        shoulderStabilizer.reset()
         guard runner == nil, let modelURL, let runtimeURL else { return }
         runner = AlignRTMPoseCreate(
             modelURL.path, runtimeURL.path, useCoreML ? 1 : 0
@@ -57,6 +59,7 @@ nonisolated final class RTMPoseUpperBodyAdapter: UpperBodyPoseEngine, @unchecked
               confidenceThreshold.isFinite,
               CVPixelBufferGetPixelFormatType(frame.pixelBuffer) == kCVPixelFormatType_32BGRA
         else {
+            shoulderStabilizer.reset()
             return UpperBodyEngineOutput(state: .technicalError, points: [], contours: [])
         }
 
@@ -70,6 +73,7 @@ nonisolated final class RTMPoseUpperBodyAdapter: UpperBodyPoseEngine, @unchecked
             // A top-down model cannot localize a person without an admissible
             // face/upper-body ROI. Fail closed instead of silently stretching a
             // full-frame crop and placing shoulders at its edges.
+            shoulderStabilizer.reset()
             return UpperBodyEngineOutput(state: .partial, points: [], contours: [])
         }
 
@@ -84,6 +88,7 @@ nonisolated final class RTMPoseUpperBodyAdapter: UpperBodyPoseEngine, @unchecked
         CVPixelBufferLockBaseAddress(frame.pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(frame.pixelBuffer, .readOnly) }
         guard let baseAddress = CVPixelBufferGetBaseAddress(frame.pixelBuffer) else {
+            shoulderStabilizer.reset()
             return UpperBodyEngineOutput(state: .technicalError, points: [], contours: [])
         }
 
@@ -103,6 +108,7 @@ nonisolated final class RTMPoseUpperBodyAdapter: UpperBodyPoseEngine, @unchecked
             &native
         )
         guard ok != 0 else {
+            shoulderStabilizer.reset()
             return UpperBodyEngineOutput(state: .technicalError, points: [], contours: [])
         }
 
@@ -124,6 +130,7 @@ nonisolated final class RTMPoseUpperBodyAdapter: UpperBodyPoseEngine, @unchecked
         default: state = .technicalError
         }
         guard state == .detected else {
+            shoulderStabilizer.reset()
             return UpperBodyEngineOutput(
                 state: state, points: [], contours: [],
                 regionOfInterest: regionOfInterest, diagnostics: diagnostics
@@ -145,9 +152,16 @@ nonisolated final class RTMPoseUpperBodyAdapter: UpperBodyPoseEngine, @unchecked
                 provenance: .observed
             )
         }
-        return UpperBodyEngineOutput(
-            state: points.isEmpty ? .noPerson : .detected,
+        let stabilizedPoints = shoulderStabilizer.stabilize(
             points: points,
+            generation: frame.generation,
+            sampleID: frame.sampleID,
+            capturedAt: frame.capturedAt,
+            regionSource: regionOfInterest.source
+        )
+        return UpperBodyEngineOutput(
+            state: stabilizedPoints.isEmpty ? .noPerson : .detected,
+            points: stabilizedPoints,
             contours: [],
             regionOfInterest: regionOfInterest,
             diagnostics: diagnostics
@@ -156,6 +170,7 @@ nonisolated final class RTMPoseUpperBodyAdapter: UpperBodyPoseEngine, @unchecked
 
     func deactivate() {
         activeGeneration = nil
+        shoulderStabilizer.reset()
         if let runner {
             AlignRTMPoseDestroy(runner)
             self.runner = nil

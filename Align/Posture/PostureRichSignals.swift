@@ -239,6 +239,11 @@ nonisolated struct PostureRichGeometryMetrics: Equatable, Sendable {
     let rightShoulderElevation: Double?
     let proximityScale: Double?
     let shouldersState: PostureRichSignalState
+    /// Qualité dédiée à la pente des épaules. Une paire peut être exploitable
+    /// pour l'overlay tout en restant trop incertaine pour une recommandation
+    /// (confiance basse, personne trop loin ou cadrage de secours).
+    let shoulderSlopeState: PostureRichSignalState
+    let shoulderSlopeReason: String?
     let torsoState: PostureRichSignalState
     let headTiltState: PostureRichSignalState
     /// Qualité du ratio largeur-épaules/taille-visage. Elle ne requiert pas le
@@ -272,7 +277,9 @@ nonisolated struct PostureRichGeometryMetrics: Equatable, Sendable {
         rightEyeOpeningRatio: Double? = nil,
         headTiltDegrees: Double? = nil,
         headTiltState: PostureRichSignalState = .unavailable,
-        openingRatioState: PostureRichSignalState? = nil
+        openingRatioState: PostureRichSignalState? = nil,
+        shoulderSlopeState: PostureRichSignalState? = nil,
+        shoulderSlopeReason: String? = nil
     ) {
         self.generation = generation
         self.sampleID = sampleID
@@ -288,6 +295,9 @@ nonisolated struct PostureRichGeometryMetrics: Equatable, Sendable {
         self.rightShoulderElevation = rightShoulderElevation
         self.proximityScale = proximityScale
         self.shouldersState = shouldersState
+        self.shoulderSlopeState = shoulderSlopeState ??
+            (shoulderSlopeDegrees == nil ? .unavailable : shouldersState)
+        self.shoulderSlopeReason = shoulderSlopeReason
         self.torsoState = torsoState
         self.headTiltState = headTiltState
         self.openingRatioState = openingRatioState ??
@@ -316,7 +326,8 @@ nonisolated struct PostureRichGeometryMetrics: Equatable, Sendable {
              openingState: state,
              reason: reason, leftEyeOpeningRatio: nil,
              rightEyeOpeningRatio: nil, headTiltDegrees: nil, headTiltState: state,
-             openingRatioState: state)
+             openingRatioState: state, shoulderSlopeState: state,
+             shoulderSlopeReason: reason)
     }
 }
 
@@ -342,6 +353,7 @@ nonisolated enum PostureRichGeometryEvaluator {
         face: PostureFaceObservation? = nil,
         context: PostureFramingContext
     ) -> PostureRichGeometryMetrics {
+        let signalConfiguration = PostureRichSignalConfiguration()
         guard result.isFreshGeometry, result.generation > 0,
               result.sampleID > 0, result.capturedAt.isFinite else {
             return .unavailable(generation: result.generation, sampleID: result.sampleID,
@@ -353,18 +365,20 @@ nonisolated enum PostureRichGeometryEvaluator {
                 $0.contextKey == context.stableContextKey &&
                 $0.capturedAt.isFinite &&
                 abs($0.capturedAt - result.capturedAt) <=
-                    PostureRichSignalConfiguration().maximumFusionSkew
+                    signalConfiguration.maximumFusionSkew
         } ?? true
         let matchedFace = faceMatchesContext ? face : nil
 
         var points: [UpperBodyLandmarkID: CGPoint] = [:]
         var normalizedPoints: [UpperBodyLandmarkID: CGPoint] = [:]
         var qualityGood: [UpperBodyLandmarkID: Bool] = [:]
+        var pointConfidence: [UpperBodyLandmarkID: Double] = [:]
         for point in result.points where point.isValid {
             if let pixel = context.pixelPoint(point.location) {
                 points[point.id] = pixel
                 normalizedPoints[point.id] = point.location
                 qualityGood[point.id] = point.quality == .good
+                pointConfidence[point.id] = Double(point.confidence)
             }
         }
 
@@ -374,14 +388,26 @@ nonisolated enum PostureRichGeometryEvaluator {
         let leftHip = points[.leftHip]
         let rightHip = points[.rightHip]
         let shoulderCount = [leftShoulder, rightShoulder].compactMap { $0 }.count
+        let shouldersCoherent = UpperBodyShoulderPairValidator.isCoherent(
+            left: normalizedPoints[.leftShoulder],
+            right: normalizedPoints[.rightShoulder]
+        )
         let shouldersState: PostureRichSignalState
-        if shoulderCount == 2 && qualityGood[.leftShoulder] == true && qualityGood[.rightShoulder] == true {
+        if shoulderCount == 2 && shouldersCoherent &&
+            qualityGood[.leftShoulder] == true && qualityGood[.rightShoulder] == true {
             shouldersState = .available
         } else if shoulderCount > 0 {
             shouldersState = .partial
         } else {
             shouldersState = .unavailable
         }
+
+        let shoulderSpan: Double? = {
+            guard let leftShoulder, let rightShoulder else { return nil }
+            let value = hypot(Double(rightShoulder.x - leftShoulder.x),
+                              Double(rightShoulder.y - leftShoulder.y))
+            return value.isFinite && value > 0 ? value : nil
+        }()
 
         var torsoInclination: Double?
         var torsoAxisDeviation: Double?
@@ -396,8 +422,9 @@ nonisolated enum PostureRichGeometryEvaluator {
             let dx = Double(hipMid.x - shoulderMid.x)
             let dy = Double(hipMid.y - shoulderMid.y)
             let normalized = dx / max(abs(dy), 0.000001)
-            let good = [UpperBodyLandmarkID.leftShoulder, .rightShoulder, .leftHip, .rightHip]
-                .allSatisfy { qualityGood[$0] == true }
+            let good = shouldersState == .available &&
+                [UpperBodyLandmarkID.leftShoulder, .rightShoulder, .leftHip, .rightHip]
+                    .allSatisfy { qualityGood[$0] == true }
             // Une inclinaison latérale n'est publiable que si les quatre
             // repères qui forment l'axe sont good. Les coordonnées limited
             // restent disponibles aux diagnostics, mais ne doivent jamais
@@ -429,6 +456,72 @@ nonisolated enum PostureRichGeometryEvaluator {
             shoulderSlopeDegrees = angle.isFinite ? angle : nil
         } else {
             shoulderSlopeDegrees = nil
+        }
+
+        // La pente reste une donnée diagnostique même quand la scène est
+        // ambiguë. Elle ne devient publiable que si les deux scores bruts
+        // sont suffisants, si les épaules occupent une largeur mesurable et
+        // si l'orientation/cadrage rend la projection 2D plausible. Le crop
+        // plein cadre sert à récupérer une personne, pas à déclencher une
+        // recommandation.
+        let slopeFaceQuality: Bool
+        if face == nil {
+            // Un tick corps peut rester utile sans visage frais. La taille et
+            // le cadrage restent toutefois des garde-fous obligatoires.
+            slopeFaceQuality = true
+        } else if let matchedFace {
+            let slopeFrameRollQuality = matchedFace.signal.eyeLineRollDegrees.flatMap {
+                pixelAxialAngleDegrees($0, context: context).map {
+                    abs($0) <= signalConfiguration.maximumShoulderSlopeRollDegrees
+                }
+            } ?? false
+            slopeFaceQuality = matchedFace.facePointCount >= signalConfiguration.minimumFacePoints &&
+                (matchedFace.signal.yawProxy.map {
+                    $0.isFinite && abs($0) <= signalConfiguration.maximumYaw
+                } ?? false) &&
+                (matchedFace.signal.eyeLineRollDegrees.map {
+                    $0.isFinite && abs($0) <= signalConfiguration.maximumRollDegrees
+                } ?? false) && slopeFrameRollQuality
+        } else {
+            slopeFaceQuality = false
+        }
+        let minimumShoulderSpan = max(
+            80.0,
+            min(Double(context.pixelWidth), Double(context.pixelHeight)) *
+                signalConfiguration.minimumShoulderSpanFraction
+        )
+        let slopeSpanQuality = shoulderSpan.map { $0 >= minimumShoulderSpan } ?? false
+        let slopeConfidence = min(
+            pointConfidence[.leftShoulder] ?? 0,
+            pointConfidence[.rightShoulder] ?? 0
+        )
+        let slopeConfidenceQuality = slopeConfidence >=
+            signalConfiguration.minimumShoulderSlopeConfidence
+        let slopeFramingQuality = result.regionOfInterest?.source != .some(.fullFrameFallback)
+        let shoulderSlopeQuality = shoulderSlopeDegrees != nil &&
+            shouldersState == .available && slopeSpanQuality &&
+            slopeConfidenceQuality && slopeFaceQuality && slopeFramingQuality
+        let shoulderSlopeState: PostureRichSignalState = if shoulderSlopeQuality {
+            .available
+        } else if shoulderSlopeDegrees != nil || shoulderCount > 0 {
+            .partial
+        } else {
+            .unavailable
+        }
+        let shoulderSlopeReason: String? = if shoulderSlopeDegrees == nil {
+            nil
+        } else if !faceMatchesContext {
+            "context visage/corps à confirmer"
+        } else if !slopeFramingQuality {
+            "cadrage caméra à confirmer"
+        } else if shouldersState != .available || !slopeConfidenceQuality {
+            "confiance des épaules à confirmer"
+        } else if !slopeSpanQuality {
+            "distance caméra/épaules à confirmer"
+        } else if !slopeFaceQuality {
+            "orientation visage/caméra à confirmer"
+        } else {
+            nil
         }
 
         // Une inclinaison relative reste valable lorsque la caméra est elle-
@@ -475,8 +568,9 @@ nonisolated enum PostureRichGeometryEvaluator {
         }
         let openingState: PostureRichSignalState
         if openingDegrees != nil {
-            let good = [UpperBodyLandmarkID.neck, .leftShoulder, .rightShoulder]
-                .allSatisfy { qualityGood[$0] == true }
+            let good = shouldersState == .available &&
+                [UpperBodyLandmarkID.neck, .leftShoulder, .rightShoulder]
+                    .allSatisfy { qualityGood[$0] == true }
             openingState = good ? .available : .partial
         } else if neck != nil || leftShoulder != nil || rightShoulder != nil {
             openingState = .partial
@@ -518,16 +612,11 @@ nonisolated enum PostureRichGeometryEvaluator {
         // seule la géométrie du visage bouge. La base du cou et la largeur
         // inter-épaules proviennent du même résultat RTMPose et sont converties
         // en pixels pour corriger l'aspect du cadre.
-        let shoulderSpan: Double? = {
-            guard let leftShoulder, let rightShoulder else { return nil }
-            let value = hypot(Double(rightShoulder.x - leftShoulder.x),
-                              Double(rightShoulder.y - leftShoulder.y))
-            return value.isFinite && value > 0 ? value : nil
-        }()
         let leftElevation: Double?
         let rightElevation: Double?
-        let elevationLandmarksGood = qualityGood[.neck] == true &&
-            qualityGood[.leftShoulder] == true && qualityGood[.rightShoulder] == true
+        let elevationLandmarksGood = shouldersState == .available &&
+            qualityGood[.neck] == true && qualityGood[.leftShoulder] == true &&
+            qualityGood[.rightShoulder] == true
         if elevationLandmarksGood, let neck, let shoulderSpan {
             if let leftShoulder {
                 let value = (Double(neck.y) - Double(leftShoulder.y)) / shoulderSpan
@@ -574,7 +663,9 @@ nonisolated enum PostureRichGeometryEvaluator {
             rightEyeOpeningRatio: matchedFace?.signal.rightEyeOpeningRatio,
             headTiltDegrees: headTiltDegrees,
             headTiltState: headTiltState,
-            openingRatioState: openingRatioState
+            openingRatioState: openingRatioState,
+            shoulderSlopeState: shoulderSlopeState,
+            shoulderSlopeReason: shoulderSlopeReason
         )
     }
 
@@ -753,7 +844,7 @@ nonisolated enum PostureRichBaselineBuilder {
         faceSamples: [PostureFaceObservation] = [],
         generation: UInt64,
         contextKey: String,
-        ruleVersion: String = "rich-v2",
+        ruleVersion: String = "rich-v3",
         minimumSamples: Int = 12,
         maximumSampleGap: TimeInterval = 1.50,
         minimumFacePoints: Int = 40,
@@ -783,7 +874,7 @@ nonisolated enum PostureRichBaselineBuilder {
             minimumSamples: minimumSamples
         )
         let shoulderSlopeSamples = coherentSamples(
-            samples.filter { $0.shouldersState == .available &&
+            samples.filter { $0.shoulderSlopeState == .available &&
                 $0.shoulderSlopeDegrees?.isFinite == true },
             maximumSampleGap: maximumSampleGap,
             minimumSamples: minimumSamples
@@ -986,6 +1077,21 @@ nonisolated struct PostureRichSignalConfiguration: Equatable, Sendable {
     var torsoExitDegrees: Double = 2.5
     var shoulderSlopeEnterDegrees: Double = 0.75
     var shoulderSlopeExitDegrees: Double = 0.35
+    /// Confiance minimale de chacun des deux points pour laisser la pente
+    /// entrer dans une décision. Les autres métriques gardent leur contrat
+    /// `.good` historique à 0,50.
+    var minimumShoulderSlopeConfidence: Double = 0.60
+    /// Fraction minimale du petit côté de l'image occupée par la paire. Une
+    /// paire trop petite donne une pente très sensible à quelques pixels.
+    var minimumShoulderSpanFraction: Double = 0.12
+    /// Au-delà de cette rotation, une pente absolue ne permet plus de
+    /// distinguer sûrement un roulis de l'image ou de la tête d'une épaule
+    /// réellement plus haute. La mesure reste diagnostique mais n'est pas
+    /// alertable.
+    var maximumShoulderSlopeRollDegrees: Double = 6
+    /// La pente demande une durée dédiée afin de ne pas ralentir les autres
+    /// recommandations du profil sensible.
+    var shoulderSlopeRequiredDuration: TimeInterval? = nil
     var headTiltEnterDegrees: Double = 8
     var headTiltExitDegrees: Double = 5
     /// Limite de publication du proxy 2D : au-delà, la fusion est trop
@@ -1045,8 +1151,9 @@ nonisolated struct PostureRichSignalConfiguration: Equatable, Sendable {
         var value = Self()
         value.torsoEnterDegrees = 3
         value.torsoExitDegrees = 1.8
-        value.shoulderSlopeEnterDegrees = 0.5
-        value.shoulderSlopeExitDegrees = 0.25
+        value.shoulderSlopeEnterDegrees = 0.65
+        value.shoulderSlopeExitDegrees = 0.35
+        value.shoulderSlopeRequiredDuration = 1.0
         value.requiredDuration = 0.8
         return value
     }
@@ -1059,6 +1166,7 @@ nonisolated struct PostureRichSignalConfiguration: Equatable, Sendable {
         value.shoulderSlopeExitDegrees = 0.5
         value.shoulderElevationEnterDelta = 0.06
         value.shoulderElevationExitDelta = 0.03
+        value.shoulderSlopeRequiredDuration = 1.5
         value.requiredDuration = 1.5
         return value
     }
@@ -1546,11 +1654,13 @@ nonisolated struct PostureRichSustainedState: Equatable, Sendable {
     private(set) var active = false
     private var pendingSince: TimeInterval?
     private var lastTimestamp: TimeInterval?
+    private var pendingDirection: Int?
 
     mutating func reset() {
         active = false
         pendingSince = nil
         lastTimestamp = nil
+        pendingDirection = nil
     }
 
     mutating func update(
@@ -1560,7 +1670,8 @@ nonisolated struct PostureRichSustainedState: Equatable, Sendable {
         exitThreshold: Double,
         requiredDuration: TimeInterval,
         maximumGap: TimeInterval,
-        usesMagnitude: Bool = true
+        usesMagnitude: Bool = true,
+        requiresStableDirection: Bool = false
     ) -> Bool {
         guard timestamp.isFinite, enterThreshold.isFinite, exitThreshold.isFinite,
               requiredDuration >= 0, maximumGap > 0 else { reset(); return false }
@@ -1570,18 +1681,39 @@ nonisolated struct PostureRichSustainedState: Equatable, Sendable {
         }
         lastTimestamp = timestamp
         guard let deviation, deviation.isFinite else {
-            active = false; pendingSince = nil; return false
+            active = false; pendingSince = nil; pendingDirection = nil; return false
         }
         let magnitude = usesMagnitude ? abs(deviation) : deviation
+        let direction = deviation >= 0 ? 1 : -1
         if active {
-            if magnitude <= exitThreshold { active = false; pendingSince = nil }
+            if requiresStableDirection, pendingDirection != direction {
+                // Une oscillation de signe est une nouvelle hypothèse, pas la
+                // continuité de la même asymétrie anatomique.
+                active = false
+                pendingSince = timestamp
+                pendingDirection = direction
+                if requiredDuration == 0 { active = true }
+                return active
+            }
+            if magnitude <= exitThreshold {
+                active = false
+                pendingSince = nil
+                pendingDirection = nil
+            }
             return active
         }
         if magnitude >= enterThreshold {
-            pendingSince = pendingSince ?? timestamp
+            if requiresStableDirection, let pendingDirection,
+               pendingDirection != direction {
+                pendingSince = timestamp
+            } else {
+                pendingSince = pendingSince ?? timestamp
+            }
+            if requiresStableDirection { self.pendingDirection = direction }
             if timestamp - (pendingSince ?? timestamp) >= requiredDuration { active = true }
         } else {
             pendingSince = nil
+            pendingDirection = nil
         }
         return active
     }
@@ -2196,10 +2328,10 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
         )
 
         let slopeValue = body?.shoulderSlopeDegrees
-        let slopeReason = bodyInvalidationReason ??
+        let slopeReason = bodyInvalidationReason ?? body?.shoulderSlopeReason ??
             (bodyBaselineUsable?.shoulderSlopeDegrees == nil ? "baseline pente absente" : nil)
         let slopeAttention: Bool
-        if let slopeValue, body?.shouldersState == .available,
+        if let slopeValue, body?.shoulderSlopeState == .available,
            let neutral = bodyBaselineUsable?.shoulderSlopeDegrees, slopeReason == nil {
             let dispersion = (bodyBaselineUsable?.shoulderSlopeMAD ?? 0) * 1.4826 * 2
             if source == .face || source == .invalidateBody {
@@ -2209,8 +2341,10 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
                     deviation: slopeValue - neutral, timestamp: idTimestamp,
                     enterThreshold: max(configuration.shoulderSlopeEnterDegrees, dispersion),
                     exitThreshold: max(configuration.shoulderSlopeExitDegrees, dispersion * 0.5),
-                    requiredDuration: configuration.requiredDuration,
-                    maximumGap: configuration.maximumSampleGap
+                    requiredDuration: configuration.shoulderSlopeRequiredDuration ??
+                        configuration.requiredDuration,
+                    maximumGap: configuration.maximumSampleGap,
+                    requiresStableDirection: true
                 )
             }
         } else {
@@ -2223,8 +2357,9 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
         } else { nil }
         let shoulderSlope = PostureRichScalarObservation(
             kind: .shoulderSlope, value: slopeValue,
-            state: slopeReason == nil ? (body?.shouldersState ?? .unavailable) : .unavailable,
-            quality: slopeValue == nil ? .unavailable : (body?.shouldersState == .available ? .good : .limited),
+            state: slopeReason == nil ? (body?.shoulderSlopeState ?? .unavailable) : .unavailable,
+            quality: slopeValue == nil ? .unavailable :
+                (body?.shoulderSlopeState == .available ? .good : .limited),
             generation: idGeneration, sampleID: idSample, capturedAt: idTimestamp,
             isEstimated2DProxy: true, isAttention: slopeAttention,
             reason: slopeReason ?? "",

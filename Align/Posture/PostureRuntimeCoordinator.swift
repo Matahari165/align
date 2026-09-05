@@ -4,7 +4,10 @@ import Foundation
 /// Étage sérialisé entre les sorties CV et les alertes. Il ne possède ni caméra
 /// ni image : une instance est liée à une activation et à une génération.
 nonisolated struct PostureRuntimeCoordinator: Sendable {
-    static let ruleVersion = "rich-v2"
+    // La pente des épaules est désormais filtrée et soumise à une qualité de
+    // cadrage dédiée : une baseline v2 ne doit pas être comparée à ce nouveau
+    // signal sans recalibration.
+    static let ruleVersion = "rich-v3"
     private(set) var generation: UInt64 = 0
     private(set) var contextKey = ""
     private var lastFaceSampleID: UInt64 = 0

@@ -107,6 +107,40 @@ private enum UpperBodyGeometryHarness {
                stale.status(for: .shoulders).quality == .unavailable,
                "un résultat stale ne doit produire aucune géométrie")
 
+        var stabilizer = UpperBodyShoulderStabilizer()
+        let neutralShoulders = [point(.leftShoulder, 0.35, 0.50),
+                                point(.rightShoulder, 0.65, 0.50)]
+        _ = stabilizer.stabilize(
+            points: neutralShoulders, generation: 1, sampleID: 1, capturedAt: 0,
+            regionSource: .sameFrameFace
+        )
+        let rawTiltedShoulders = [point(.leftShoulder, 0.35, 0.50),
+                                  point(.rightShoulder, 0.65, 0.52)]
+        let filteredTiltedShoulders = stabilizer.stabilize(
+            points: rawTiltedShoulders, generation: 1, sampleID: 2, capturedAt: 0.5,
+            regionSource: .sameFrameFace
+        )
+        let filteredRightY = filteredTiltedShoulders.first { $0.id == .rightShoulder }!.location.y
+        expect(filteredRightY > 0.50 && filteredRightY < 0.52,
+               "le filtre doit amortir une variation courte sans supprimer le mouvement")
+
+        let missingShoulder = [point(.leftShoulder, 0.35, 0.50)]
+        let missingOutput = stabilizer.stabilize(
+            points: missingShoulder, generation: 1, sampleID: 3, capturedAt: 1.0,
+            regionSource: .sameFrameFace
+        )
+        expect(missingOutput.count == 1 && missingOutput.first?.id == .leftShoulder,
+               "une épaule absente ne doit jamais être recréée par le filtre")
+        let recovered = [point(.leftShoulder, 0.35, 0.50),
+                         point(.rightShoulder, 0.65, 0.60)]
+        let recoveredOutput = stabilizer.stabilize(
+            points: recovered, generation: 1, sampleID: 4, capturedAt: 1.5,
+            regionSource: .sameFrameFace
+        )
+        let recoveredRightY = recoveredOutput.first { $0.id == .rightShoulder }!.location.y
+        expect(abs(recoveredRightY - 0.60) < 0.0001,
+               "après une perte, la réapparition doit repartir de la mesure brute")
+
         print("UpperBodyGeometryHarness: OK")
     }
 }
