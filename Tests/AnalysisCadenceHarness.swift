@@ -14,14 +14,16 @@ private enum AnalysisCadenceHarness {
     }
 
     static func main() {
-        expect(CameraCaptureRatePolicy.framesPerSecond(for: [(15, 60)]) == 30,
-               "un format compatible doit capturer à 30 fps")
-        expect(CameraCaptureRatePolicy.framesPerSecond(for: [(10, 24)]) == 15,
-               "un format sans 30 fps doit utiliser le fallback explicite 15 fps")
+        expect(CameraCaptureRatePolicy.framesPerSecond(for: [(15, 60)]) == 20,
+               "un format compatible doit capturer à 20 fps")
+        expect(CameraCaptureRatePolicy.framesPerSecond(for: [(10, 24)]) == 20,
+               "un format compatible avec 20 fps doit conserver la cadence cible")
+        expect(CameraCaptureRatePolicy.framesPerSecond(for: [(10, 15)]) == 15,
+               "un format sans 20 fps doit utiliser le fallback explicite à 15 fps")
         expect(CameraCaptureRatePolicy.framesPerSecond(for: [(8, 12)]) == 12,
-               "un format atypique doit choisir sa meilleure cadence supportée")
+               "un format atypique doit choisir sa meilleure cadence sous la cible")
         expect(CameraCaptureRatePolicy.framesPerSecond(for: [(29, 29), (40, 40)]) == 29,
-               "un fallback atypique doit rester le plus proche de 30, pas le plus élevé")
+               "un fallback atypique doit rester le plus proche de 20, pas le plus élevé")
         expect(CameraCaptureRatePolicy.framesPerSecond(for: []) == nil,
                "aucune plage ne doit produire une cadence inventée")
 
@@ -143,7 +145,7 @@ private enum AnalysisCadenceHarness {
         var capacityUpperBody = UpperBodyCadenceController()
         var faceCount = 0
         var blazeCount = 0
-        for frame in 0..<30 {
+        for frame in 0..<40 {
             let uptime = Double(frame) / CameraCaptureRatePolicy.targetFramesPerSecond
             var candidates: [VisionAnalysisCandidate] = []
             if capacityFace.isDue(at: uptime) {
@@ -165,10 +167,10 @@ private enum AnalysisCadenceHarness {
                 break
             }
         }
-        expect(faceCount == 10,
-               "30 callbacks/s doivent réellement laisser 10 unités visage distinctes")
-        expect(blazeCount == 1,
-               "la même seconde doit conserver upperBody à 1 unité en arrière-plan")
+        expect(faceCount == 20,
+               "20 callbacks/s doivent réellement laisser 10 unités visage par seconde")
+        expect(blazeCount == 2,
+               "deux secondes doivent conserver upperBody à 1 unité par seconde en arrière-plan")
         print("AnalysisCadenceHarness: OK")
     }
 }

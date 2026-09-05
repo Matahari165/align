@@ -15,7 +15,7 @@ nonisolated enum PosePointSource: String, Hashable, Sendable {
     case upperBodyROI
 }
 
-nonisolated struct PosePoint: Identifiable, Sendable {
+nonisolated struct PosePoint: Identifiable, Equatable, Sendable {
     let name: String
     let location: CGPoint
     let confidence: Float
@@ -39,7 +39,7 @@ nonisolated struct PosePoint: Identifiable, Sendable {
     var id: String { "\(source.rawValue).\(name)" }
 }
 
-nonisolated struct PosePolyline: Identifiable, Sendable {
+nonisolated struct PosePolyline: Identifiable, Equatable, Sendable {
     /// Existing face/body overlay coordinates. Their numeric convention is
     /// preserved for the live-validated face renderer; segmentation crosses an
     /// explicit boundary before entering this type.
@@ -51,7 +51,7 @@ nonisolated struct PosePolyline: Identifiable, Sendable {
     var id: String { "\(source.rawValue).\(name)" }
 }
 
-nonisolated struct PoseOverlay: Sendable {
+nonisolated struct PoseOverlay: Equatable, Sendable {
     static let empty = PoseOverlay(points: [], polylines: [])
 
     let points: [PosePoint]

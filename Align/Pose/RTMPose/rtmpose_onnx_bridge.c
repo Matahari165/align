@@ -25,6 +25,11 @@ struct AlignRTMPoseRunner {
   OrtSessionOptions *options;
   OrtSession *session;
   OrtAllocator *allocator;
+  /* The worker owns one runner and serializes calls. Keep the input storage
+   * and its CPU memory descriptor alive across calls instead of allocating
+   * and releasing them for every upper-body sample. */
+  float *input_tensor;
+  OrtMemoryInfo *input_memory;
   char *input_name;
   char *output_names[2];
   int used_coreml;
@@ -411,6 +416,22 @@ AlignRTMPoseRunner *AlignRTMPoseCreate(const char *model_path,
     AlignRTMPoseDestroy(runner);
     return NULL;
   }
+  runner->input_tensor = malloc(
+      (size_t)3 * kInputWidth * kInputHeight * sizeof(float));
+  if (runner->input_tensor == NULL) {
+    snprintf(runner->last_error, sizeof(runner->last_error),
+             "tensor allocation failed");
+    AlignRTMPoseDestroy(runner);
+    return NULL;
+  }
+  if (!check_status(runner,
+                    runner->api->CreateCpuMemoryInfo(OrtArenaAllocator,
+                                                      OrtMemTypeDefault,
+                                                      &runner->input_memory),
+                    "CreateCpuMemoryInfo")) {
+    AlignRTMPoseDestroy(runner);
+    return NULL;
+  }
   clear_error(runner);
   return runner;
 }
@@ -425,10 +446,13 @@ void AlignRTMPoseDestroy(AlignRTMPoseRunner *runner) {
         (void)runner->api->AllocatorFree(runner->allocator,
                                          runner->output_names[i]);
     if (runner->session != NULL) runner->api->ReleaseSession(runner->session);
+    if (runner->input_memory != NULL)
+      runner->api->ReleaseMemoryInfo(runner->input_memory);
     if (runner->options != NULL)
       runner->api->ReleaseSessionOptions(runner->options);
     if (runner->env != NULL) runner->api->ReleaseEnv(runner->env);
   }
+  free(runner->input_tensor);
   if (runner->runtime != NULL) dlclose(runner->runtime);
   free(runner);
 }
@@ -463,25 +487,19 @@ int AlignRTMPoseAnalyzeBGRA(
     return 1;
   }
   clear_error(runner);
-  float *tensor = malloc((size_t)3 * kInputWidth * kInputHeight * sizeof(float));
-  if (tensor == NULL) {
+  if (runner->input_tensor == NULL || runner->input_memory == NULL) {
     out->status = ALIGN_RTMPOSE_ERROR;
     snprintf(out->error, sizeof(out->error), "tensor allocation failed");
     return 0;
   }
-  build_tensor(bytes, width, height, bytes_per_row, crop, tensor);
+  build_tensor(bytes, width, height, bytes_per_row, crop,
+               runner->input_tensor);
   const int64_t shape[4] = {1, 3, kInputHeight, kInputWidth};
-  OrtMemoryInfo *memory = NULL;
   OrtValue *input = NULL;
   OrtValue *outputs[2] = {NULL, NULL};
   int ok = check_status(runner,
-                        runner->api->CreateCpuMemoryInfo(OrtArenaAllocator,
-                                                         OrtMemTypeDefault,
-                                                         &memory),
-                        "CreateCpuMemoryInfo") &&
-           check_status(runner,
                         runner->api->CreateTensorWithDataAsOrtValue(
-                            memory, tensor,
+                            runner->input_memory, runner->input_tensor,
                             (size_t)3 * kInputWidth * kInputHeight * sizeof(float),
                             shape, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
                             &input),
@@ -568,8 +586,6 @@ int AlignRTMPoseAnalyzeBGRA(
   if (outputs[0] != NULL) runner->api->ReleaseValue(outputs[0]);
   if (outputs[1] != NULL) runner->api->ReleaseValue(outputs[1]);
   if (input != NULL) runner->api->ReleaseValue(input);
-  if (memory != NULL) runner->api->ReleaseMemoryInfo(memory);
-  free(tensor);
   return ok;
 }
 

@@ -221,7 +221,7 @@ struct AlignApp: App {
         .defaultSize(width: 620, height: 560)
 
         MenuBarExtra {
-            StatusMenuView(camera: appModel.camera, history: appModel.history, onQuit: appModel.quit)
+            StatusMenuView(camera: appModel.camera, onQuit: appModel.quit)
         } label: {
             StatusMenuLabel(camera: appModel.camera)
         }

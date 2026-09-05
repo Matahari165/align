@@ -2,12 +2,17 @@ import CoreGraphics
 import Foundation
 
 nonisolated enum CameraCaptureRatePolicy {
-    static let targetFramesPerSecond = 30.0
+    /// The analysis scheduler consumes at most 10 face samples and 1–2
+    /// upper-body samples per second. Twenty capture frames per second keeps
+    /// an even two-frame rhythm for the 10 Hz face cadence while avoiding the
+    /// unused third of a 30 fps camera stream.
+    static let targetFramesPerSecond = 20.0
     static let preferredFallbackFramesPerSecond = 15.0
 
-    /// Chooses a rate supported by the active camera format. Thirty fps is the
-    /// target; 15 fps is the explicit compatibility fallback. Unusual formats
-    /// use their highest supported rate capped as close as possible to 30 fps.
+    /// Chooses a rate supported by the active camera format. Twenty fps is
+    /// the target; 15 fps is the explicit compatibility fallback. Unusual
+    /// formats use the closest supported rate, preferring one not above the
+    /// target when the camera exposes that choice.
     static func framesPerSecond(for ranges: [(minimum: Double, maximum: Double)]) -> Double? {
         func supports(_ rate: Double) -> Bool {
             ranges.contains { $0.minimum <= rate && $0.maximum >= rate }

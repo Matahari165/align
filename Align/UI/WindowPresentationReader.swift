@@ -45,17 +45,13 @@ struct WindowPresentationReader: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
-        DispatchQueue.main.async {
-            context.coordinator.attach(to: view.window)
-        }
+        context.coordinator.scheduleAttach(to: view)
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.onChange = onChange
-        DispatchQueue.main.async {
-            context.coordinator.attach(to: nsView.window)
-        }
+        context.coordinator.scheduleAttach(to: nsView)
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
@@ -66,11 +62,31 @@ struct WindowPresentationReader: NSViewRepresentable {
     final class Coordinator {
         var onChange: (WindowPresentationState) -> Void
         private weak var window: NSWindow?
+        private weak var pendingView: NSView?
+        private var attachmentScheduled = false
         private var observers: [NSObjectProtocol] = []
         private var lifecycle = WindowPresentationLifecycle()
+        private var lastPublishedState: WindowPresentationState?
 
         init(onChange: @escaping (WindowPresentationState) -> Void) {
             self.onChange = onChange
+        }
+
+        /// SwiftUI may call `updateNSView` several times before AppKit has
+        /// attached the representable to a window. Coalesce those requests so
+        /// the presentation reader creates at most one main-queue callback per
+        /// run-loop turn.
+        func scheduleAttach(to view: NSView) {
+            pendingView = view
+            guard !attachmentScheduled else { return }
+            attachmentScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.attachmentScheduled = false
+                guard let pendingView = self.pendingView else { return }
+                self.pendingView = nil
+                self.attach(to: pendingView.window)
+            }
         }
 
         func attach(to window: NSWindow?) {
@@ -121,6 +137,8 @@ struct WindowPresentationReader: NSViewRepresentable {
         }
 
         func detach(publishingHiddenState: Bool) {
+            pendingView = nil
+            attachmentScheduled = false
             observers.forEach(NotificationCenter.default.removeObserver)
             observers.removeAll()
             window = nil
@@ -136,26 +154,24 @@ struct WindowPresentationReader: NSViewRepresentable {
         }
 
         private func publish(_ state: WindowPresentationState? = nil) {
+            let nextState: WindowPresentationState
             if lifecycle.isClosing {
-                onChange(.hidden)
-                return
-            }
-            guard let state else {
-                guard let window else {
-                    onChange(.hidden)
-                    return
-                }
-                onChange(
-                    WindowPresentationState(
-                        isKey: window.isKeyWindow,
-                        isVisible: window.isVisible,
-                        isMiniaturized: window.isMiniaturized,
-                        isOccluded: !window.occlusionState.contains(.visible)
-                    )
+                nextState = .hidden
+            } else if let state {
+                nextState = state
+            } else if let window {
+                nextState = WindowPresentationState(
+                    isKey: window.isKeyWindow,
+                    isVisible: window.isVisible,
+                    isMiniaturized: window.isMiniaturized,
+                    isOccluded: !window.occlusionState.contains(.visible)
                 )
-                return
+            } else {
+                nextState = .hidden
             }
-            onChange(state)
+            guard lastPublishedState != nextState else { return }
+            lastPublishedState = nextState
+            onChange(nextState)
         }
     }
 }

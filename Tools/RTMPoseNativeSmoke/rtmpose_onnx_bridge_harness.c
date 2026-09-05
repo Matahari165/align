@@ -117,6 +117,19 @@ int main(int argc, char **argv) {
          result.score_max, result.left_shoulder_score,
          result.right_shoulder_score);
 
+  /* Exercise repeated calls on the same runner. The production worker keeps
+   * one serialized runner alive, so this also guards the reused input tensor
+   * and OrtMemoryInfo lifetime introduced for the always-on path. */
+  for (uint64_t repeat = 0; repeat < 3; ++repeat) {
+    AlignRTMPoseResult repeated;
+    ok = AlignRTMPoseAnalyzeBGRA(
+        runner, image, width, height, stride, crop, 1, 100 + repeat,
+        20.0 + (double)repeat, 7, 0.20f, &repeated);
+    assert(ok == 1 && repeated.status == ALIGN_RTMPOSE_AVAILABLE);
+    assert(repeated.valid_count > 0);
+  }
+  printf("RTMPose repeated invoke: OK calls=3\n");
+
   AlignRTMPoseResult thresholded;
   ok = AlignRTMPoseAnalyzeBGRA(
       runner, image, width, height, stride, crop, 1, 44, 14.5, 7, 0.20f,

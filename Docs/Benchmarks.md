@@ -2,6 +2,40 @@
 
 Ce fichier conserve uniquement des mesures agrégées. Aucune image, vidéo ou coordonnée faciale n’est enregistrée.
 
+## Protocole always-on — 5 septembre 2026
+
+La politique actuelle vise une capture à 20 images/s, avec analyse visage +
+mains à 10 Hz et RTMPose à 2 Hz au premier plan / 1 Hz en arrière-plan. Les
+analyses ne sont pas réduites par ce changement de capture : vingt images/s
+permettent un rythme régulier de deux images par échéance faciale et
+conservent la qualité temporelle des signaux. La segmentation reste réservée
+au benchmark.
+
+Mesure reproductible, à effectuer sur la même machine et en Release :
+
+```sh
+env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+xcodebuild -project Align.xcodeproj -scheme Align -configuration Release \
+-derivedDataPath /private/tmp/align-release-derived CODE_SIGNING_ALLOWED=NO build
+
+Tools/align-process-metrics.sh <PID> 300 2 > /private/tmp/align-process.csv
+```
+
+Le script ne lance ni n’arrête Align : il échantillonne uniquement le PID
+fourni. Il donne le CPU `ps` (pourcentage d’un CPU logique) et le RSS en MiB,
+puis la moyenne, le maximum et la dérive observés. Pour une comparaison A/B,
+mesurer séparément : caméra arrêtée, fenêtre visible, fenêtre masquée et
+calibration, après 30 secondes d’échauffement. Compléter ces mesures par
+`Diagnostics` : callbacks, tentatives visage, résultats valides, inférences
+RTMPose et âges des résultats.
+
+**FAIT — historique, non comparable directement au code actuel :** une mesure
+courte à 15 images/s et visage à 2 Hz en arrière-plan donnait 11,94 % CPU et
+59,6 Mio RSS. Le code courant garde ensuite le visage à 10 Hz pour ne pas
+perdre les clignements ; il faut donc refaire la mesure avec le protocole
+ci-dessus. Aucune mesure actuelle de batterie, Energy Impact ou caméra réelle
+n’est disponible dans ce dépôt.
+
 Le benchmark conserve aussi, uniquement en mémoire, les angles `roll`, `yaw`
 et `pitch` issus de l’observation faciale primaire déjà produite par
 `VNDetectFaceLandmarksRequest`. Le rapport copiable donne par phase le nombre
@@ -85,7 +119,10 @@ Fenêtre réduite, suivi toujours actif, 10 échantillons espacés de 2 s :
 - Récupération après occultation : 1 seconde ou moins.
 - Aucun ancien overlay visible plus de 0,25 seconde.
 
-Prochaine comparaison : cadence visage 5 fois/s lorsque la fenêtre est visible, 2 fois/s en arrière-plan, corps conservé à 1 fois/s.
+Ancienne piste non adoptée : réduire le visage à 5 fois/s au premier plan et
+2 fois/s en arrière-plan. Les essais de clignement ont montré que cette perte
+temporelle pouvait manquer un événement court ; le protocole courant conserve
+donc 10 Hz et réduit d’abord la cadence de capture inutilisée.
 
 ## 29 août 2026 — Cadence réduite en arrière-plan
 

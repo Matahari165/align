@@ -38,6 +38,15 @@ final class CameraPreviewNSView: NSView {
     private let upperBodyDerivedShapeLayer = CAShapeLayer()
     private let upperBodyROIShapeLayer = CAShapeLayer()
     private var blazePoseLabelLayers: [CATextLayer] = []
+    private var lastRenderKey: RenderKey?
+
+    private struct RenderKey: Equatable {
+        let overlay: PoseOverlay
+        let diagnosticsEnabled: Bool
+        let upperBodyDevelopmentOptions: UpperBodyDevelopmentOptions
+        let size: CGSize
+        let backingScaleFactor: CGFloat
+    }
 
     init(session: AVCaptureSession) {
         let alignNavy = NSColor(
@@ -164,13 +173,22 @@ final class CameraPreviewNSView: NSView {
         // configured. Reassert the single-mirror contract on SwiftUI updates.
         configureUnmirroredPreviewConnection()
 
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-
         let renderedOverlay = PoseOverlayRenderSelection.select(
             overlay,
             diagnosticsEnabled: diagnosticsEnabled
         )
+        let renderKey = RenderKey(
+            overlay: renderedOverlay,
+            diagnosticsEnabled: diagnosticsEnabled,
+            upperBodyDevelopmentOptions: upperBodyDevelopmentOptions,
+            size: bounds.size,
+            backingScaleFactor: window?.backingScaleFactor ?? 2
+        )
+        guard lastRenderKey != renderKey else { return }
+        lastRenderKey = renderKey
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
 
         let facePath = CGMutablePath()
         for polyline in renderedOverlay.polylines where polyline.source == .face {

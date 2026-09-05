@@ -1,17 +1,78 @@
 import SwiftUI
 
 struct ContentView: View {
-    @ObservedObject var appModel: AppModel
-    @ObservedObject private var camera: CameraCaptureService
+    let appModel: AppModel
     private var history: PostureHistoryController { appModel.history }
     @Environment(\.openWindow) private var openWindow
     @State private var showsDiagnostics = false
     @State private var showsStatistics = false
 
-    init(appModel: AppModel) {
-        self.appModel = appModel
-        _camera = ObservedObject(wrappedValue: appModel.camera)
+    var body: some View {
+        LiveCameraPane(camera: appModel.camera)
+            .frame(minWidth: 560, minHeight: 430)
+            .background(AlignTheme.canvas)
+            .onAppear {
+                appModel.attemptAutomaticCameraStart()
+            }
+            .toolbar {
+                ToolbarItem {
+                    CameraToolbarAction(camera: appModel.camera)
+                }
+                ToolbarItem {
+                    Button {
+                        showsStatistics = true
+                    } label: {
+                        Label("Statistiques…", systemImage: "chart.xyaxis.line")
+                            .labelStyle(.iconOnly)
+                    }
+                    .help("Statistiques…")
+                    .accessibilityLabel("Statistiques…")
+                }
+                ToolbarItem {
+                    Button {
+                        openWindow(id: "settings")
+                        NSApplication.shared.activate(ignoringOtherApps: true)
+                    } label: {
+                        Label("Réglages…", systemImage: "gearshape")
+                            .labelStyle(.iconOnly)
+                    }
+                    .help("Réglages…")
+                    .accessibilityLabel("Réglages…")
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showsDiagnostics = true
+                    } label: {
+                        Label("Diagnostics…", systemImage: "waveform.path.ecg")
+                            .labelStyle(.iconOnly)
+                    }
+                    .help("Diagnostics…")
+                    .accessibilityLabel("Diagnostics…")
+                }
+            }
+            .sheet(isPresented: $showsDiagnostics) {
+                DiagnosticsView(camera: appModel.camera) {
+                    showsDiagnostics = false
+                }
+            }
+            .sheet(isPresented: $showsStatistics) {
+                StatisticsView(history: history) { showsStatistics = false }
+            }
+            .background {
+                WindowPresentationReader { presentation in
+                    appModel.camera.updatePresentation(
+                        isApplicationActive: presentation.usesForegroundCadence,
+                        isWindowMiniaturized: presentation.isMiniaturized
+                    )
+                }
+            }
     }
+}
+
+/// Keep high-frequency camera publications inside this subtree. Changes to
+/// the app command model and sheet state must not rebuild the live preview.
+private struct LiveCameraPane: View {
+    @ObservedObject var camera: CameraCaptureService
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,7 +92,6 @@ struct ContentView: View {
                         .foregroundStyle(AlignTheme.accentSoft.opacity(0.86))
                         .accessibilityHidden(true)
                 }
-
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .layoutPriority(1)
@@ -48,67 +108,18 @@ struct ContentView: View {
                 onCalibrate: camera.calibratePosture
             )
         }
-        .frame(minWidth: 560, minHeight: 430)
-        .background(AlignTheme.canvas)
-        .onAppear {
-            appModel.attemptAutomaticCameraStart()
-        }
-        .toolbar {
-            ToolbarItem {
-                cameraToolbarAction
-            }
-            ToolbarItem {
-                Button {
-                    showsStatistics = true
-                } label: {
-                    Label("Statistiques…", systemImage: "chart.xyaxis.line")
-                        .labelStyle(.iconOnly)
-                }
-                .help("Statistiques…")
-                .accessibilityLabel("Statistiques…")
-            }
-            ToolbarItem {
-                Button {
-                    openWindow(id: "settings")
-                    NSApplication.shared.activate(ignoringOtherApps: true)
-                } label: {
-                    Label("Réglages…", systemImage: "gearshape")
-                        .labelStyle(.iconOnly)
-                }
-                .help("Réglages…")
-                .accessibilityLabel("Réglages…")
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showsDiagnostics = true
-                } label: {
-                    Label("Diagnostics…", systemImage: "waveform.path.ecg")
-                        .labelStyle(.iconOnly)
-                }
-                .help("Diagnostics…")
-                .accessibilityLabel("Diagnostics…")
-            }
-        }
-        .sheet(isPresented: $showsDiagnostics) {
-            DiagnosticsView(camera: camera) {
-                showsDiagnostics = false
-            }
-        }
-        .sheet(isPresented: $showsStatistics) {
-            StatisticsView(history: history) { showsStatistics = false }
-        }
-        .background {
-            WindowPresentationReader { presentation in
-                camera.updatePresentation(
-                    isApplicationActive: presentation.usesForegroundCadence,
-                    isWindowMiniaturized: presentation.isMiniaturized
-                )
-            }
-        }
     }
 
+    private var accessibilitySummary: String {
+        CameraStatusPresentation.make(for: camera).explanation
+    }
+}
+
+private struct CameraToolbarAction: View {
+    @ObservedObject var camera: CameraCaptureService
+
     @ViewBuilder
-    private var cameraToolbarAction: some View {
+    var body: some View {
         switch camera.state {
         case .denied:
             Link(destination: cameraPrivacySettingsURL) {
@@ -150,10 +161,6 @@ struct ContentView: View {
             .help("Réessayer la caméra")
             .accessibilityLabel("Réessayer la caméra")
         }
-    }
-
-    private var accessibilitySummary: String {
-        CameraStatusPresentation.make(for: camera).explanation
     }
 
     private var cameraPrivacySettingsURL: URL {

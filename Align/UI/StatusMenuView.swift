@@ -15,7 +15,6 @@ struct StatusMenuLabel: View {
 
 struct StatusMenuView: View {
     @ObservedObject var camera: CameraCaptureService
-    @ObservedObject var history: PostureHistoryController
     let onQuit: () -> Void
 
     @Environment(\.openWindow) private var openWindow
