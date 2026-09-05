@@ -304,6 +304,107 @@ private enum PostureRichSignalHarness {
         )
         expect(baseline?.sampleCount == 12 && baseline?.proximityScale != nil,
                "la baseline doit conserver les métriques scalaires et la proximité")
+        let noHipSamples = (0..<12).map { index in
+            PostureRichGeometryEvaluator.make(
+                result: result(generation: 3, sampleID: UInt64(index + 1),
+                               timestamp: Double(index) * 0.1, includeHips: false),
+                context: context
+            )
+        }
+        let noHipBaseline = PostureRichBaselineBuilder.make(
+            samples: noHipSamples, generation: 3, contextKey: context.key
+        )
+        expect(noHipBaseline?.torsoInclinationDegrees == nil &&
+               noHipBaseline?.shoulderSlopeDegrees != nil &&
+               noHipBaseline?.leftShoulderElevation != nil &&
+               noHipBaseline?.familySampleCounts?.torso == 0 &&
+               noHipBaseline?.familySampleCounts?.shoulderSlope == 12 &&
+               noHipBaseline?.familySampleCounts?.shoulderElevation == 12,
+               "les épaules doivent être calibrables sans hanches et le torse doit rester indisponible")
+        if let noHipBaseline {
+            var noHipEvaluator = PostureRichSignalEvaluator(configuration: .init())
+            let noHipEvaluation = noHipEvaluator.consumeBody(
+                geometry: noHipSamples[0], baseline: noHipBaseline, now: 0.01
+            )
+            expect(noHipEvaluation.torsoInclination.state == .unavailable &&
+                   noHipEvaluation.shoulderSlope.state == .available &&
+                   noHipEvaluation.shouldersRaised.state == .available,
+                   "une baseline partielle ne doit pas marquer le torse complet ni bloquer les épaules")
+        }
+        var noHipOutlierSamples = noHipSamples
+        noHipOutlierSamples[6] = PostureRichGeometryEvaluator.make(
+            result: result(generation: 3, sampleID: 7, timestamp: 0.6,
+                           rightShoulderDeltaY: 0.20, includeHips: false),
+            context: context
+        )
+        let robustNoHipBaseline = PostureRichBaselineBuilder.make(
+            samples: noHipOutlierSamples, generation: 3, contextKey: context.key
+        )
+        expect(robustNoHipBaseline?.familySampleCounts?.shoulderSlope == 12 &&
+               abs(robustNoHipBaseline?.shoulderSlopeDegrees ?? 99) < 0.001,
+               "un outlier isolé ne doit pas déplacer la médiane des épaules")
+        var faceOnlySamples: [PostureFaceObservation] = []
+        for index in 0..<13 {
+            let yaw: Double = index == 6 ? 0.5 : 0
+            faceOnlySamples.append(face(
+                generation: 4, sampleID: UInt64(index + 1),
+                timestamp: Double(index) * 0.1, contextKey: context.key,
+                yawProxy: yaw
+            ))
+        }
+        let faceOnlyBaseline = PostureRichBaselineBuilder.make(
+            samples: [], faceSamples: faceOnlySamples,
+            generation: 4, contextKey: context.key
+        )
+        expect(faceOnlyBaseline?.familySampleCounts?.proximity == 12 &&
+               faceOnlyBaseline?.familySampleCounts?.blinkOpening == 12 &&
+               faceOnlyBaseline?.proximityScale != nil &&
+               faceOnlyBaseline?.blinkOpeningBaseline != nil,
+               "la calibration visage indépendante doit ignorer le profil et conserver douze frames valides")
+        var invalidFaceSamples: [PostureFaceObservation] = []
+        for index in 0..<12 {
+            invalidFaceSamples.append(face(
+                generation: 1, sampleID: UInt64(100 + index),
+                timestamp: Double(index) * 0.1, contextKey: context.key,
+                yawProxy: 0.5
+            ))
+        }
+        let bodyWithInvalidFaceBaseline = PostureRichBaselineBuilder.make(
+            samples: samples, faceSamples: invalidFaceSamples,
+            generation: 1, contextKey: context.key
+        )
+        expect(bodyWithInvalidFaceBaseline?.shoulderOpeningRatio == nil &&
+               bodyWithInvalidFaceBaseline?.familySampleCounts?.shoulderOpening == 0,
+               "un visage hors domaine ne doit pas devenir la référence ouverture des épaules")
+        let slowBodySamples = samples.enumerated().map { index, sample in
+            PostureRichGeometryMetrics(
+                generation: sample.generation, sampleID: sample.sampleID,
+                capturedAt: Double(index) * 0.5, contextKey: sample.contextKey,
+                torsoInclinationDegrees: sample.torsoInclinationDegrees,
+                torsoAxisDeviation: sample.torsoAxisDeviation,
+                shoulderSlopeDegrees: sample.shoulderSlopeDegrees,
+                shoulderOpeningDegrees: sample.shoulderOpeningDegrees,
+                shoulderOpeningRatio: sample.shoulderOpeningRatio,
+                leftShoulderElevation: sample.leftShoulderElevation,
+                rightShoulderElevation: sample.rightShoulderElevation,
+                proximityScale: sample.proximityScale,
+                shouldersState: sample.shouldersState, torsoState: sample.torsoState,
+                openingState: sample.openingState, reason: sample.reason
+            )
+        }
+        var faceWindow: [PostureFaceObservation] = []
+        for index in 0...55 {
+            faceWindow.append(face(
+                generation: 1, sampleID: UInt64(200 + index),
+                timestamp: Double(index) * 0.1, contextKey: context.key
+            ))
+        }
+        let slowBodyBaseline = PostureRichBaselineBuilder.make(
+            samples: slowBodySamples, faceSamples: faceWindow,
+            generation: 1, contextKey: context.key
+        )
+        expect(slowBodyBaseline?.familySampleCounts?.shoulderOpening == 12,
+               "les ticks visage doivent couvrir toute la fenêtre des corps à 2 Hz")
         let legacyBaselineJSON = try! JSONSerialization.data(withJSONObject: [
             "generation": 1,
             "contextKey": context.key,

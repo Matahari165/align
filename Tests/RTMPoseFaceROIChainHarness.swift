@@ -71,8 +71,8 @@ private enum RTMPoseFaceROIChainHarness {
         guard let pixelBuffer else { fatalError("pixel buffer") }
 
         let contour = [
-            CGPoint(x: 0.42, y: 0.18), CGPoint(x: 0.58, y: 0.18),
-            CGPoint(x: 0.61, y: 0.36), CGPoint(x: 0.39, y: 0.36)
+            CGPoint(x: 0.46, y: 0.18), CGPoint(x: 0.54, y: 0.18),
+            CGPoint(x: 0.55, y: 0.36), CGPoint(x: 0.45, y: 0.36)
         ]
         guard let faceROI = RTMPoseUpperBodyCropPolicy.faceAnchored(
             faceContour: contour,
@@ -108,6 +108,24 @@ private enum RTMPoseFaceROIChainHarness {
         let pixelRatio = faceROI.rect.width * 1280 / (faceROI.rect.height * 720)
         expect(abs(pixelRatio - 192.0 / 256.0) < 0.000_01,
                "la ROI doit conserver le ratio pixel 192:256")
+
+        let closeContour = [
+            CGPoint(x: 0.40, y: 0.12), CGPoint(x: 0.60, y: 0.12),
+            CGPoint(x: 0.60, y: 0.42), CGPoint(x: 0.40, y: 0.42)
+        ]
+        guard let closeROI = RTMPoseUpperBodyCropPolicy.faceAnchored(
+            faceContour: closeContour,
+            imageSize: CGSize(width: 1280, height: 720),
+            capturedAt: 10.0,
+            sampleID: 5,
+            generation: 7
+        ) else { fatalError("close face ROI") }
+        expect(abs(closeROI.rect.width - 0.56) < 0.000_01,
+               "un gros plan doit conserver la largeur demandée")
+        expect(abs(closeROI.rect.height - 1.0) < 0.000_01,
+               "la hauteur proche du bord doit seulement être bornée au cadre")
+        expect(closeROI.rect.width > faceROI.rect.width,
+               "le gros plan ne doit pas rétrécir le champ horizontal")
 
         let reorderedContour = [contour[2], contour[0], contour[3], contour[1]]
         let reorderedROI = RTMPoseUpperBodyCropPolicy.faceAnchored(
@@ -147,8 +165,8 @@ private enum RTMPoseFaceROIChainHarness {
             pixelBuffer, capturedAt: 10.1, sampleID: 2,
             generation: 7, roi: nil
         ))
-        expect(missing?.state == .partial && engine.invocationCount == 1,
-               "sans contour/ROI, le moteur ne doit pas être invoqué")
+        expect(missing?.state == .detected && engine.invocationCount == 2,
+               "sans contour/ROI, le fallback borné doit atteindre le moteur une fois")
 
         clock.now = 10.80
         let staleROI = UpperBodyRegionOfInterest(
@@ -163,8 +181,8 @@ private enum RTMPoseFaceROIChainHarness {
             pixelBuffer, capturedAt: 10.80, sampleID: 3,
             generation: 7, roi: staleROI
         ))
-        expect(stale?.state == .partial && engine.invocationCount == 1,
-               "un skew supérieur à 0,75 s doit produire zéro invocation")
+        expect(stale?.state == .detected && engine.invocationCount == 3,
+               "un skew supérieur à 0,75 s doit utiliser le fallback borné")
 
         clock.now = 10.90
         let wrongGenerationROI = UpperBodyRegionOfInterest(
@@ -179,8 +197,8 @@ private enum RTMPoseFaceROIChainHarness {
             pixelBuffer, capturedAt: 10.90, sampleID: 4,
             generation: 7, roi: wrongGenerationROI
         ))
-        expect(mismatched?.state == .partial && engine.invocationCount == 1,
-               "une ROI d’ancienne génération doit produire zéro invocation")
+        expect(mismatched?.state == .detected && engine.invocationCount == 4,
+               "une ROI d’ancienne génération doit utiliser le fallback borné")
 
         print("RTMPoseFaceROIChainHarness: OK")
     }

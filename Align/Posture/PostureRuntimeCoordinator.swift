@@ -12,9 +12,12 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
     private var evaluator: PostureRichSignalEvaluator
     private var observationEngine = PostureObservationEngine()
     private var baselineSamples: [PostureRichGeometryMetrics] = []
+    private var baselineFaceSamples: [PostureFaceObservation] = []
     private var baseline: PostureRichBaseline?
     private var lastBaselineBodySampleID: UInt64 = 0
     private var lastBaselineBodyCapturedAt: TimeInterval?
+    private var lastBaselineFaceSampleID: UInt64 = 0
+    private var lastBaselineFaceCapturedAt: TimeInterval?
     private var lastPublishedSample: [PostureObservationSignalID: UInt64] = [:]
     private var lastEvaluation: PostureRichEvaluation?
     private var blinkBaselineSamples: [Double] = []
@@ -48,9 +51,12 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
     mutating func beginCalibration() {
         isCalibrationActive = true
         baselineSamples.removeAll(keepingCapacity: true)
+        baselineFaceSamples.removeAll(keepingCapacity: true)
         baseline = nil
         lastBaselineBodySampleID = lastBodySampleID
         lastBaselineBodyCapturedAt = nil
+        lastBaselineFaceSampleID = lastFaceSampleID
+        lastBaselineFaceCapturedAt = nil
         blinkBaselineSamples.removeAll(keepingCapacity: true)
         blinkTargetPerMinute = nil
         evaluator = PostureRichSignalEvaluator(configuration: Self.configuration(for: sensitivity))
@@ -77,7 +83,8 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
                          torsoInclinationMAD: value.torsoInclinationMAD,
                          torsoAxisMAD: value.torsoAxisMAD,
                          shoulderSlopeMAD: value.shoulderSlopeMAD,
-                         blinkOpeningBaseline: value.blinkOpeningBaseline)
+                         blinkOpeningBaseline: value.blinkOpeningBaseline,
+                         familySampleCounts: value.familySampleCounts)
         lastBaselineBodySampleID = 0
         lastBaselineBodyCapturedAt = nil
     }
@@ -100,9 +107,12 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         observationEngine = PostureObservationEngine()
         _ = observationEngine.reset(generation: generation, at: 0)
         baselineSamples.removeAll(keepingCapacity: true)
+        baselineFaceSamples.removeAll(keepingCapacity: true)
         baseline = nil
         lastBaselineBodySampleID = 0
         lastBaselineBodyCapturedAt = nil
+        lastBaselineFaceSampleID = 0
+        lastBaselineFaceCapturedAt = nil
     }
 
     mutating func consume(
@@ -128,6 +138,7 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         let isNewBodySample = geometry.map { $0.sampleID > lastBodySampleID } ?? false
         let isNewFaceSample = face.map { $0.sampleID > lastFaceSampleID } ?? false
         collectCalibrationSample(geometry)
+        collectCalibrationFaceSample(face)
         let candidateBaseline = self.baseline ?? externalBaseline
         let usableBaseline = candidateBaseline.flatMap {
             $0.generation == generation && $0.contextKey == contextKey &&
@@ -199,6 +210,7 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
               face.contextKey == contextKey,
               face.sampleID > lastFaceSampleID,
               face.capturedAt.isFinite, now >= face.capturedAt else { return nil }
+        collectCalibrationFaceSample(face)
         let usableBaseline = (baseline ?? self.baseline).flatMap {
             $0.generation == generation && $0.contextKey == face.contextKey &&
                 $0.ruleVersion == Self.ruleVersion ? $0 : nil
@@ -250,13 +262,39 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         lastBaselineBodyCapturedAt = geometry.capturedAt
         baselineSamples.append(geometry)
         if baselineSamples.count > 32 { baselineSamples.removeFirst() }
-        if baseline == nil {
-            baseline = PostureRichBaselineBuilder.make(
-                samples: baselineSamples, generation: generation,
-                contextKey: contextKey, ruleVersion: Self.ruleVersion,
-                minimumSamples: 12
-            )
-        }
+        rebuildCalibrationBaseline()
+    }
+
+    private mutating func collectCalibrationFaceSample(_ face: PostureFaceObservation?) {
+        guard isCalibrationActive, let face,
+              face.contextKey == contextKey,
+              face.sampleID > lastBaselineFaceSampleID,
+              face.capturedAt.isFinite,
+              lastBaselineFaceCapturedAt.map({ face.capturedAt > $0 }) ?? true else { return }
+        lastBaselineFaceSampleID = face.sampleID
+        lastBaselineFaceCapturedAt = face.capturedAt
+        baselineFaceSamples.append(face)
+        // Les corps arrivent à ~2 Hz alors que le visage arrive à ~10 Hz :
+        // douze corps cohérents couvrent plus de cinq secondes. Conserver
+        // 128 ticks visage permet encore d'apparier toute cette fenêtre.
+        if baselineFaceSamples.count > 128 { baselineFaceSamples.removeFirst() }
+        rebuildCalibrationBaseline()
+    }
+
+    private mutating func rebuildCalibrationBaseline() {
+        guard isCalibrationActive else { return }
+        baseline = PostureRichBaselineBuilder.make(
+            samples: baselineSamples,
+            faceSamples: baselineFaceSamples,
+            generation: generation,
+            contextKey: contextKey,
+            ruleVersion: Self.ruleVersion,
+            minimumSamples: 12,
+            minimumFacePoints: evaluator.configuration.minimumFacePoints,
+            maximumProximityYaw: evaluator.configuration.maximumProximityYaw,
+            maximumRollDegrees: evaluator.configuration.maximumRollDegrees,
+            maximumFusionSkew: evaluator.configuration.maximumFusionSkew
+        )
     }
 
     mutating func expire(now: TimeInterval) -> PostureObservationsSnapshot {

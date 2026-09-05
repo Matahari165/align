@@ -73,6 +73,47 @@ static float clampf(float value, float low, float high) {
   return value < low ? low : (value > high ? high : value);
 }
 
+static int finite_content_rect(AlignRTMPoseModelContentRect content) {
+  return isfinite(content.x) && isfinite(content.y) &&
+         isfinite(content.width) && isfinite(content.height) &&
+         content.x >= 0.0f && content.y >= 0.0f && content.width > 0.0f &&
+         content.height > 0.0f && content.x + content.width <= 1.0f &&
+         content.y + content.height <= 1.0f;
+}
+
+AlignRTMPoseModelContentRect AlignRTMPoseModelContentRectForCrop(
+    AlignRTMPoseNormalizedCrop crop, size_t image_width, size_t image_height) {
+  AlignRTMPoseModelContentRect content = {0.0f, 0.0f, 0.0f, 0.0f};
+  if (!finite_crop(crop) || image_width == 0 || image_height == 0) return content;
+
+  const float model_aspect = (float)kInputWidth / (float)kInputHeight;
+  const float crop_pixel_width = crop.width * (float)image_width;
+  const float crop_pixel_height = crop.height * (float)image_height;
+  if (!isfinite(crop_pixel_width) || !isfinite(crop_pixel_height) ||
+      crop_pixel_width <= 0.0f || crop_pixel_height <= 0.0f) {
+    return content;
+  }
+  const float crop_aspect = crop_pixel_width / crop_pixel_height;
+  if (!isfinite(crop_aspect) || crop_aspect <= 0.0f) return content;
+
+  if (crop_aspect >= model_aspect) {
+    content.width = 1.0f;
+    content.height = model_aspect / crop_aspect;
+    content.x = 0.0f;
+    content.y = (1.0f - content.height) * 0.5f;
+  } else {
+    content.height = 1.0f;
+    content.width = crop_aspect / model_aspect;
+    content.x = (1.0f - content.width) * 0.5f;
+    content.y = 0.0f;
+  }
+  return finite_content_rect(content) ? content
+                                      : (AlignRTMPoseModelContentRect){0.0f,
+                                                                       0.0f,
+                                                                       0.0f,
+                                                                       0.0f};
+}
+
 static float sample_bgra(const uint8_t *bytes, size_t width, size_t height,
                          size_t stride, float x, float y, int channel) {
   x = clampf(x, 0.0f, (float)width - 1.0f);
@@ -99,12 +140,42 @@ static void build_tensor(const uint8_t *bytes, size_t width, size_t height,
                          float *tensor) {
   static const float mean[3] = {123.675f, 116.28f, 103.53f};
   static const float stdev[3] = {58.395f, 57.12f, 57.375f};
+  const AlignRTMPoseModelContentRect content =
+      AlignRTMPoseModelContentRectForCrop(crop, width, height);
+  /* OpenCV's constant border in the upstream top-down affine path is black.
+   * Keep that distribution before the model's mean/std normalization instead
+   * of introducing a synthetic mean-colored band. */
+  const float normalized_black[3] = {
+      -mean[0] / stdev[0], -mean[1] / stdev[1], -mean[2] / stdev[2]};
+  if (!finite_content_rect(content)) {
+    for (int channel = 0; channel < 3; ++channel) {
+      float *plane = tensor + (size_t)channel * kInputHeight * kInputWidth;
+      for (size_t pixel = 0; pixel < (size_t)kInputHeight * kInputWidth;
+           ++pixel) {
+        plane[pixel] = normalized_black[channel];
+      }
+    }
+    return;
+  }
+
   for (int y = 0; y < kInputHeight; ++y) {
-    const float sy = crop.y + ((float)y + 0.5f) /
-                                  (float)kInputHeight * crop.height;
+    const float local_y = ((float)y + 0.5f) / (float)kInputHeight;
+    const float source_y = (local_y - content.y) / content.height;
     for (int x = 0; x < kInputWidth; ++x) {
-      const float sx = crop.x + ((float)x + 0.5f) /
-                                  (float)kInputWidth * crop.width;
+      const float local_x = ((float)x + 0.5f) / (float)kInputWidth;
+      const float source_x = (local_x - content.x) / content.width;
+      const int inside_content = source_x >= 0.0f && source_x <= 1.0f &&
+                                 source_y >= 0.0f && source_y <= 1.0f;
+      const size_t pixel = (size_t)y * kInputWidth + (size_t)x;
+      if (!inside_content) {
+        for (int channel = 0; channel < 3; ++channel) {
+          tensor[(size_t)channel * kInputHeight * kInputWidth + pixel] =
+              normalized_black[channel];
+        }
+        continue;
+      }
+      const float sx = crop.x + source_x * crop.width;
+      const float sy = crop.y + source_y * crop.height;
       const float px = sx * (float)width - 0.5f;
       const float py = sy * (float)height - 0.5f;
       for (int channel = 0; channel < 3; ++channel) {
@@ -112,8 +183,7 @@ static void build_tensor(const uint8_t *bytes, size_t width, size_t height,
         const int bgra_channel = 2 - channel;
         const float value = sample_bgra(bytes, width, height, stride, px, py,
                                         bgra_channel);
-        tensor[(size_t)channel * kInputHeight * kInputWidth +
-               (size_t)y * kInputWidth + (size_t)x] =
+        tensor[(size_t)channel * kInputHeight * kInputWidth + pixel] =
             (value - mean[channel]) / stdev[channel];
       }
     }
@@ -176,18 +246,18 @@ AlignRTMPoseNormalizedCrop AlignRTMPoseFaceAnchoredCrop(
       face_height <= 0.0f || image_width == 0 || image_height == 0) {
     return crop;
   }
-  /* RTMPose-M expects a 192:256 (0.75) pixel rectangle. Start from a
-   * face-relative width, then fit both axes to the real image while keeping
-   * that aspect. The old 4.2x/full-height rectangle distorted 16:9 frames and
-   * made the top-down model place shoulders at the crop edges. */
+  /* RTMPose-M expects a 192:256 (0.75) input. Start from a face-relative
+   * source width; build_tensor preserves its pixel proportions when the
+   * image bounds prevent an aspect-matched crop. */
   const float model_pixel_aspect = 192.0f / 256.0f;
   const float requested_width = clampf(face_width * 2.8f, 0.30f, 1.0f);
   const float requested_height = requested_width * (float)image_width /
                                  (model_pixel_aspect * (float)image_height);
-  const float fit_scale = fminf(1.0f, fminf(1.0f / requested_width,
-                                             1.0f / requested_height));
-  crop.width = requested_width * fit_scale;
-  crop.height = requested_height * fit_scale;
+  /* Preserve the requested horizontal field even when the aspect-correct
+   * height would exceed the frame. The tensor path letterboxes this wider
+   * crop; shrinking it here would discard shoulder context before inference. */
+  crop.width = requested_width;
+  crop.height = fminf(requested_height, 1.0f);
   if (crop.width <= 0.0f || crop.height <= 0.0f) {
     return (AlignRTMPoseNormalizedCrop){0.0f, 0.0f, 0.0f, 0.0f};
   }
@@ -204,6 +274,30 @@ void AlignRTMPoseProjectPoint(AlignRTMPoseNormalizedCrop crop, float local_x,
                               float local_y, float *x, float *y) {
   if (x != NULL) *x = crop.x + local_x * crop.width;
   if (y != NULL) *y = crop.y + local_y * crop.height;
+}
+
+int AlignRTMPoseProjectPointWithContent(
+    AlignRTMPoseNormalizedCrop crop,
+    AlignRTMPoseModelContentRect content,
+    float local_x, float local_y, float *x, float *y) {
+  if (!finite_crop(crop) || !finite_content_rect(content) ||
+      !isfinite(local_x) || !isfinite(local_y) || local_x < 0.0f ||
+      local_x > 1.0f || local_y < 0.0f || local_y > 1.0f) {
+    if (x != NULL) *x = 0.0f;
+    if (y != NULL) *y = 0.0f;
+    return 0;
+  }
+  const float source_x = (local_x - content.x) / content.width;
+  const float source_y = (local_y - content.y) / content.height;
+  if (!isfinite(source_x) || !isfinite(source_y) || source_x < 0.0f ||
+      source_x > 1.0f || source_y < 0.0f || source_y > 1.0f) {
+    if (x != NULL) *x = 0.0f;
+    if (y != NULL) *y = 0.0f;
+    return 0;
+  }
+  AlignRTMPoseProjectPoint(crop, source_x, source_y, x, y);
+  return x != NULL && y != NULL && isfinite(*x) && isfinite(*y) &&
+         *x >= 0.0f && *x <= 1.0f && *y >= 0.0f && *y <= 1.0f;
 }
 
 AlignRTMPosePoint AlignRTMPoseResultPointAt(const AlignRTMPoseResult *result,
@@ -432,6 +526,8 @@ int AlignRTMPoseAnalyzeBGRA(
       out->score_max = -INFINITY;
       out->left_shoulder_score = 0.0f;
       out->right_shoulder_score = 0.0f;
+      const AlignRTMPoseModelContentRect content =
+          AlignRTMPoseModelContentRectForCrop(crop, width, height);
       int valid_count = 0;
       for (size_t point = 0; point < ALIGN_RTMPOSE_KEYPOINT_COUNT; ++point) {
         size_t x_index = 0;
@@ -444,9 +540,10 @@ int AlignRTMPoseAnalyzeBGRA(
         const float local_x = ((float)x_index * 0.5f) / (float)kInputWidth;
         const float local_y = ((float)y_index * 0.5f) / (float)kInputHeight;
         AlignRTMPosePoint *dst = &out->points[point];
-        AlignRTMPoseProjectPoint(crop, local_x, local_y, &dst->x, &dst->y);
+        const int inside_content = AlignRTMPoseProjectPointWithContent(
+            crop, content, local_x, local_y, &dst->x, &dst->y);
         dst->confidence = confidence;
-        dst->valid = isfinite(dst->x) && isfinite(dst->y) &&
+        dst->valid = inside_content && isfinite(dst->x) && isfinite(dst->y) &&
                      isfinite(confidence) && confidence >= confidence_threshold &&
                      dst->x >= 0.0f && dst->x <= 1.0f && dst->y >= 0.0f &&
                      dst->y <= 1.0f;

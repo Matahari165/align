@@ -8,10 +8,10 @@
 
 static void test_geometry(void) {
   AlignRTMPoseNormalizedCrop crop =
-      AlignRTMPoseFaceAnchoredCrop(0.50f, 0.28f, 0.16f, 0.22f, 640, 360);
+      AlignRTMPoseFaceAnchoredCrop(0.50f, 0.28f, 0.10f, 0.22f, 640, 360);
   /* The helper has no roll argument: changing face roll cannot alter this ROI. */
   AlignRTMPoseNormalizedCrop same =
-      AlignRTMPoseFaceAnchoredCrop(0.50f, 0.28f, 0.16f, 0.22f, 640, 360);
+      AlignRTMPoseFaceAnchoredCrop(0.50f, 0.28f, 0.10f, 0.22f, 640, 360);
   assert(memcmp(&crop, &same, sizeof(crop)) == 0);
   assert(crop.width > 0.0f && crop.height > 0.0f);
   const float pixel_aspect = crop.width * 640.0f / (crop.height * 360.0f);
@@ -84,7 +84,8 @@ int main(int argc, char **argv) {
       pixel[3] = 255;
     }
   }
-  AlignRTMPoseNormalizedCrop crop = {0.12f, 0.08f, 0.76f, 0.88f};
+  AlignRTMPoseNormalizedCrop crop =
+      AlignRTMPoseFaceAnchoredCrop(0.50f, 0.40f, 0.16f, 0.22f, 640, 480);
   AlignRTMPoseResult result;
   int ok = AlignRTMPoseAnalyzeBGRA(
       runner, image, width, height, stride, crop, 1, 42, 12.5, 7, 0.0f,

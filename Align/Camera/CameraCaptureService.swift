@@ -273,11 +273,13 @@ final class CameraCaptureService: ObservableObject {
             case .upperBodyPresentation(let overlay, let state):
                 if self.currentAnalysisPresentation.publishesVisualUpdates {
                     self.overlay = overlay
-                    self.blazePoseState = state
-                } else {
-                    self.overlay = .empty
-                    self.blazePoseState = .lost
                 }
+                // L'état canonique du suivi reste valide lorsque la fenêtre
+                // est masquée. Seul l'overlay est une sortie de présentation;
+                // une perte réelle continue donc à publier `.lost` même en
+                // arrière-plan, tandis qu'un retour au premier plan peut
+                // republier l'état réellement courant.
+                self.blazePoseState = state
             case .upperBodyDevelopmentSummary(let summary):
                 self.upperBodyDevelopmentSummary = summary
             case .postureIndicators(let snapshot):
@@ -837,7 +839,6 @@ final class CameraCaptureService: ObservableObject {
         let presentation = currentAnalysisPresentation
         if !presentation.publishesVisualUpdates {
             overlay = .empty
-            if blazePoseState != nil { blazePoseState = .lost }
         }
         let sampleDelegate = sampleDelegate
         let benchmarkToken = benchmarkSegmentationEpoch.currentToken
@@ -1468,8 +1469,6 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                 publishCurrentUpperBodyPresentation(
                     at: ProcessInfo.processInfo.systemUptime
                 )
-            } else {
-                onEvent(.overlay(combinedOverlay()), generation)
             }
         } else if !segmentationDetector.isActive {
             segmentationDetector.activate()
@@ -1577,7 +1576,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                 pixelHeight: CVPixelBufferGetHeight(pixelBuffer),
                 cameraID: cameraIdentifier,
                 normalizedROI: frameROI?.rect ?? .init(x: 0, y: 0, width: 1, height: 1),
-                revision: "rtmpose-v1"
+                revision: "rtmpose-aspect-v2"
             ) {
                 let faceObservation: PostureFaceObservation? = {
                     guard let signal = FaceGeometrySignal.from(polylines: latestFaceDetection.polylines),
@@ -1738,7 +1737,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                     pixelHeight: CVPixelBufferGetHeight(pixelBuffer),
                     cameraID: cameraIdentifier,
                     normalizedROI: latestUpperBodyFaceROI?.rect ?? .init(x: 0, y: 0, width: 1, height: 1),
-                    revision: "rtmpose-v1"
+                    revision: "rtmpose-aspect-v2"
                    ),
                    faceObservationSampleID > 0 {
                     preparePostureRuntime(for: faceContext)
@@ -1783,7 +1782,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                     pixelWidth: CVPixelBufferGetWidth(pixelBuffer),
                     pixelHeight: CVPixelBufferGetHeight(pixelBuffer),
                     cameraID: cameraIdentifier,
-                    revision: "rtmpose-v1"
+                    revision: "rtmpose-aspect-v2"
                 ) {
                     preparePostureRuntime(for: faceContext)
                     let invalidated = postureRuntimeCoordinator.invalidateFace(
@@ -2382,7 +2381,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             pixelHeight: CVPixelBufferGetHeight(pixelBuffer),
             cameraID: cameraIdentifier,
             normalizedROI: .init(x: 0, y: 0, width: 1, height: 1),
-            revision: "rtmpose-v1"
+            revision: "rtmpose-aspect-v2"
         ) else { return }
         guard faceTargetContextKey != context.stableContextKey else { return }
         faceTargetContinuity.reset()

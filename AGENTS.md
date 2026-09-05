@@ -7,6 +7,8 @@
 - Le traitement reste local. Les statistiques avancées, niveaux, XP, classement et fonctions sociales sont hors du premier objectif.
 - Align fonctionne principalement depuis la barre des menus, avec une fenêtre simple et évolutive.
 - Les modes de posture sont `Automatique`, `Assis` et `Debout`; `Automatique` reste le mode normal.
+- Le cadrage de référence est la position de travail habituelle de Jeremy, écran incliné pour le confort des yeux. Le suivi des épaules doit être évalué dans ce cadrage rapproché, sans imposer de reculer ou de rendre les hanches visibles.
+- Les calibrations et la disponibilité sont propres à chaque mesure : des hanches hors champ ne doivent pas empêcher les mesures d'épaules. Masquer l'aperçu en arrière-plan ne signifie pas que la détection est perdue.
 
 ## Machine et contraintes techniques
 

@@ -526,6 +526,39 @@ nonisolated struct PostureBlinkOpeningBaseline: Equatable, Codable, Sendable {
     let sampleCount: Int
 }
 
+/// Maturité indépendante de chaque famille de calibration.
+/// Les anciennes baselines n'ont pas ce champ et restent décodables.
+nonisolated struct PostureRichBaselineFamilySampleCounts: Equatable, Codable, Sendable {
+    let torso: Int
+    let shoulderSlope: Int
+    let shoulderElevation: Int
+    let shoulderOpening: Int
+    let proximity: Int
+    let blinkOpening: Int
+
+    init(
+        torso: Int = 0,
+        shoulderSlope: Int = 0,
+        shoulderElevation: Int = 0,
+        shoulderOpening: Int = 0,
+        proximity: Int = 0,
+        blinkOpening: Int = 0
+    ) {
+        self.torso = max(0, torso)
+        self.shoulderSlope = max(0, shoulderSlope)
+        self.shoulderElevation = max(0, shoulderElevation)
+        self.shoulderOpening = max(0, shoulderOpening)
+        self.proximity = max(0, proximity)
+        self.blinkOpening = max(0, blinkOpening)
+    }
+
+    var maximum: Int {
+        max(torso, shoulderSlope, shoulderElevation, shoulderOpening, proximity, blinkOpening)
+    }
+
+    var hasAnyReadyFamily: Bool { maximum > 0 }
+}
+
 nonisolated struct PostureRichBaseline: Equatable, Codable, Sendable {
     let generation: UInt64
     let contextKey: String
@@ -541,6 +574,8 @@ nonisolated struct PostureRichBaseline: Equatable, Codable, Sendable {
     let torsoInclinationMAD: Double?
     let torsoAxisMAD: Double?
     let shoulderSlopeMAD: Double?
+    /// `nil` pour les baselines historiques.
+    let familySampleCounts: PostureRichBaselineFamilySampleCounts?
     /// `nil` pour les anciennes baselines ou une calibration sans deux yeux
     /// valides; l'évaluateur conserve alors son fallback de compatibilité.
     let blinkOpeningBaseline: PostureBlinkOpeningBaseline?
@@ -560,7 +595,8 @@ nonisolated struct PostureRichBaseline: Equatable, Codable, Sendable {
         torsoInclinationMAD: Double?,
         torsoAxisMAD: Double?,
         shoulderSlopeMAD: Double?,
-        blinkOpeningBaseline: PostureBlinkOpeningBaseline? = nil
+        blinkOpeningBaseline: PostureBlinkOpeningBaseline? = nil,
+        familySampleCounts: PostureRichBaselineFamilySampleCounts? = nil
     ) {
         self.generation = generation
         self.contextKey = contextKey
@@ -577,47 +613,143 @@ nonisolated struct PostureRichBaseline: Equatable, Codable, Sendable {
         self.torsoAxisMAD = torsoAxisMAD
         self.shoulderSlopeMAD = shoulderSlopeMAD
         self.blinkOpeningBaseline = blinkOpeningBaseline
+        self.familySampleCounts = familySampleCounts
     }
 }
 
 nonisolated enum PostureRichBaselineBuilder {
     static func make(
         samples: [PostureRichGeometryMetrics],
+        faceSamples: [PostureFaceObservation] = [],
         generation: UInt64,
         contextKey: String,
         ruleVersion: String = "rich-v1",
         minimumSamples: Int = 12,
-        maximumSampleGap: TimeInterval = 1.50
+        maximumSampleGap: TimeInterval = 1.50,
+        minimumFacePoints: Int = 40,
+        maximumProximityYaw: Double = 0.20,
+        maximumRollDegrees: Double = 20,
+        maximumFusionSkew: TimeInterval = 0.30
     ) -> PostureRichBaseline? {
         guard minimumSamples > 0,
               maximumSampleGap.isFinite, maximumSampleGap > 0,
+              minimumFacePoints > 0,
+              maximumProximityYaw.isFinite, maximumProximityYaw >= 0,
+              maximumRollDegrees.isFinite, maximumRollDegrees >= 0,
+              maximumFusionSkew.isFinite, maximumFusionSkew >= 0,
               samples.allSatisfy({ $0.generation == generation && $0.contextKey == contextKey &&
-                  $0.capturedAt.isFinite }) else {
+                  $0.capturedAt.isFinite }),
+              faceSamples.allSatisfy({ $0.generation == generation &&
+                  $0.contextKey == contextKey && $0.capturedAt.isFinite }) else {
             return nil
         }
-        // Une baseline ne doit jamais absorber une observation partielle :
-        // on filtre les frames dont toutes les familles requises ne sont pas
-        // disponibles, puis on exige le minimum sur les seules frames good.
-        let eligibleSamples = samples.filter {
-            $0.shouldersState == .available &&
-                $0.torsoState == .available &&
-                $0.openingState == .available
-        }
-        guard eligibleSamples.count >= minimumSamples else { return nil }
-        for pair in zip(eligibleSamples, eligibleSamples.dropFirst()) {
-            guard pair.1.capturedAt > pair.0.capturedAt,
-                  pair.1.capturedAt - pair.0.capturedAt <= maximumSampleGap else { return nil }
-        }
-        let blinkOpeningSamples = eligibleSamples.compactMap { sample -> (left: Double, right: Double)? in
-            guard let left = sample.leftEyeOpeningRatio,
-                  let right = sample.rightEyeOpeningRatio,
-                  left.isFinite, right.isFinite, left > 0, right > 0 else {
-                return nil
+        // Chaque famille filtre ses propres observations. Une hanche hors
+        // champ ne doit donc pas invalider les épaules, mais une suite
+        // partielle ou trop espacée ne peut toujours pas devenir une baseline.
+        let torsoSamples = coherentSamples(
+            samples.filter { $0.torsoState == .available &&
+                $0.torsoInclinationDegrees?.isFinite == true },
+            maximumSampleGap: maximumSampleGap,
+            minimumSamples: minimumSamples
+        )
+        let shoulderSlopeSamples = coherentSamples(
+            samples.filter { $0.shouldersState == .available &&
+                $0.shoulderSlopeDegrees?.isFinite == true },
+            maximumSampleGap: maximumSampleGap,
+            minimumSamples: minimumSamples
+        )
+        let shoulderElevationSamples = coherentSamples(
+            samples.filter { $0.shouldersState == .available &&
+                $0.leftShoulderElevation?.isFinite == true &&
+                $0.rightShoulderElevation?.isFinite == true },
+            maximumSampleGap: maximumSampleGap,
+            minimumSamples: minimumSamples
+        )
+        // Les familles visage peuvent être calibrées sur des ticks visage
+        // seuls. Si ces ticks existent, ils sont la source de vérité et évitent
+        // de compter deux fois les observations déjà recopiées dans geometry.
+        let faceScaleSamples: [(timestamp: TimeInterval, value: Double)]
+        let blinkSamples: [(timestamp: TimeInterval, left: Double, right: Double)]
+        let validFaceSamples: [PostureFaceObservation]
+        if faceSamples.isEmpty {
+            // Sans objets visage séparés, les valeurs recopiées dans geometry
+            // ne sont considérées comme preuve faciale que si la frame était
+            // complète. Le chemin source-specific visage passe par
+            // `faceSamples` et reste donc indépendant des hanches/épaules.
+            let completeSamples = samples.filter { $0.openingState == .available }
+            faceScaleSamples = completeSamples.compactMap { sample in
+                guard let value = sample.proximityScale,
+                      value.isFinite, value > 0 else { return nil }
+                return (sample.capturedAt, value)
             }
-            return (left, right)
+            blinkSamples = completeSamples.compactMap { sample in
+                guard let left = sample.leftEyeOpeningRatio,
+                      let right = sample.rightEyeOpeningRatio,
+                      left.isFinite, right.isFinite, left > 0, right > 0 else {
+                    return nil
+                }
+                return (sample.capturedAt, left, right)
+            }
+            validFaceSamples = []
+        } else {
+            validFaceSamples = faceSamples.filter { sample in
+                sample.faceScale?.isFinite == true && (sample.faceScale ?? 0) > 0 &&
+                    sample.facePointCount >= minimumFacePoints &&
+                    (sample.signal.yawProxy.map { abs($0) <= maximumProximityYaw } ?? false) &&
+                    (sample.signal.eyeLineRollDegrees.map { abs($0) <= maximumRollDegrees } ?? false)
+            }
+            faceScaleSamples = validFaceSamples.compactMap { sample in
+                guard let value = sample.faceScale,
+                      value.isFinite, value > 0 else { return nil }
+                return (sample.capturedAt, value)
+            }
+            blinkSamples = validFaceSamples.compactMap { sample in
+                guard let left = sample.signal.leftEyeOpeningRatio,
+                      let right = sample.signal.rightEyeOpeningRatio,
+                      left.isFinite, right.isFinite, left > 0, right > 0 else {
+                    return nil
+                }
+                return (sample.capturedAt, left, right)
+            }
         }
+        let shoulderOpeningCandidates = samples.filter { sample in
+            guard sample.openingState == .available,
+                  sample.shoulderOpeningRatio?.isFinite == true,
+                  (sample.shoulderOpeningRatio ?? 0) > 0 else { return false }
+            guard !faceSamples.isEmpty else { return true }
+            return validFaceSamples.contains {
+                abs($0.capturedAt - sample.capturedAt) <= maximumFusionSkew
+            }
+        }
+        let shoulderOpeningSamples = coherentSamples(
+            shoulderOpeningCandidates,
+            maximumSampleGap: maximumSampleGap,
+            minimumSamples: minimumSamples
+        )
+        let proximitySamples = coherentTimedSamples(
+            faceScaleSamples,
+            timestamp: { $0.timestamp },
+            maximumSampleGap: maximumSampleGap,
+            minimumSamples: minimumSamples
+        )
+        let blinkOpeningSamples = coherentTimedSamples(
+            blinkSamples,
+            timestamp: { $0.timestamp },
+            maximumSampleGap: maximumSampleGap,
+            minimumSamples: minimumSamples
+        )
+        let familySampleCounts = PostureRichBaselineFamilySampleCounts(
+            torso: torsoSamples.count,
+            shoulderSlope: shoulderSlopeSamples.count,
+            shoulderElevation: shoulderElevationSamples.count,
+            shoulderOpening: shoulderOpeningSamples.count,
+            proximity: proximitySamples.count,
+            blinkOpening: blinkOpeningSamples.count
+        )
+        guard familySampleCounts.hasAnyReadyFamily else { return nil }
+
         let blinkOpeningBaseline: PostureBlinkOpeningBaseline? = {
-            guard blinkOpeningSamples.count == eligibleSamples.count,
+            guard blinkOpeningSamples.count >= minimumSamples,
                   let leftMedian = median(blinkOpeningSamples.map(\.left)),
                   let rightMedian = median(blinkOpeningSamples.map(\.right)) else {
                 return nil
@@ -634,19 +766,53 @@ nonisolated enum PostureRichBaselineBuilder {
             generation: generation,
             contextKey: contextKey,
             ruleVersion: ruleVersion,
-            torsoInclinationDegrees: median(eligibleSamples.compactMap(\.torsoInclinationDegrees)),
-            torsoAxisDeviation: median(eligibleSamples.compactMap(\.torsoAxisDeviation)),
-            shoulderSlopeDegrees: median(eligibleSamples.compactMap(\.shoulderSlopeDegrees)),
-            shoulderOpeningRatio: median(eligibleSamples.compactMap(\.shoulderOpeningRatio)),
-            leftShoulderElevation: median(eligibleSamples.compactMap(\.leftShoulderElevation)),
-            rightShoulderElevation: median(eligibleSamples.compactMap(\.rightShoulderElevation)),
-            proximityScale: median(eligibleSamples.compactMap(\.proximityScale)),
-            sampleCount: eligibleSamples.count,
-            torsoInclinationMAD: mad(eligibleSamples.compactMap(\.torsoInclinationDegrees)),
-            torsoAxisMAD: mad(eligibleSamples.compactMap(\.torsoAxisDeviation)),
-            shoulderSlopeMAD: mad(eligibleSamples.compactMap(\.shoulderSlopeDegrees)),
-            blinkOpeningBaseline: blinkOpeningBaseline
+            torsoInclinationDegrees: median(torsoSamples.compactMap(\.torsoInclinationDegrees)),
+            torsoAxisDeviation: median(torsoSamples.compactMap(\.torsoAxisDeviation)),
+            shoulderSlopeDegrees: median(shoulderSlopeSamples.compactMap(\.shoulderSlopeDegrees)),
+            shoulderOpeningRatio: median(shoulderOpeningSamples.compactMap(\.shoulderOpeningRatio)),
+            leftShoulderElevation: median(shoulderElevationSamples.compactMap(\.leftShoulderElevation)),
+            rightShoulderElevation: median(shoulderElevationSamples.compactMap(\.rightShoulderElevation)),
+            proximityScale: median(proximitySamples.map(\.value)),
+            sampleCount: familySampleCounts.maximum,
+            torsoInclinationMAD: mad(torsoSamples.compactMap(\.torsoInclinationDegrees)),
+            torsoAxisMAD: mad(torsoSamples.compactMap(\.torsoAxisDeviation)),
+            shoulderSlopeMAD: mad(shoulderSlopeSamples.compactMap(\.shoulderSlopeDegrees)),
+            blinkOpeningBaseline: blinkOpeningBaseline,
+            familySampleCounts: familySampleCounts
         )
+    }
+
+    private static func coherentSamples(
+        _ samples: [PostureRichGeometryMetrics],
+        maximumSampleGap: TimeInterval,
+        minimumSamples: Int
+    ) -> [PostureRichGeometryMetrics] {
+        guard samples.count >= minimumSamples else { return [] }
+        for pair in zip(samples, samples.dropFirst()) {
+            guard pair.1.capturedAt > pair.0.capturedAt,
+                  pair.1.capturedAt - pair.0.capturedAt <= maximumSampleGap else {
+                return []
+            }
+        }
+        return samples
+    }
+
+    private static func coherentTimedSamples<T>(
+        _ samples: [T],
+        timestamp: (T) -> TimeInterval,
+        maximumSampleGap: TimeInterval,
+        minimumSamples: Int
+    ) -> [T] {
+        guard samples.count >= minimumSamples else { return [] }
+        for pair in zip(samples, samples.dropFirst()) {
+            let previous = timestamp(pair.0)
+            let current = timestamp(pair.1)
+            guard current > previous,
+                  current - previous <= maximumSampleGap else {
+                return []
+            }
+        }
+        return samples
     }
 
     private static func median(_ values: [Double]) -> Double? {

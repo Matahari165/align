@@ -23,6 +23,12 @@ typedef struct {
   float height;
 } AlignRTMPoseNormalizedCrop;
 
+/* Content rectangle occupied by the source crop inside the fixed model input.
+ * Coordinates are normalized to the model input (x: 0...1, y: 0...1). When
+ * the source crop has a different pixel aspect than 192:256, the remaining
+ * area is constant black padding rather than a geometric stretch. */
+typedef AlignRTMPoseNormalizedCrop AlignRTMPoseModelContentRect;
+
 typedef struct {
   float x;
   float y;
@@ -66,15 +72,28 @@ int AlignRTMPoseAnalyzeBGRA(
     uint64_t generation, float confidence_threshold, AlignRTMPoseResult *out);
 
 /* Pure, deterministic crop helper. All parameters and outputs are normalized
- * top-left image coordinates. Roll is intentionally not an input. */
+ * top-left image coordinates. Roll is intentionally not an input. The face
+ * anchor keeps its requested width when the aspect-correct height exceeds the
+ * frame; the tensor builder letterboxes that crop instead of shrinking it. */
 AlignRTMPoseNormalizedCrop AlignRTMPoseFaceAnchoredCrop(
     float face_center_x, float face_center_y, float face_width,
     float face_height, size_t image_width, size_t image_height);
+
+/* Computes the model-input content rectangle for a source crop. */
+AlignRTMPoseModelContentRect AlignRTMPoseModelContentRectForCrop(
+    AlignRTMPoseNormalizedCrop crop, size_t image_width, size_t image_height);
 
 /* Maps a model-space point (0...1, top-left) back to the source image. */
 void AlignRTMPoseProjectPoint(AlignRTMPoseNormalizedCrop crop,
                               float local_x, float local_y, float *x,
                               float *y);
+
+/* Inverse of the letterbox mapping. Returns zero when the model-space point
+ * lies in padding or cannot be projected into the source image. */
+int AlignRTMPoseProjectPointWithContent(
+    AlignRTMPoseNormalizedCrop crop,
+    AlignRTMPoseModelContentRect content,
+    float local_x, float local_y, float *x, float *y);
 
 AlignRTMPosePoint AlignRTMPoseResultPointAt(const AlignRTMPoseResult *result,
                                             size_t index);

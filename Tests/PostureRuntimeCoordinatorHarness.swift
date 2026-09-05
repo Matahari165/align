@@ -151,6 +151,95 @@ private enum PostureRuntimeCoordinatorHarness {
         precondition(sourceCalibration.finishCalibration(),
                      "la calibration doit être alimentée par le chemin source-specific corps")
 
+        var shoulderOnlyCalibration = PostureRuntimeCoordinator()
+        shoulderOnlyCalibration.reset(generation: 11, contextKey: context.key)
+        shoulderOnlyCalibration.beginCalibration()
+        let shoulderOnlyPoints = points.filter { point in
+            point.id != .leftHip && point.id != .rightHip
+        }
+        var shoulderOnlyLastSnapshot: PostureObservationsSnapshot?
+        for sample in 1...12 {
+            let body = UpperBodyResult(
+                descriptor: descriptor, state: .detected, generation: 11,
+                sampleID: UInt64(sample), capturedAt: Double(sample),
+                producedAt: Double(sample) + 0.01,
+                points: shoulderOnlyPoints, contours: []
+            )
+            let geometry = PostureRichGeometryEvaluator.make(
+                result: body, face: nil, context: context
+            )
+            shoulderOnlyLastSnapshot = shoulderOnlyCalibration.consumeBody(
+                geometry, now: body.producedAt
+            )?.snapshot
+        }
+        precondition(shoulderOnlyCalibration.finishCalibration(),
+                     "les épaules doivent produire une baseline sans hanches")
+        precondition(
+            shoulderOnlyCalibration.baselineSnapshot?.familySampleCounts?.torso == 0 &&
+            shoulderOnlyCalibration.baselineSnapshot?.familySampleCounts?.shoulderSlope == 12 &&
+            shoulderOnlyCalibration.baselineSnapshot?.familySampleCounts?.shoulderElevation == 12,
+            "la maturité de calibration doit être publiée par famille")
+        precondition(shoulderOnlyLastSnapshot?.signal(.shoulderSlope).quality == .good &&
+                     shoulderOnlyLastSnapshot?.signal(.torsoInclination).availability != .available,
+                     "une baseline épaules partielle ne doit ni bloquer les épaules ni valider le torse")
+
+        var faceOnlyCalibration = PostureRuntimeCoordinator()
+        faceOnlyCalibration.reset(generation: 13, contextKey: context.key)
+        faceOnlyCalibration.beginCalibration()
+        var faceOnlyLastSnapshot: PostureObservationsSnapshot?
+        for sample in 1...12 {
+            let face = PostureFaceObservation(
+                generation: 13, sampleID: UInt64(sample), capturedAt: Double(sample),
+                facePointCount: 50, contextKey: context.key,
+                signal: faceAfterLossSignal()
+            )
+            faceOnlyLastSnapshot = faceOnlyCalibration.consumeFace(
+                face, now: face.capturedAt + 0.01
+            )?.snapshot
+        }
+        precondition(faceOnlyCalibration.finishCalibration(),
+                     "le visage doit pouvoir calibrer la proximité indépendamment du corps")
+        precondition(
+            faceOnlyCalibration.baselineSnapshot?.familySampleCounts?.proximity == 12 &&
+            faceOnlyCalibration.baselineSnapshot?.familySampleCounts?.blinkOpening == 12 &&
+            faceOnlyLastSnapshot?.signal(.proximity).quality == .good,
+            "la baseline visage indépendante doit publier sa maturité et sa proximité")
+
+        var slowMixedCalibration = PostureRuntimeCoordinator()
+        slowMixedCalibration.reset(generation: 14, contextKey: context.key)
+        slowMixedCalibration.beginCalibration()
+        var faceSampleID: UInt64 = 1
+        for bodyIndex in 0..<16 { // huit secondes de corps à environ 2 Hz
+            let intervalStart = Double(bodyIndex) * 0.5
+            var latestFace: PostureFaceObservation?
+            for tick in 0..<5 { // visage à environ 10 Hz
+                let face = PostureFaceObservation(
+                    generation: 14, sampleID: faceSampleID,
+                    capturedAt: intervalStart + Double(tick) * 0.1,
+                    facePointCount: 50, contextKey: context.key,
+                    signal: faceAfterLossSignal()
+                )
+                faceSampleID += 1
+                latestFace = face
+                _ = slowMixedCalibration.consumeFace(face, now: face.capturedAt + 0.01)
+            }
+            guard let latestFace else { preconditionFailure("face fixture absent") }
+            let body = UpperBodyResult(
+                descriptor: descriptor, state: .detected, generation: 14,
+                sampleID: UInt64(bodyIndex + 1), capturedAt: intervalStart + 0.45,
+                producedAt: intervalStart + 0.46, points: points, contours: []
+            )
+            let geometry = PostureRichGeometryEvaluator.make(
+                result: body, face: latestFace, context: context
+            )
+            _ = slowMixedCalibration.consumeBody(geometry, now: body.producedAt)
+        }
+        precondition(slowMixedCalibration.finishCalibration(),
+                     "le flux mixte lent doit produire une baseline")
+        precondition(
+            slowMixedCalibration.baselineSnapshot?.familySampleCounts?.shoulderOpening == 16,
+            "la fenêtre visage doit couvrir les corps à 2 Hz pendant huit secondes")
+
         var isolatedSources = PostureRuntimeCoordinator()
         isolatedSources.reset(generation: 12, contextKey: context.key)
         if let savedBaseline {
