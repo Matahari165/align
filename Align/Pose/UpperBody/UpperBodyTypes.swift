@@ -122,10 +122,18 @@ nonisolated struct UpperBodyEngineDescriptor: Equatable, Sendable {
 nonisolated enum UpperBodyRegionOfInterestSource: String, Equatable, Sendable {
     case sameFrameFace
     case recentFace
+    /// A bounded, center-biased crop used only when Vision has no face anchor
+    /// for the current frame. The model still has to return confident points;
+    /// this source is never itself evidence that a person was detected.
+    case fullFrameFallback
 }
 
 nonisolated struct UpperBodyRegionOfInterest: Equatable, Sendable {
     static let maximumAnchorSkew: TimeInterval = 0.75
+    /// Keep a small border out of the crop so edge padding cannot be mistaken
+    /// for an anatomical point. This is deliberately a broad fallback, not a
+    /// calibration rectangle.
+    static let fullFrameFallbackRect = CGRect(x: 0.05, y: 0.02, width: 0.90, height: 0.96)
 
     let rect: CGRect
     let capturedAt: TimeInterval
@@ -133,6 +141,22 @@ nonisolated struct UpperBodyRegionOfInterest: Equatable, Sendable {
     let anchorSampleID: UInt64
     let generation: UInt64
     let source: UpperBodyRegionOfInterestSource
+
+    static func fullFrameFallback(
+        capturedAt: TimeInterval,
+        sampleID: UInt64,
+        generation: UInt64
+    ) -> Self? {
+        let roi = Self(
+            rect: Self.fullFrameFallbackRect,
+            capturedAt: capturedAt,
+            anchorCapturedAt: capturedAt,
+            anchorSampleID: sampleID,
+            generation: generation,
+            source: .fullFrameFallback
+        )
+        return roi.isValid ? roi : nil
+    }
 
     var isValid: Bool {
         rect.origin.x.isFinite && rect.origin.y.isFinite &&
@@ -160,6 +184,7 @@ nonisolated struct UpperBodyRegionOfInterest: Equatable, Sendable {
         switch source {
         case .sameFrameFace: return skew == 0
         case .recentFace: return skew > 0
+        case .fullFrameFallback: return skew == 0
         }
     }
 }

@@ -29,13 +29,20 @@ nonisolated struct UpperBodyAdmissionRejection: Equatable, Sendable {
 }
 
 /// Counters are owned by the sample-queue session and reset at every
-/// activation. They distinguish a frame rejected before inference from a
-/// partial result caused by a missing/invalid ROI.
+/// activation. They distinguish frames that reached the engine from results
+/// that were returned as partial, including fail-closed ROI validation.
 nonisolated struct UpperBodyEngineSessionDiagnostics: Equatable, Sendable {
     let attempts: UInt64
     let returnedResults: UInt64
+    /// Number of frames that actually reached the pose engine.
+    let inferenceResults: UInt64
+    /// Partial outputs from the engine or the final fail-closed path if the
+    /// bounded fallback cannot be constructed.
+    let partialResults: UInt64
     let rejected: UInt64
     let roiRejected: UInt64
+    /// Number of calls that used the bounded full-frame fallback crop.
+    let fallbackAttempts: UInt64
     let rejectionCounts: [UpperBodyAdmissionRejectionReason: UInt64]
     let lastRejection: UpperBodyAdmissionRejection?
     let engineRuns: UInt64
@@ -57,7 +64,10 @@ nonisolated struct UpperBodyEngineSession: @unchecked Sendable {
     private(set) var lastRejection: UpperBodyAdmissionRejection?
     private(set) var analysisAttempts: UInt64
     private(set) var returnedResults: UInt64
+    private(set) var inferenceResults: UInt64
+    private(set) var partialResults: UInt64
     private(set) var roiRejected: UInt64
+    private(set) var fallbackAttempts: UInt64
     private(set) var rejectionCounts: [UpperBodyAdmissionRejectionReason: UInt64]
     private(set) var engineRuns: UInt64
     private(set) var lastEngineDuration: TimeInterval?
@@ -80,7 +90,10 @@ nonisolated struct UpperBodyEngineSession: @unchecked Sendable {
         self.lastRejection = nil
         self.analysisAttempts = 0
         self.returnedResults = 0
+        self.inferenceResults = 0
+        self.partialResults = 0
         self.roiRejected = 0
+        self.fallbackAttempts = 0
         self.rejectionCounts = [:]
         self.engineRuns = 0
         self.lastEngineDuration = nil
@@ -93,8 +106,11 @@ nonisolated struct UpperBodyEngineSession: @unchecked Sendable {
         UpperBodyEngineSessionDiagnostics(
             attempts: analysisAttempts,
             returnedResults: returnedResults,
+            inferenceResults: inferenceResults,
+            partialResults: partialResults,
             rejected: rejectionCounts.values.reduce(0, +),
             roiRejected: roiRejected,
+            fallbackAttempts: fallbackAttempts,
             rejectionCounts: rejectionCounts,
             lastRejection: lastRejection,
             engineRuns: engineRuns,
@@ -114,7 +130,10 @@ nonisolated struct UpperBodyEngineSession: @unchecked Sendable {
         lastRejection = nil
         analysisAttempts = 0
         returnedResults = 0
+        inferenceResults = 0
+        partialResults = 0
         roiRejected = 0
+        fallbackAttempts = 0
         rejectionCounts = [:]
         engineRuns = 0
         lastEngineDuration = nil
@@ -131,7 +150,10 @@ nonisolated struct UpperBodyEngineSession: @unchecked Sendable {
         lastRejection = nil
         analysisAttempts = 0
         returnedResults = 0
+        inferenceResults = 0
+        partialResults = 0
         roiRejected = 0
+        fallbackAttempts = 0
         rejectionCounts = [:]
         engineRuns = 0
         lastEngineDuration = nil
@@ -176,31 +198,41 @@ nonisolated struct UpperBodyEngineSession: @unchecked Sendable {
         }
         watermark = (frame.capturedAt, frame.sampleID)
 
-        guard let regionOfInterest = frame.regionOfInterest,
-              regionOfInterest.isAdmissible(
-                forFrameCapturedAt: frame.capturedAt,
-                generation: frame.generation
-              ) else {
-            roiRejected &+= 1
-            latestResult = nil
-            returnedResults &+= 1
-            lastRejection = nil
-            return UpperBodyResult(
-                descriptor: engine.descriptor,
-                state: .partial,
-                generation: activeGeneration,
-                sampleID: frame.sampleID,
+        let regionOfInterest: UpperBodyRegionOfInterest
+        if let providedROI = frame.regionOfInterest,
+           providedROI.isAdmissible(
+               forFrameCapturedAt: frame.capturedAt,
+               generation: frame.generation
+           ) {
+            regionOfInterest = providedROI
+        } else {
+            // Vision may lose the face for one frame while the person remains
+            // visible, or hand us an anchor that is stale/incoherent. In both
+            // cases run RTMPose on a broad, bounded crop. The model still has
+            // to return valid/confident points; this fallback never fabricates
+            // geometry or asserts that a person is present.
+            if frame.regionOfInterest != nil { roiRejected &+= 1 }
+            guard let fallback = UpperBodyRegionOfInterest.fullFrameFallback(
                 capturedAt: frame.capturedAt,
-                producedAt: admissionTime,
-                points: [],
-                contours: [],
-                regionOfInterest: nil,
-                diagnostics: nil
-            )
+                sampleID: frame.sampleID,
+                generation: frame.generation
+            ) else {
+                return partialResult(for: frame, producedAt: admissionTime)
+            }
+            fallbackAttempts &+= 1
+            regionOfInterest = fallback
         }
 
         let engineStartedAt = clock()
-        let output = engine.analyze(frame)
+        let engineFrame = UpperBodyFrame(
+            pixelBuffer: frame.pixelBuffer,
+            capturedAt: frame.capturedAt,
+            sampleID: frame.sampleID,
+            generation: frame.generation,
+            regionOfInterest: regionOfInterest
+        )
+        let output = engine.analyze(engineFrame)
+        inferenceResults &+= 1
         let producedAt = clock()
         recordEngineDuration(startedAt: engineStartedAt, endedAt: producedAt)
         guard producedAt.isFinite else {
@@ -230,14 +262,37 @@ nonisolated struct UpperBodyEngineSession: @unchecked Sendable {
             points: points,
             contours: contours,
             regionOfInterest: keepsGeometry
-                ? (output.regionOfInterest ?? frame.regionOfInterest)
+                ? (output.regionOfInterest ?? regionOfInterest)
                 : nil,
             diagnostics: output.diagnostics
         )
         latestResult = keepsGeometry && !points.isEmpty ? result : nil
         returnedResults &+= 1
+        if result.state == .partial { partialResults &+= 1 }
         lastRejection = nil
         return result
+    }
+
+    private mutating func partialResult(
+        for frame: UpperBodyFrame,
+        producedAt: TimeInterval
+    ) -> UpperBodyResult {
+        latestResult = nil
+        returnedResults &+= 1
+        partialResults &+= 1
+        lastRejection = nil
+        return UpperBodyResult(
+            descriptor: engine.descriptor,
+            state: .partial,
+            generation: activeGeneration ?? frame.generation,
+            sampleID: frame.sampleID,
+            capturedAt: frame.capturedAt,
+            producedAt: producedAt,
+            points: [],
+            contours: [],
+            regionOfInterest: nil,
+            diagnostics: nil
+        )
     }
 
     @discardableResult

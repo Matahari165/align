@@ -19,6 +19,9 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
         upperBodyEngineID: "—",
         upperBodyAttempts: 0,
         upperBodyResults: 0,
+        upperBodyInferenceResults: 0,
+        upperBodyPartialResults: 0,
+        upperBodyFallbackAttempts: 0,
         upperBodyLastStatus: "—",
         upperBodyLastRejectionReason: nil,
         upperBodyRejected: 0,
@@ -62,6 +65,9 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
     let upperBodyEngineID: String
     let upperBodyAttempts: Int
     let upperBodyResults: Int
+    let upperBodyInferenceResults: Int
+    let upperBodyPartialResults: Int
+    let upperBodyFallbackAttempts: Int
     let upperBodyLastStatus: String
     let upperBodyLastRejectionReason: String?
     let upperBodyRejected: Int
@@ -108,7 +114,7 @@ nonisolated struct CameraAnalysisDiagnostics: Sendable {
         let scoreRange = formattedRange(upperBodyScoreMinimum, upperBodyScoreMaximum)
         let latency = upperBodyLatency.map { String(format: "%.0f ms", $0 * 1_000) } ?? "—"
         let age = upperBodyResultAge.map { String(format: "%.0f ms", $0 * 1_000) } ?? "—"
-        let engine = " · upperBody \(upperBodyEngineID) attempts/results \(upperBodyAttempts)/\(upperBodyResults) · statut \(upperBodyLastStatus) · repères valides \(upperBodyValidLandmarks) · SimCC \(simCCRange) · scores \(scoreRange) · épaules G/D \(leftShoulder)/\(rightShoulder) · latence \(latency) · âge \(age)"
+        let engine = " · upperBody \(upperBodyEngineID) tentatives/inférences/retours \(upperBodyAttempts)/\(upperBodyInferenceResults)/\(upperBodyResults) · partiels \(upperBodyPartialResults) · fallbacks \(upperBodyFallbackAttempts) · statut \(upperBodyLastStatus) · repères valides \(upperBodyValidLandmarks) · SimCC \(simCCRange) · scores \(scoreRange) · épaules G/D \(leftShoulder)/\(rightShoulder) · latence \(latency) · âge \(age)"
         let rejection = upperBodyLastRejectionReason.map { " · rejet \($0)" } ?? ""
         let engineP95 = upperBodyEngineDurationP95.map { String(format: "%.0f ms", $0 * 1_000) } ?? "—"
         let engineMax = upperBodyEngineDurationMax.map { String(format: "%.0f ms", $0 * 1_000) } ?? "—"
@@ -1138,6 +1144,10 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     private let sampleQueue: DispatchQueue
     private var analysisCadence = AnalysisCadenceController()
     private var isActive = false
+    /// A capture session can emit frames before the MainActor receives the
+    /// ``.running`` confirmation. Publish one liveness signal per activation
+    /// so that this reconciliation path cannot enqueue one task per frame.
+    private var frameLivenessGate = FrameLivenessGate()
     private var generation = PoseProcessingGeneration(operationID: 0, activationID: 0)
     private var livenessEpoch: UInt64 = 0
     private var cameraIdentifier = "default"
@@ -1245,6 +1255,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     func setActive(_ isActive: Bool, generation: PoseProcessingGeneration) {
         self.isActive = isActive
         self.generation = generation
+        frameLivenessGate.reset()
         faceTargetContinuity.reset()
         faceTargetContextKey = ""
         postureRuntimeContextKey = ""
@@ -1470,7 +1481,9 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
-        onFrameLiveness(livenessEpoch)
+        if frameLivenessGate.claim() {
+            onFrameLiveness(livenessEpoch)
+        }
         guard isActive else { return }
         frameCallbacks += 1
 
@@ -2523,6 +2536,9 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             upperBodyEngineID: upperBodySession.descriptor.id,
             upperBodyAttempts: upperBodyAttempts,
             upperBodyResults: upperBodyResults,
+            upperBodyInferenceResults: Int(upperBodySession.admissionDiagnostics.inferenceResults),
+            upperBodyPartialResults: Int(upperBodySession.admissionDiagnostics.partialResults),
+            upperBodyFallbackAttempts: Int(upperBodySession.admissionDiagnostics.fallbackAttempts),
             upperBodyLastStatus: upperBodyLastStatus,
             upperBodyLastRejectionReason: upperBodyLastRejectionReason,
             upperBodyRejected: Int(upperBodySession.admissionDiagnostics.rejected),

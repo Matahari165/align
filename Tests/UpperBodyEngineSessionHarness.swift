@@ -127,9 +127,14 @@ private enum UpperBodyEngineSessionHarness {
         let missingROI = session.analyze(frame(
             buffer, generation: 7, timestamp: 10.01, sampleID: 2
         ))
-        expect(missingROI?.state == .partial && fake.analyses == 1 &&
-                session.currentResult == nil,
-               "une ROI absente doit vider la géométrie sans appeler le moteur")
+        expect(missingROI?.state == .detected && fake.analyses == 2 &&
+                missingROI?.regionOfInterest?.source == .fullFrameFallback &&
+                session.currentResult?.sampleID == 2,
+               "une ROI absente doit utiliser le crop plein cadre borné")
+        expect(session.admissionDiagnostics.inferenceResults == 2 &&
+                session.admissionDiagnostics.partialResults == 0 &&
+                session.admissionDiagnostics.fallbackAttempts == 1,
+               "les compteurs doivent distinguer l’inférence réelle du partiel")
         let wrongGenerationROI = UpperBodyRegionOfInterest(
             rect: testROI.rect,
             capturedAt: 10.02,
@@ -142,8 +147,9 @@ private enum UpperBodyEngineSessionHarness {
             buffer, generation: 7, timestamp: 10.02, sampleID: 3,
             regionOfInterest: wrongGenerationROI
         ))
-        expect(rejectedGenerationROI?.state == .partial && fake.analyses == 1,
-               "une ROI d’ancienne génération ne doit pas atteindre le moteur")
+        expect(rejectedGenerationROI?.state == .detected && fake.analyses == 3 &&
+                rejectedGenerationROI?.regionOfInterest?.source == .fullFrameFallback,
+               "une ROI d’ancienne génération doit passer par le fallback borné")
         let staleROI = UpperBodyRegionOfInterest(
             rect: testROI.rect,
             capturedAt: 10.80,
@@ -157,12 +163,18 @@ private enum UpperBodyEngineSessionHarness {
             buffer, generation: 7, timestamp: 10.80, sampleID: 4,
             regionOfInterest: staleROI
         ))
-        expect(rejectedStaleROI?.state == .partial && fake.analyses == 1,
-               "une ancre au-delà du skew doit être refusée avant le moteur")
+        expect(rejectedStaleROI?.state == .detected && fake.analyses == 4 &&
+                rejectedStaleROI?.regionOfInterest?.source == .fullFrameFallback,
+               "une ancre au-delà du skew doit passer par le fallback borné")
+        expect(session.admissionDiagnostics.inferenceResults == 4 &&
+                session.admissionDiagnostics.partialResults == 0 &&
+                session.admissionDiagnostics.fallbackAttempts == 3 &&
+                session.admissionDiagnostics.roiRejected == 2,
+               "les ROI invalides doivent être comptées puis récupérées par inférence")
         clock.now = 10.02
         expect(session.analyze(frame(
             buffer, generation: 6, timestamp: 10.03, sampleID: 5
-        )) == nil && fake.analyses == 1 &&
+        )) == nil && fake.analyses == 4 &&
                session.lastRejectionReason == .generationMismatch,
                "une ancienne génération doit être inerte avec une raison typée")
         clock.now = 10.80
@@ -170,14 +182,14 @@ private enum UpperBodyEngineSessionHarness {
             buffer, generation: 7, timestamp: 10.80, sampleID: 4,
             regionOfInterest: staleROI
         ))
-        expect(duplicateResult == nil && fake.analyses == 1 &&
+        expect(duplicateResult == nil && fake.analyses == 4 &&
                session.lastRejectionReason == .duplicateFrame,
                "un doublon ne doit pas atteindre le moteur et doit être diagnostiqué")
         clock.now = 10.51
         expect(session.analyze(frame(
             buffer, generation: 7, timestamp: 10.2, sampleID: 6,
             regionOfInterest: testROI
-        )) == nil && fake.analyses == 1,
+        )) == nil && fake.analyses == 4,
                "une frame déjà plus vieille que le TTL doit être rejetée avant inférence")
 
         guard let accepted else { fatalError("accepted result") }
@@ -302,7 +314,7 @@ private enum UpperBodyEngineSessionHarness {
         expect(session.analyze(frame(
             buffer, generation: 7, timestamp: 11.0, sampleID: 7,
             regionOfInterest: refreshedROI
-        ))?.state == .detected && fake.analyses == 2,
+        ))?.state == .detected && fake.analyses == 5,
                "une nouvelle ROI fraîche doit réactiver la géométrie")
         expect(session.expire(at: 11.29, generation: 7) == nil,
                "une géométrie fraîche ne doit pas expirer trop tôt")
@@ -410,7 +422,8 @@ private enum UpperBodyEngineSessionHarness {
         slowStreamClock.now = 60.0
         expect(slowStreamSession.analyze(frame(
             buffer, generation: 43, timestamp: 60.0, sampleID: 1
-        ))?.state == .partial, "une ROI absente reste un résultat partiel")
+        )) == nil && slowStreamSession.lastRejectionReason == .postInferenceExpired,
+               "une ROI absente doit aussi passer par l’inférence réelle")
         for index in 1...603 {
             let capturedAt = 62.0 + Double(index - 1) * 2.0
             slowStreamClock.now = capturedAt
@@ -427,11 +440,13 @@ private enum UpperBodyEngineSessionHarness {
                 sampleID: UInt64(index + 1), regionOfInterest: roi
             )) == nil, "une inférence lente doit être expirée après son retour")
         }
-        expect(slowStreamSession.returnedResults == 1 &&
-               slowStreamSession.engineRuns == 603 &&
-               slowStreamSession.rejectionCounts[.postInferenceExpired] == 603 &&
+        expect(slowStreamSession.returnedResults == 0 &&
+               slowStreamSession.inferenceResults == 604 &&
+               slowStreamSession.engineRuns == 604 &&
+               slowStreamSession.partialResults == 0 &&
+               slowStreamSession.rejectionCounts[.postInferenceExpired] == 604 &&
                slowStreamSession.lastRejectionReason == .postInferenceExpired,
-               "604 tentatives avec moteur lent doivent exposer une seule sortie partielle et 603 rejets TTL")
+               "604 tentatives avec moteur lent doivent exposer 604 inférences et rejets TTL")
 
         print("UpperBodyEngineSessionHarness: OK")
     }

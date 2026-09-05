@@ -54,9 +54,8 @@ nonisolated enum RTMPoseUpperBodyCropPolicy {
         return roi.isValid ? roi : nil
     }
 
-    /// Legacy diagnostic helper only. Production analysis must provide a
-    /// fresh face ROI; this full-frame-shaped rectangle is never selected by
-    /// `RTMPoseUpperBodyAdapter` as a silent fallback.
+    /// Conservative near-full-frame crop used when no fresh face ROI exists.
+    /// Keeping the inset explicit avoids depending on detector edge padding.
     static func fixed(imageSize: CGSize) -> AlignRTMPoseNormalizedCrop {
         _ = imageSize
         return AlignRTMPoseNormalizedCrop(x: 0.05, y: 0.02, width: 0.90, height: 0.96)

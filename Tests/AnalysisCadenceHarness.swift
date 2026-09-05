@@ -35,8 +35,8 @@ private enum AnalysisCadenceHarness {
             isWindowMiniaturized: false,
             benchmarkExperiment: nil
         ))
-        expect(!cadence.shouldAnalyze(at: 10.19), "l’arrière-plan ne doit pas dépasser 10 Hz")
-        expect(cadence.shouldAnalyze(at: 10.2), "l’arrière-plan doit accepter 10 Hz")
+        expect(!cadence.shouldAnalyze(at: 10.59), "l’arrière-plan ne doit pas dépasser 2 Hz")
+        expect(cadence.shouldAnalyze(at: 10.6), "l’arrière-plan doit accepter 2 Hz")
         expect(!cadence.presentation.publishesVisualUpdates, "le rendu fréquent doit être coupé en arrière-plan")
 
         cadence.updatePresentation(AnalysisPresentationState(
@@ -44,7 +44,7 @@ private enum AnalysisCadenceHarness {
             isWindowMiniaturized: true,
             benchmarkExperiment: nil
         ))
-        expect(approximately(cadence.presentation.faceInterval, 0.1), "une fenêtre réduite doit utiliser 10 Hz")
+        expect(approximately(cadence.presentation.faceInterval, 0.5), "une fenêtre réduite doit utiliser 2 Hz")
 
         cadence.updatePresentation(AnalysisPresentationState(
             isApplicationActive: false,
@@ -117,6 +117,12 @@ private enum AnalysisCadenceHarness {
         expect(callbackBudget.claim(.face), "le callback peut réserver le visage")
         expect(!callbackBudget.claim(.upperBody),
                "un callback visage ne peut jamais lancer upperBody simultanément")
+
+        var livenessGate = FrameLivenessGate()
+        expect(livenessGate.claim(), "la première frame doit pouvoir réconcilier la liveness")
+        expect(!livenessGate.claim(), "les frames suivantes ne doivent pas créer de tâche MainActor")
+        livenessGate.reset()
+        expect(livenessGate.claim(), "une nouvelle activation doit réarmer la liveness")
 
         var capacityFace = AnalysisCadenceController()
         var capacityUpperBody = UpperBodyCadenceController()

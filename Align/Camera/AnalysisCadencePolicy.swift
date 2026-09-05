@@ -160,6 +160,23 @@ nonisolated struct VisionCallbackBudget: Sendable {
     }
 }
 
+/// Allows the first capture callback of an activation to reconcile camera
+/// liveness, while making all subsequent callbacks allocation-free. The gate
+/// is confined to the sample queue by its owner and reset on every activation.
+nonisolated struct FrameLivenessGate: Sendable {
+    private(set) var didPublish = false
+
+    mutating func claim() -> Bool {
+        guard !didPublish else { return false }
+        didPublish = true
+        return true
+    }
+
+    mutating func reset() {
+        didPublish = false
+    }
+}
+
 nonisolated struct UpperBodyCadenceController: Sendable {
     private(set) var lastAttemptUptime: TimeInterval?
 
@@ -255,7 +272,7 @@ nonisolated struct AnalysisPresentationState: Equatable, Sendable {
 
     var faceInterval: TimeInterval {
         if isBenchmarkRunning { return 0.2 }
-        return 0.1
+        return isForegroundVisible ? 0.1 : 0.5
     }
 
     var upperBodyInterval: TimeInterval {
