@@ -24,7 +24,7 @@ Les sept observations peuvent déclencher un rappel, uniquement avec une preuve 
 
 Les clignements utilisent deux approches :
 
-- un rappel pratique après une période prolongée d'yeux ouverts continuellement observés ; ce délai de 20 secondes est une préférence de rappel, pas une norme médicale ;
+- un rappel pratique après une période prolongée d'yeux ouverts continuellement observés ; le profil Sensible utilise 15 secondes, le profil équilibré 20 secondes et le profil discret 30 secondes. Ce sont des préférences de rappel, pas des normes médicales ;
 - une baisse durable par rapport à un repère personnel appris sur trois fenêtres indépendantes d'une minute, chacune comprenant au moins 45 secondes observables.
 
 Le débit brut peut être affiché pendant l'apprentissage, sans dire si la personne cligne assez. Une fermeture des yeux, une preuve invalide ou une interruption du suivi casse le compteur de la longue période d'yeux ouverts.

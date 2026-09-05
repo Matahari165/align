@@ -190,14 +190,24 @@ private enum PostureAlertCoordinatorHarness {
         expect(!invalidated.commitDelivery(invalidatedCandidate, now: 2.1),
                "une réservation invalidée ne doit pas être confirmée")
 
+        var delayedDelivery = coordinator([.estimatedBlinks], config: config)
+        _ = delayedDelivery.consume(snapshot([signal(.estimatedBlinks, at: 0)], at: 0), now: 0)
+        guard let delayedCandidate = delayedDelivery.consume(
+            snapshot([signal(.estimatedBlinks, at: 2)], at: 2), now: 2
+        ) else { fatalError("la réservation blink doit exister") }
+        expect(delayedDelivery.ownsReservation(delayedCandidate, now: 3.5),
+               "un délai d'autorisation ou de livraison de quelques secondes doit rester livrable")
+        expect(delayedDelivery.commitDelivery(delayedCandidate, now: 3.5),
+               "un rappel blink valide doit être confirmable après un délai asynchrone")
+
         var expired = coordinator([.proximity], config: config)
         _ = expired.consume(snapshot([signal(.proximity, at: 0)], at: 0), now: 0)
         guard let expiredCandidate = expired.consume(
             snapshot([signal(.proximity, at: 2)], at: 2), now: 2
         ) else { fatalError("la réservation à expirer doit exister") }
-        expect(!expired.ownsReservation(expiredCandidate, now: 2.8),
-               "le silence au-delà du TTL doit invalider la réservation")
-        expect(!expired.commitDelivery(expiredCandidate, now: 2.8),
+        expect(!expired.ownsReservation(expiredCandidate, now: 7.1),
+               "un silence prolongé au-delà du bail de livraison doit invalider la réservation")
+        expect(!expired.commitDelivery(expiredCandidate, now: 7.1),
                "une preuve silencieuse expirée ne doit pas être confirmée")
 
         var renewed = coordinator([.proximity], config: config)

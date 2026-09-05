@@ -1169,6 +1169,7 @@ nonisolated struct PostureRichSignalConfiguration: Equatable, Sendable {
         value.shoulderSlopeExitDegrees = 0.35
         value.shoulderSlopeRequiredDuration = 1.0
         value.requiredDuration = 0.8
+        value.blinkPauseReminderAfter = 15
         return value
     }
 
@@ -1182,6 +1183,7 @@ nonisolated struct PostureRichSignalConfiguration: Equatable, Sendable {
         value.shoulderElevationExitDelta = 0.03
         value.shoulderSlopeRequiredDuration = 1.5
         value.requiredDuration = 1.5
+        value.blinkPauseReminderAfter = 30
         return value
     }
 }
@@ -2741,13 +2743,14 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
             )
         }
         if blinkPauseReminder {
+            let reminderSeconds = String(format: "%.0f", configuration.blinkPauseReminderAfter)
             blinkRateAssessment = PostureBlinkRateAssessment(
                 normalizedValue: 0,
                 direction: .below,
                 belowDuration: 0,
                 recoveryDuration: 0,
                 quality: .good,
-                reason: "pause clignement prolongée : yeux ouverts depuis 20 secondes"
+                reason: "pause clignement prolongée : yeux ouverts depuis \(reminderSeconds) secondes"
             )
         }
         let effectiveBlinkState: PostureRichSignalState = blinkPauseReminder ? .available : blinkState

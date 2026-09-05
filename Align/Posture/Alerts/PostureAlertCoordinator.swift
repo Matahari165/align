@@ -164,6 +164,11 @@ nonisolated struct PostureAlertSettingsStore {
 
 /// Pure arbitration. Delivery and authorization remain MainActor side effects.
 nonisolated struct PostureAlertCoordinator: Sendable {
+    /// A notification request may await macOS authorization or delivery. Keep
+    /// that in-flight reservation alive slightly longer than the observation
+    /// TTL, while still bounding how long a silent runtime can deliver it.
+    private static let deliveryLeaseDuration: TimeInterval = 5
+
     private let baseSignalConfigurations: [PostureObservationSignalID: PostureSignalAlertConfiguration]
     private(set) var signalConfigurations: [PostureObservationSignalID: PostureSignalAlertConfiguration]
     let globalConfiguration: PostureGlobalAlertConfiguration
@@ -228,13 +233,10 @@ nonisolated struct PostureAlertCoordinator: Sendable {
                 if state.attentionEpisodeID != episodeID {
                     state.reservedEpisodeID = nil
                     state.reservedReservationID = nil
+                    state.deliveryLeaseExpiresAt = nil
                     state.attentionEpisodeID = episodeID
                     state.attentionSince = now
                 }
-                let ttl = PostureObservationEngine.freshnessTTL(for: signal.signalID)
-                let evidenceAge = signal.observedAt.map { evidenceNow - $0 } ?? .infinity
-                let freshnessRemaining = ttl - evidenceAge
-                state.freshnessExpiresAt = now + freshnessRemaining
                 if state.reservedEpisodeID == nil,
                    now >= state.retryNotBefore,
                    now - (state.attentionSince ?? now) >= configuration.persistence,
@@ -249,7 +251,7 @@ nonisolated struct PostureAlertCoordinator: Sendable {
                 state.attentionEpisodeID = nil
                 state.reservedEpisodeID = nil
                 state.reservedReservationID = nil
-                state.freshnessExpiresAt = nil
+                state.deliveryLeaseExpiresAt = nil
             }
             states[signal.signalID] = state
         }
@@ -279,6 +281,7 @@ nonisolated struct PostureAlertCoordinator: Sendable {
         let reservationID = nextReservationID
         state.reservedEpisodeID = episodeID
         state.reservedReservationID = reservationID
+        state.deliveryLeaseExpiresAt = now + Self.deliveryLeaseDuration
         state.lastScheduledAt = now
         states[signal.signalID] = state
         return PostureAlertCandidate(
@@ -303,7 +306,7 @@ nonisolated struct PostureAlertCoordinator: Sendable {
               state.contextKey == candidate.contextKey,
               state.reservedEpisodeID == candidate.episodeID,
               state.reservedReservationID == candidate.reservationID,
-              state.freshnessExpiresAt.map({ now <= $0 }) ?? false,
+              state.deliveryLeaseExpiresAt.map({ now <= $0 }) ?? false,
               controls[candidate.signalID, default: .init()].permits(at: now)
         else { return false }
         return true
@@ -318,15 +321,16 @@ nonisolated struct PostureAlertCoordinator: Sendable {
               state.contextKey == candidate.contextKey,
               state.reservedEpisodeID == candidate.episodeID,
               state.reservedReservationID == candidate.reservationID else { return false }
-        guard state.freshnessExpiresAt.map({ now <= $0 }) ?? false else {
+        guard state.deliveryLeaseExpiresAt.map({ now <= $0 }) ?? false else {
             state.reservedEpisodeID = nil
             state.reservedReservationID = nil
-            state.freshnessExpiresAt = nil
+            state.deliveryLeaseExpiresAt = nil
             states[candidate.signalID] = state
             return false
         }
         state.reservedEpisodeID = nil
         state.reservedReservationID = nil
+        state.deliveryLeaseExpiresAt = nil
         state.retryNotBefore = 0
         state.deliveredEpisodeID = candidate.episodeID
         state.requiresRecovery = true
@@ -348,6 +352,7 @@ nonisolated struct PostureAlertCoordinator: Sendable {
               state.reservedReservationID == candidate.reservationID else { return }
         state.reservedEpisodeID = nil
         state.reservedReservationID = nil
+        state.deliveryLeaseExpiresAt = nil
         state.retryNotBefore = now + 5
         states[candidate.signalID] = state
     }
@@ -453,8 +458,9 @@ nonisolated struct PostureAlertCoordinator: Sendable {
         states[id]?.attentionEpisodeID = nil
         states[id]?.recoverySince = nil
         states[id]?.reservedEpisodeID = nil
+        states[id]?.reservedReservationID = nil
+        states[id]?.deliveryLeaseExpiresAt = nil
         states[id]?.retryNotBefore = 0
-        states[id]?.freshnessExpiresAt = nil
     }
 
     private func updateRecovery(
@@ -485,7 +491,7 @@ private nonisolated struct SignalAlertState: Sendable {
     var recoverySince: TimeInterval?
     var reservedEpisodeID: UInt64?
     var reservedReservationID: UInt64?
-    var freshnessExpiresAt: TimeInterval?
+    var deliveryLeaseExpiresAt: TimeInterval?
     var retryNotBefore: TimeInterval = 0
     var lastScheduledAt: TimeInterval?
     var deliveryTimes: [TimeInterval] = []
@@ -501,7 +507,7 @@ private nonisolated struct SignalAlertState: Sendable {
         recoverySince = nil
         reservedEpisodeID = nil
         reservedReservationID = nil
-        freshnessExpiresAt = nil
+        deliveryLeaseExpiresAt = nil
         retryNotBefore = 0
         lastScheduledAt = nil
     }

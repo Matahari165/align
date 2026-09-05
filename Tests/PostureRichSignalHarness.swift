@@ -843,6 +843,31 @@ private enum PostureRichSignalHarness {
                pauseEvaluation?.blinkRate.isAttention == true &&
                pauseEvaluation?.blinkRate.reason.contains("pause") == true,
                "un rappel d'yeux ouverts peut être fiable avant la maturité du débit sans inventer une fréquence")
+
+        var sensitivePauseConfiguration = PostureRichSignalConfiguration.sensitive
+        sensitivePauseConfiguration.blinkMinimumObservable = 30
+        var sensitivePauseEvaluator = PostureRichSignalEvaluator(
+            configuration: sensitivePauseConfiguration
+        )
+        var beforeSensitivePause: PostureRichEvaluation?
+        var sensitivePauseEvaluation: PostureRichEvaluation?
+        for index in 0...150 {
+            let timestamp = Double(index) * 0.1
+            sensitivePauseEvaluation = sensitivePauseEvaluator.consume(
+                geometry: automaticBody,
+                face: face(sampleID: UInt64(2000 + index), timestamp: timestamp,
+                           contextKey: context.key),
+                baseline: baseline, now: timestamp
+            )
+            if index == 149 {
+                beforeSensitivePause = sensitivePauseEvaluation
+            }
+        }
+        expect(beforeSensitivePause?.blinkRate.isAttention == false &&
+               sensitivePauseEvaluation?.blinkRate.isAttention == true &&
+               sensitivePauseEvaluation?.blinkRate.reason.contains("15 secondes") == true,
+               "le profil sensible doit rappeler après 15 secondes d'yeux ouverts observés")
+
         let afterPauseGap = pauseEvaluator.consume(
             geometry: automaticBody,
             face: face(sampleID: 922, timestamp: 3.0,
@@ -1288,8 +1313,9 @@ private enum PostureRichSignalHarness {
         expect(sensitiveConfiguration.shoulderSlopeEnterDegrees == 0.65 &&
                sensitiveConfiguration.shoulderSlopeExitDegrees == 0.35 &&
                sensitiveConfiguration.shoulderSlopeRequiredDuration == 1.0 &&
-               sensitiveConfiguration.requiredDuration == 0.8,
-               "le profil sensible ne doit assouplir que la pente des épaules")
+               sensitiveConfiguration.requiredDuration == 0.8 &&
+               sensitiveConfiguration.blinkPauseReminderAfter == 15,
+               "le profil sensible doit accélérer le rappel pratique sans toucher à la CV")
         var sensitiveEvaluator = PostureRichSignalEvaluator(
             configuration: sensitiveConfiguration
         )
