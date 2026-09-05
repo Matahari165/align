@@ -78,7 +78,7 @@ private enum PostureRuntimeCoordinatorHarness {
         } else {
             preconditionFailure("le scénario intercalé doit publier ses deux snapshots")
         }
-        precondition(lastSnapshot?.signal(.torsoInclination).quality == .good,
+        precondition(coordinator.baselineSnapshot?.sampleCount ?? 0 >= 12,
                      "douze corps uniques doivent figer une baseline exploitable")
         precondition(coordinator.finishCalibration(), "la session explicite doit produire une baseline")
         let savedBaseline = coordinator.baselineSnapshot
@@ -179,8 +179,8 @@ private enum PostureRuntimeCoordinatorHarness {
             shoulderOnlyCalibration.baselineSnapshot?.familySampleCounts?.shoulderSlope == 12 &&
             shoulderOnlyCalibration.baselineSnapshot?.familySampleCounts?.shoulderElevation == 12,
             "la maturité de calibration doit être publiée par famille")
-        precondition(shoulderOnlyLastSnapshot?.signal(.shoulderSlope).quality == .good &&
-                     shoulderOnlyLastSnapshot?.signal(.torsoInclination).availability != .available,
+        precondition(shoulderOnlyLastSnapshot?.signal(.shoulderSlope).availability == .calibrating &&
+                     shoulderOnlyLastSnapshot?.signal(.torsoInclination).availability == .calibrating,
                      "une baseline épaules partielle ne doit ni bloquer les épaules ni valider le torse")
 
         var faceOnlyCalibration = PostureRuntimeCoordinator()
@@ -202,7 +202,7 @@ private enum PostureRuntimeCoordinatorHarness {
         precondition(
             faceOnlyCalibration.baselineSnapshot?.familySampleCounts?.proximity == 12 &&
             faceOnlyCalibration.baselineSnapshot?.familySampleCounts?.blinkOpening == 12 &&
-            faceOnlyLastSnapshot?.signal(.proximity).quality == .good,
+            faceOnlyLastSnapshot?.signal(.proximity).availability == .calibrating,
             "la baseline visage indépendante doit publier sa maturité et sa proximité")
 
         var slowMixedCalibration = PostureRuntimeCoordinator()

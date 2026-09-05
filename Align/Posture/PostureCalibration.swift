@@ -243,15 +243,34 @@ private nonisolated func stableMedian(
     let finiteValues = values.filter(\.isFinite)
     guard finiteValues.count >= minimumCount, let center = median(finiteValues),
           minimumMedian.map({ center >= $0 }) ?? true,
-          let minimum = finiteValues.min(), let maximum = finiteValues.max() else { return nil }
-    let range = maximum - minimum
-    guard range.isFinite,
-          maximumAbsoluteRange.map({ range <= $0 }) ?? true else { return nil }
-    if let maximumRelativeRange {
-        guard abs(center) > 0.000_001,
-              range / abs(center) <= maximumRelativeRange else { return nil }
+          center.isFinite else { return nil }
+    // Une ou deux images aberrantes ne doivent pas invalider toute la
+    // calibration. La MAD (écart absolu médian) mesure d'abord la dispersion
+    // du noyau ; une alternance de deux positions reste toutefois refusée
+    // parce que son MAD demeure élevé.
+    let medianAbsoluteDeviation = median(finiteValues.map { abs($0 - center) }) ?? 0
+    guard medianAbsoluteDeviation.isFinite,
+          (maximumRelativeRange.map {
+              abs(center) > 0.000_001 &&
+                  medianAbsoluteDeviation / abs(center) <= $0
+          } ?? true) else { return nil }
+
+    let inliers = finiteValues.filter { value in
+        let absoluteDistance = abs(value - center)
+        let absoluteOK = maximumAbsoluteRange.map {
+            $0.isFinite && $0 >= 0 && absoluteDistance <= $0
+        } ?? true
+        let relativeOK = maximumRelativeRange.map {
+            abs(center) > 0.000_001 &&
+                $0.isFinite && $0 >= 0 && absoluteDistance <= abs(center) * $0
+        } ?? true
+        return absoluteOK && relativeOK
     }
-    return center
+    let toleratedOutliers = max(2, Int(ceil(Double(minimumCount) * 0.20)))
+    let minimumInliers = max(minimumCount - toleratedOutliers,
+                             Int(ceil(Double(minimumCount) * 0.80)))
+    guard inliers.count >= minimumInliers else { return nil }
+    return median(inliers)
 }
 
 private nonisolated func finite(_ value: Double?) -> Double? {

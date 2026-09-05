@@ -9,6 +9,27 @@ nonisolated enum LocalPostureNotificationCopy {
         .banner, .list, .sound
     ]
 
+    static func title(for signalID: PostureObservationSignalID) -> String {
+        switch signalID {
+        case .proximity:
+            "Distance à l’écran"
+        case .torsoInclination:
+            "Buste incliné"
+        case .raisedShoulders:
+            "Épaules relevées"
+        case .shoulderSlope:
+            "Pente des épaules"
+        case .closedShoulders:
+            "Tête–épaules"
+        case .headTilt:
+            "Tête inclinée"
+        case .estimatedBlinks:
+            "Clignements"
+        case .handOnFace:
+            "Main au visage"
+        }
+    }
+
     static func body(for signalID: PostureObservationSignalID) -> String? {
         switch signalID {
         case .proximity:
@@ -80,7 +101,7 @@ final class LocalPostureNotificationService: NSObject {
         }
         guard await authorization() == .authorized else { return false }
         let content = UNMutableNotificationContent()
-        content.title = "Align"
+        content.title = LocalPostureNotificationCopy.title(for: candidate.signalID)
         let body = LocalPostureNotificationCopy.body(for: candidate.signalID)
         guard let body else { return false }
         content.body = body
@@ -101,13 +122,30 @@ final class LocalPostureNotificationService: NSObject {
         content.title = LocalPostureNotificationCopy.testTitle
         content.body = LocalPostureNotificationCopy.testBody
         content.sound = .default
+        let identifier = "align.notification.test.\(UUID().uuidString)"
         let request = UNNotificationRequest(
-            identifier: "align.notification.test.\(UUID().uuidString)",
+            identifier: identifier,
             content: content,
             trigger: nil
         )
-        do { try await center.add(request); return true }
+        do {
+            try await center.add(request)
+            scheduleTransientRetraction(for: identifier)
+            return true
+        }
         catch { return false }
+    }
+
+    private func scheduleTransientRetraction(for identifier: String) {
+        Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 8_000_000_000)
+            } catch {
+                return
+            }
+            guard let self else { return }
+            await self.retract(identifier: identifier)
+        }
     }
 
     /// Removes a request if its activation became obsolete while delivery was

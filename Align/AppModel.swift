@@ -31,6 +31,7 @@ final class AppModel: ObservableObject {
     private var attentionEpisodeStartedAt: [PostureObservationSignalID: TimeInterval] = [:]
     private var lastHistoryKey = Set<String>()
     private var pendingDeliveryRequests: [String: PostureAlertCandidate] = [:]
+    private var transientNotificationCleanupTasks: [String: Task<Void, Never>] = [:]
     private var lastObservationGeneration: UInt64 = 0
     private var lastObservationContextKey = ""
     private var observationContextEpoch: UInt64 = 0
@@ -42,6 +43,9 @@ final class AppModel: ObservableObject {
     private let coverageFlushInterval: TimeInterval = 5
     private let faceCoverageMaximumGap: TimeInterval = 0.25
     private let bodyCoverageMaximumGap: TimeInterval = 1.5
+    /// A delivered reminder stays visible briefly, then leaves Notification
+    /// Center without changing the committed alert or its history entry.
+    private let transientNotificationLifetime: TimeInterval = 8
     private let launchSessionID = UUID().uuidString
     private var didAttemptAutomaticCameraStart = false
 
@@ -162,7 +166,7 @@ final class AppModel: ObservableObject {
     }
 
     private func consume(_ snapshot: PostureObservationsSnapshot) {
-        guard runtimeAcceptsObservations else { return }
+        guard runtimeAcceptsObservations, !isTerminating else { return }
         guard !snapshot.contextKey.isEmpty else { return }
         guard snapshot.generation >= lastObservationGeneration else { return }
         let contextChanged = snapshot.contextKey != lastObservationContextKey
@@ -233,6 +237,7 @@ final class AppModel: ObservableObject {
                         return
                     }
                     self.pendingDeliveryRequests.removeValue(forKey: request.identifier)
+                    self.scheduleTransientNotificationRemoval(identifier: request.identifier)
                     let historyKey = "\(self.launchSessionID):alert:source=runtime:g\(candidate.generation):c\(self.observationContextEpoch):s=\(candidate.signalID.rawValue):e\(candidate.episodeID):r\(candidate.reservationID)"
                     guard self.lastHistoryKey.insert(historyKey).inserted else { return }
                     self.persistAlertDeliveryState()
@@ -382,6 +387,39 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 await self.notificationService.retract(identifier: identifier)
             }
+        }
+    }
+
+    /// Schedules visual cleanup only after delivery has been committed. It is
+    /// deliberately independent from pending delivery cancellation so stopping
+    /// or recalibrating cannot leave a delivered reminder permanent or erase
+    /// its already-recorded statistical event.
+    private func scheduleTransientNotificationRemoval(identifier: String) {
+        transientNotificationCleanupTasks[identifier]?.cancel()
+        let lifetime = transientNotificationLifetime
+        transientNotificationCleanupTasks[identifier] = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: UInt64(lifetime * 1_000_000_000))
+            } catch {
+                return
+            }
+            guard let self else { return }
+            await self.notificationService.retract(identifier: identifier)
+            self.transientNotificationCleanupTasks.removeValue(forKey: identifier)
+        }
+    }
+
+    /// Retracts already-delivered transient reminders before process
+    /// termination. This does not release reservations or alter history: those
+    /// operations belong to the delivery lifecycle above.
+    private func retractTransientNotifications() async {
+        let identifiers = Array(transientNotificationCleanupTasks.keys)
+        for task in transientNotificationCleanupTasks.values {
+            task.cancel()
+        }
+        transientNotificationCleanupTasks.removeAll(keepingCapacity: true)
+        for identifier in identifiers {
+            await notificationService.retract(identifier: identifier)
         }
     }
 
@@ -569,9 +607,14 @@ final class AppModel: ObservableObject {
     func quit() {
         guard !isTerminating else { return }
         isTerminating = true
+        runtimeToken &+= 1
+        cancelPendingDeliveries()
         camera.stop { [weak self] in
             Task { @MainActor in
-                if let self { await self.history.flushPending() }
+                if let self {
+                    await self.retractTransientNotifications()
+                    await self.history.flushPending()
+                }
                 NSApplication.shared.terminate(nil)
             }
         }

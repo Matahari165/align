@@ -126,7 +126,7 @@ require(cameraCapture.contains("requestAccess(for: .video)") &&
         cameraCapture.contains("case .requestingPermission") &&
         cameraCapture.contains("configureAndStart(operationID:"),
         "Le cycle permission → démarrage doit rester explicite et testable.")
-for title in ["Proximité apparente", "Torse incliné", "Épaules relevées", "Clignements estimés — Estimation", "Main sur le visage — Estimation 2D"] {
+for title in ["Proximité apparente", "Torse incliné", "Épaules relevées", "Clignements estimés", "Main sur le visage"] {
     require(settings.contains(title), "Rappel absent des réglages : \(title)")
 }
 require(!settings.contains("Toggle(\"Inclinaison des épaules") &&

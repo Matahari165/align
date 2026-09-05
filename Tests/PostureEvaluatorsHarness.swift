@@ -178,6 +178,19 @@ enum PostureEvaluatorsHarness {
         expect(unstableCalibration?.faceScale == nil,
                "mouvement facial instable refusé pour la distance")
 
+        var robustSession = PostureCalibrationSession(generation: 1, startedAt: 0)!
+        var robustCalibration: PostureCalibration?
+        for index in 0 ... 27 {
+            let scale = index == 5 ? 1.6 : 1
+            let result = robustSession.consume(snapshot(
+                time: Double(index) * 0.3,
+                scale: scale
+            ))
+            if case let .ready(value) = result { robustCalibration = value }
+        }
+        expect(robustCalibration?.faceScale != nil,
+               "un échantillon aberrant ne bloque pas la calibration")
+
         var asynchronousCalibration = PostureCalibrationSession(generation: 1, startedAt: 0)!
         var asynchronousResult: PostureCalibration?
         for index in 0 ... 27 {

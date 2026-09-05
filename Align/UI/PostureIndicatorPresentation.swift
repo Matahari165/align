@@ -184,10 +184,7 @@ nonisolated struct PostureIndicatorPresentation: Equatable, Sendable {
     }
 
     private static func unavailable(title: String, experimental: Bool) -> Self {
-        let accessibility = experimental
-            ? "Estimation, Aucune information fiable"
-            : "Aucune information fiable"
-        return Self(title: title, value: "—", accessibilityValue: accessibility,
+        return Self(title: title, value: "—", accessibilityValue: "Aucune information fiable",
              symbolName: "minus.circle", tone: .neutral, isExperimental: experimental)
     }
 
@@ -198,9 +195,8 @@ nonisolated struct PostureIndicatorPresentation: Equatable, Sendable {
         experimental: Bool,
         reliableObservation: Bool = false
     ) -> Self {
-        let maturity = experimental ? "Estimation, " : ""
         let quality = reliableObservation ? "Observation fiable, " : ""
-        let accessibility = maturity + quality + value
+        let accessibility = quality + value
         return Self(title: title, value: value, accessibilityValue: accessibility,
                     symbolName: symbol, tone: .neutral, isExperimental: experimental)
     }

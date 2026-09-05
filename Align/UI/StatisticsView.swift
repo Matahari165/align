@@ -321,16 +321,9 @@ struct StatisticsView: View {
                         }
                         .frame(width: 27, height: 27)
                         VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 5) {
-                                Text(row.title)
-                                    .font(.callout.weight(.semibold))
-                                    .foregroundStyle(AlignTheme.ivory)
-                                if row.experimental {
-                                    Text("ESTIMATION")
-                                        .font(.system(size: 8, weight: .bold, design: .rounded))
-                                        .foregroundStyle(AlignTheme.accent)
-                                }
-                            }
+                            Text(row.title)
+                                .font(.callout.weight(.semibold))
+                                .foregroundStyle(AlignTheme.ivory)
                             Text(row.primary)
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(AlignTheme.accentSoft)

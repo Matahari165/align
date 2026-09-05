@@ -96,11 +96,6 @@ struct PostureIndicatorsView: View {
                     Text(presentation.title)
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(AlignTheme.ivory)
-                    if presentation.isExperimental {
-                        Text("ESTIMATION")
-                            .font(.system(size: 8, weight: .bold, design: .rounded))
-                            .foregroundStyle(AlignTheme.accent)
-                    }
                 }
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)

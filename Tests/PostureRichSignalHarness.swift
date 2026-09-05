@@ -108,6 +108,8 @@ private enum PostureRichSignalHarness {
         rightShoulderDeltaY: CGFloat? = nil,
         shoulderSpanX: CGFloat = 0.30,
         shoulderConfidence: Float = 0.9,
+        includeLeftShoulder: Bool = true,
+        includeRightShoulder: Bool = true,
         includeHips: Bool = true,
         includeNeck: Bool = true,
         limitedShoulders: Bool = false,
@@ -131,6 +133,12 @@ private enum PostureRichSignalHarness {
                   quality: limitedShoulders ? .limited : .good,
                   confidence: shoulderConfidence)
         ]
+        if !includeLeftShoulder {
+            points.removeAll { $0.id == .leftShoulder }
+        }
+        if !includeRightShoulder {
+            points.removeAll { $0.id == .rightShoulder }
+        }
         if includeNeck {
             points.append(point(.neck, 0.50, 0.36))
         }
@@ -204,6 +212,8 @@ private enum PostureRichSignalHarness {
                neutral.shoulderSlopeState == .available &&
                neutral.openingState == .available,
                "les deux épaules et le cou doivent être disponibles")
+        expect(abs(neutral.shoulderSlopeDegrees ?? 99) < 0.001,
+               "une position neutre doit conserver une pente numérique nulle")
         expect(neutral.torsoState == .available && neutral.torsoInclinationDegrees != nil,
                "le torse complet doit produire un angle")
         expect(neutral.shoulderOpeningRatio != nil && neutral.leftShoulderElevation != nil,
@@ -391,6 +401,31 @@ private enum PostureRichSignalHarness {
         expect((leftHigher.shoulderSlopeDegrees ?? 0) > 0,
                "le signe doit distinguer l'épaule gauche plus haute")
 
+        let strongRightHigherSlope = PostureRichGeometryEvaluator.make(
+            result: result(sampleID: 95, timestamp: 0.1, rightShoulderDeltaY: -0.20),
+            face: rotatedFaceFromPolylines(
+                generation: 1, sampleID: 95, timestamp: 0.1,
+                context: context, cameraRollDegrees: 8
+            ),
+            context: context
+        )
+        let strongLeftHigherSlope = PostureRichGeometryEvaluator.make(
+            result: result(sampleID: 96, timestamp: 0.1, leftShoulderDeltaY: -0.20),
+            face: rotatedFaceFromPolylines(
+                generation: 1, sampleID: 96, timestamp: 0.1,
+                context: context, cameraRollDegrees: 8
+            ),
+            context: context
+        )
+        expect(strongRightHigherSlope.shouldersState == .available &&
+               strongRightHigherSlope.shoulderSlopeState == .available &&
+               (strongRightHigherSlope.shoulderSlopeDegrees ?? 0) < -15,
+               "une forte pente avec épaule droite plus haute doit rester mesurée malgré un roulis facial distinct")
+        expect(strongLeftHigherSlope.shouldersState == .available &&
+               strongLeftHigherSlope.shoulderSlopeState == .available &&
+               (strongLeftHigherSlope.shoulderSlopeDegrees ?? 0) > 15,
+               "une forte pente avec épaule gauche plus haute doit rester mesurée malgré un roulis facial distinct")
+
         let noisyDeltas: [CGFloat] = [0.002, -0.002, 0.001, -0.001, 0.002, -0.001]
         let noisySlopes = noisyDeltas.map { delta in
             PostureRichGeometryEvaluator.make(
@@ -465,6 +500,21 @@ private enum PostureRichSignalHarness {
                incoherentPair.shoulderSlopeState == .partial &&
                incoherentPair.leftShoulderElevation == nil,
                "une paire d'épaules presque confondue ne doit alimenter aucune alerte")
+        let missingShoulder = PostureRichGeometryEvaluator.make(
+            result: result(sampleID: 94, includeRightShoulder: false),
+            face: face(sampleID: 94, contextKey: context.key), context: context
+        )
+        expect(missingShoulder.shoulderSlopeDegrees == nil &&
+               missingShoulder.shoulderSlopeState == .partial,
+               "une seule épaule doit rester partielle sans fabriquer de pente")
+        let missingPair = PostureRichGeometryEvaluator.make(
+            result: result(sampleID: 95, includeLeftShoulder: false,
+                           includeRightShoulder: false),
+            face: face(sampleID: 95, contextKey: context.key), context: context
+        )
+        expect(missingPair.shoulderSlopeDegrees == nil &&
+               missingPair.shoulderSlopeState == .unavailable,
+               "deux épaules absentes doivent rendre la pente indisponible")
 
         let poorOrientation = PostureRichGeometryEvaluator.make(
             result: result(sampleID: 93, rightShoulderDeltaY: 0.010),
@@ -1099,6 +1149,47 @@ private enum PostureRichSignalHarness {
                mismatchedFace.torsoInclination.state == PostureRichSignalState.available &&
                mismatchedFace.proximity.state == PostureRichSignalState.available,
                "un contexte visage différent interdit la fusion mais conserve les sources séparées")
+
+        var strongSlopeEvaluator = PostureRichSignalEvaluator(configuration: configuration)
+        _ = strongSlopeEvaluator.consume(geometry: neutral, face: neutralFace,
+                                         baseline: baseline, now: 0)
+        let strongSlopeAtPointOne = PostureRichGeometryEvaluator.make(
+            result: result(sampleID: 97, timestamp: 0.6, rightShoulderDeltaY: 0.20),
+            face: rotatedFaceFromPolylines(
+                generation: 1, sampleID: 97, timestamp: 0.6,
+                context: context, cameraRollDegrees: 8
+            ),
+            context: context
+        )
+        _ = strongSlopeEvaluator.consume(
+            geometry: strongSlopeAtPointOne,
+            face: rotatedFaceFromPolylines(
+                generation: 1, sampleID: 97, timestamp: 0.6,
+                context: context, cameraRollDegrees: 8
+            ),
+            baseline: baseline, now: 0.6
+        )
+        let strongSlopeAtPointTwo = PostureRichGeometryEvaluator.make(
+            result: result(sampleID: 98, timestamp: 1.2, rightShoulderDeltaY: 0.20),
+            face: rotatedFaceFromPolylines(
+                generation: 1, sampleID: 98, timestamp: 1.2,
+                context: context, cameraRollDegrees: 8
+            ),
+            context: context
+        )
+        let strongSlopeEvaluation = strongSlopeEvaluator.consume(
+            geometry: strongSlopeAtPointTwo,
+            face: rotatedFaceFromPolylines(
+                generation: 1, sampleID: 98, timestamp: 1.2,
+                context: context, cameraRollDegrees: 8
+            ),
+            baseline: baseline, now: 1.2
+        )
+        expect(strongSlopeEvaluation.shoulderSlope.state == .available &&
+               strongSlopeEvaluation.shoulderSlope.quality == .good &&
+               (strongSlopeEvaluation.shoulderSlope.value ?? 0) > 15 &&
+               strongSlopeEvaluation.shoulderSlope.isAttention,
+               "une forte pente doit franchir l'évaluateur après sa durée de maintien")
 
         var slopeEvaluator = PostureRichSignalEvaluator(configuration: configuration)
         _ = slopeEvaluator.consume(geometry: neutral, face: neutralFace,

@@ -1251,6 +1251,8 @@ private enum CameraError: LocalizedError {
 }
 
 nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
+    private static let persistedRichBaselineKey = "posture.richBaseline.v1"
+
     private let detector = PoseDetector()
     // RTMPose is the sole product engine for this activation. There is no
     // runtime fallback: a load/inference failure is published as technicalError.
@@ -1370,9 +1372,10 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         self.segmentationCancellation = segmentationCancellation
         self.onFrameLiveness = onFrameLiveness
         self.onEvent = onEvent
-        if let data = UserDefaults.standard.data(forKey: "posture.richBaseline.v1") {
-            persistedRichBaseline = try? JSONDecoder().decode(PostureRichBaseline.self, from: data)
-        }
+        // This delegate owns all mutable posture state on `sampleQueue`. The
+        // scalar baseline is loaded once before that state is used; images,
+        // video, landmarks, and raw coordinates are never persisted.
+        persistedRichBaseline = Self.loadPersistedRichBaseline()
     }
 
     func setCameraIdentifier(_ identifier: String) {
@@ -1570,11 +1573,25 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                     self.schedulePostureCalibrationFinish(after: 0.5, generation: scheduledGeneration)
                     return
                 }
-                let ready = self.postureRuntimeCoordinator.finishCalibration()
-                if ready, let baseline = self.postureRuntimeCoordinator.baselineSnapshot,
-                   let data = try? JSONEncoder().encode(baseline) {
-                    UserDefaults.standard.set(data, forKey: "posture.richBaseline.v1")
-                    self.persistedRichBaseline = baseline
+                let candidateReady = self.postureRuntimeCoordinator.finishCalibration()
+                let candidateBaseline = candidateReady
+                    ? self.postureRuntimeCoordinator.baselineSnapshot
+                    : nil
+                let ready = candidateBaseline.map(Self.isPersistableRichBaseline) ?? false
+                if ready, let baseline = candidateBaseline {
+                    // Keep the old value until the new calibration has
+                    // produced a complete, finite scalar baseline and its
+                    // encoded payload is ready. A failed/partial calibration
+                    // therefore cannot destroy the last known-good baseline.
+                    self.persistSuccessfulBaseline(baseline)
+                } else {
+                    // Calibration is explicit because a baseline measured for
+                    // another camera/format/orientation/rule is not comparable.
+                    // If this attempt failed, recover the previous scalar
+                    // baseline only when the current stable context still
+                    // matches it; otherwise the next observations stay at
+                    // `needsCalibration`.
+                    self.restorePersistedBaselineIfCompatible()
                 }
                 let outcomes = Dictionary(uniqueKeysWithValues: PostureObservationSignalID.allCases.map { id in
                     if id == .handOnFace {
@@ -2999,12 +3016,143 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         )
         if !postureRuntimeCoordinator.isCalibrationActive,
            let persistedRichBaseline {
+            guard Self.isPersistableRichBaseline(persistedRichBaseline) else {
+                // A corrupt payload, an old rule revision, or a different
+                // stable camera context must never silently become a live
+                // baseline. Recalibration is required because the measured
+                // scalar deltas would no longer describe this input geometry.
+                return
+            }
             postureRuntimeCoordinator.restoreBaseline(
                 persistedRichBaseline,
                 for: UInt64(generation.activationID),
                 contextKey: context.key
             )
         }
+    }
+
+    /// Only the already-defined scalar baseline is stored. The stable context
+    /// is deliberately checked at restore time: a changed camera, pixel
+    /// format/orientation, or posture-rule revision changes the meaning of
+    /// those scalars and therefore requires an explicit calibration.
+    private static func loadPersistedRichBaseline() -> PostureRichBaseline? {
+        guard let data = UserDefaults.standard.data(forKey: persistedRichBaselineKey),
+              let baseline = try? JSONDecoder().decode(PostureRichBaseline.self, from: data),
+              isPersistableRichBaseline(baseline) else {
+            return nil
+        }
+        return baseline
+    }
+
+    private static func isPersistableRichBaseline(_ baseline: PostureRichBaseline) -> Bool {
+        guard baseline.generation > 0,
+              !baseline.contextKey.isEmpty,
+              baseline.ruleVersion == PostureRuntimeCoordinator.ruleVersion,
+              baseline.sampleCount >= 12 else {
+            return false
+        }
+
+        let optionalScalars = [
+            baseline.torsoInclinationDegrees,
+            baseline.torsoAxisDeviation,
+            baseline.shoulderSlopeDegrees,
+            baseline.headTiltDegrees,
+            baseline.proximityScale,
+            baseline.leftShoulderElevation,
+            baseline.rightShoulderElevation,
+            baseline.shoulderOpeningRatio,
+            baseline.torsoInclinationMAD,
+            baseline.torsoAxisMAD,
+            baseline.shoulderSlopeMAD,
+            baseline.headTiltMAD
+        ]
+        guard optionalScalars.compactMap({ $0 }).allSatisfy({ $0.isFinite }),
+              baseline.shoulderOpeningRatio.map({ $0.isFinite && $0 > 0 }) ?? true,
+              baseline.proximityScale.map({ $0.isFinite && $0 > 0 }) ?? true,
+              baseline.torsoInclinationMAD.map({ $0 >= 0 }) ?? true,
+              baseline.torsoAxisMAD.map({ $0 >= 0 }) ?? true,
+              baseline.shoulderSlopeMAD.map({ $0 >= 0 }) ?? true,
+              baseline.headTiltMAD.map({ $0 >= 0 }) ?? true else {
+            return false
+        }
+
+        func hasFinite(_ value: Double?) -> Bool {
+            value?.isFinite == true
+        }
+        func hasPositive(_ value: Double?) -> Bool {
+            value.map { $0.isFinite && $0 > 0 } ?? false
+        }
+        func hasValidShoulderElevation() -> Bool {
+            hasFinite(baseline.leftShoulderElevation) &&
+                hasFinite(baseline.rightShoulderElevation)
+        }
+
+        if let blink = baseline.blinkOpeningBaseline {
+            guard blink.sampleCount >= 12,
+                  blink.leftEyeOpeningRatio.isFinite && blink.leftEyeOpeningRatio > 0,
+                  blink.rightEyeOpeningRatio.isFinite && blink.rightEyeOpeningRatio > 0,
+                  blink.leftEyeOpeningMAD.map({ $0.isFinite && $0 >= 0 }) ?? true,
+                  blink.rightEyeOpeningMAD.map({ $0.isFinite && $0 >= 0 }) ?? true else {
+                return false
+            }
+        }
+
+        if let counts = baseline.familySampleCounts {
+            // The family counts are the source of truth for partial
+            // calibrations: hips may be unavailable while shoulders remain
+            // valid. Reject impossible count/value combinations as corrupt.
+            guard [
+                counts.torso, counts.shoulderSlope, counts.headTilt,
+                counts.shoulderElevation, counts.shoulderOpening,
+                counts.proximity, counts.blinkOpening
+            ].allSatisfy({ $0 >= 0 }),
+                  counts.maximum == baseline.sampleCount,
+                  (counts.torso > 0) == hasFinite(baseline.torsoInclinationDegrees),
+                  (counts.shoulderSlope > 0) == hasFinite(baseline.shoulderSlopeDegrees),
+                  (counts.headTilt > 0) == hasFinite(baseline.headTiltDegrees),
+                  (counts.shoulderElevation > 0) == hasValidShoulderElevation(),
+                  (counts.shoulderOpening > 0) == hasPositive(baseline.shoulderOpeningRatio),
+                  (counts.proximity > 0) == hasPositive(baseline.proximityScale),
+                  (counts.blinkOpening > 0) == (baseline.blinkOpeningBaseline != nil) else {
+                return false
+            }
+            return counts.hasAnyReadyFamily
+        }
+
+        // Baselines written before family counts existed remain compatible
+        // when at least one complete scalar family is present.
+        return hasFinite(baseline.torsoInclinationDegrees) ||
+            hasFinite(baseline.shoulderSlopeDegrees) ||
+            hasFinite(baseline.headTiltDegrees) ||
+            hasValidShoulderElevation() ||
+            hasPositive(baseline.shoulderOpeningRatio) ||
+            hasPositive(baseline.proximityScale) ||
+            baseline.blinkOpeningBaseline != nil
+    }
+
+    /// Called only from `sampleQueue`, so a late calibration callback cannot
+    /// race a context reset or replace the in-memory value out of order.
+    private func persistSuccessfulBaseline(_ baseline: PostureRichBaseline) {
+        guard Self.isPersistableRichBaseline(baseline),
+              let data = try? JSONEncoder().encode(baseline) else {
+            return
+        }
+        UserDefaults.standard.set(data, forKey: Self.persistedRichBaselineKey)
+        persistedRichBaseline = baseline
+    }
+
+    /// Called only from `sampleQueue` after a failed explicit calibration.
+    private func restorePersistedBaselineIfCompatible() {
+        guard let baseline = persistedRichBaseline,
+              Self.isPersistableRichBaseline(baseline),
+              baseline.contextKey == postureRuntimeContextKey else {
+            return
+        }
+        postureRuntimeCoordinator.restoreBaseline(
+            baseline,
+            for: UInt64(generation.activationID),
+            contextKey: postureRuntimeContextKey
+        )
     }
 
     private func recordSegmentationDuration(_ duration: TimeInterval) {

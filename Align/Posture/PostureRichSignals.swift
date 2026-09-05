@@ -458,32 +458,26 @@ nonisolated enum PostureRichGeometryEvaluator {
             shoulderSlopeDegrees = nil
         }
 
-        // La pente reste une donnée diagnostique même quand la scène est
-        // ambiguë. Elle ne devient publiable que si les deux scores bruts
-        // sont suffisants, si les épaules occupent une largeur mesurable et
-        // si l'orientation/cadrage rend la projection 2D plausible. Le crop
-        // plein cadre sert à récupérer une personne, pas à déclencher une
-        // recommandation.
-        let slopeFaceQuality: Bool
-        if face == nil {
-            // Un tick corps peut rester utile sans visage frais. La taille et
-            // le cadrage restent toutefois des garde-fous obligatoires.
-            slopeFaceQuality = true
+        // La pente est une mesure corporelle : un tick corps reste exploitable
+        // sans visage frais, et un visage d'un autre contexte ne doit pas
+        // effacer une paire d'épaules cohérente. Lorsqu'un visage apparié est
+        // présent, son yaw et son roulis gardent un garde-fou de projection,
+        // mais son roulis ne bloque plus à lui seul une forte pente des
+        // épaules. La fusion tête-épaules conserve ses propres exigences plus
+        // bas dans cette fonction.
+        let slopeOrientationQuality: Bool
+        if face == nil || !faceMatchesContext {
+            slopeOrientationQuality = true
         } else if let matchedFace {
-            let slopeFrameRollQuality = matchedFace.signal.eyeLineRollDegrees.flatMap {
-                pixelAxialAngleDegrees($0, context: context).map {
-                    abs($0) <= signalConfiguration.maximumShoulderSlopeRollDegrees
-                }
-            } ?? false
-            slopeFaceQuality = matchedFace.facePointCount >= signalConfiguration.minimumFacePoints &&
+            slopeOrientationQuality = matchedFace.facePointCount >= signalConfiguration.minimumFacePoints &&
                 (matchedFace.signal.yawProxy.map {
                     $0.isFinite && abs($0) <= signalConfiguration.maximumYaw
                 } ?? false) &&
                 (matchedFace.signal.eyeLineRollDegrees.map {
                     $0.isFinite && abs($0) <= signalConfiguration.maximumRollDegrees
-                } ?? false) && slopeFrameRollQuality
+                } ?? true)
         } else {
-            slopeFaceQuality = false
+            slopeOrientationQuality = false
         }
         let minimumShoulderSpan = max(
             80.0,
@@ -498,9 +492,26 @@ nonisolated enum PostureRichGeometryEvaluator {
         let slopeConfidenceQuality = slopeConfidence >=
             signalConfiguration.minimumShoulderSlopeConfidence
         let slopeFramingQuality = result.regionOfInterest?.source != .some(.fullFrameFallback)
+        // Un roulis commun se reconnaît seulement si le visage est apparié,
+        // suffisamment tourné, et que les deux droites ont presque le même
+        // angle dans le repère pixel. Une pente qui diverge du visage reste
+        // une observation corporelle valide et peut réagir à une inclinaison
+        // forte ; une paire absente ou incohérente ne franchit jamais ce gate.
+        let commonCameraRollOnly: Bool = {
+            guard let matchedFace,
+                  let eyeRoll = matchedFace.signal.eyeLineRollDegrees,
+                  let eyeRollInPixels = pixelAxialAngleDegrees(eyeRoll, context: context),
+                  let shoulderSlopeDegrees,
+                  abs(eyeRollInPixels) > signalConfiguration.maximumShoulderSlopeRollDegrees,
+                  let residual = postureRelativeAxialDifferenceDegrees(
+                    eyeRollInPixels, shoulderSlopeDegrees
+                  ) else { return false }
+            return abs(residual) <= signalConfiguration.maximumCommonRollResidualDegrees
+        }()
         let shoulderSlopeQuality = shoulderSlopeDegrees != nil &&
             shouldersState == .available && slopeSpanQuality &&
-            slopeConfidenceQuality && slopeFaceQuality && slopeFramingQuality
+            slopeConfidenceQuality && slopeOrientationQuality &&
+            slopeFramingQuality && !commonCameraRollOnly
         let shoulderSlopeState: PostureRichSignalState = if shoulderSlopeQuality {
             .available
         } else if shoulderSlopeDegrees != nil || shoulderCount > 0 {
@@ -510,15 +521,15 @@ nonisolated enum PostureRichGeometryEvaluator {
         }
         let shoulderSlopeReason: String? = if shoulderSlopeDegrees == nil {
             nil
-        } else if !faceMatchesContext {
-            "context visage/corps à confirmer"
+        } else if commonCameraRollOnly {
+            "roulis commun caméra à confirmer"
         } else if !slopeFramingQuality {
             "cadrage caméra à confirmer"
         } else if shouldersState != .available || !slopeConfidenceQuality {
             "confiance des épaules à confirmer"
         } else if !slopeSpanQuality {
             "distance caméra/épaules à confirmer"
-        } else if !slopeFaceQuality {
+        } else if !slopeOrientationQuality {
             "orientation visage/caméra à confirmer"
         } else {
             nil
@@ -1084,11 +1095,14 @@ nonisolated struct PostureRichSignalConfiguration: Equatable, Sendable {
     /// Fraction minimale du petit côté de l'image occupée par la paire. Une
     /// paire trop petite donne une pente très sensible à quelques pixels.
     var minimumShoulderSpanFraction: Double = 0.12
-    /// Au-delà de cette rotation, une pente absolue ne permet plus de
-    /// distinguer sûrement un roulis de l'image ou de la tête d'une épaule
-    /// réellement plus haute. La mesure reste diagnostique mais n'est pas
-    /// alertable.
+    /// Seuil au-delà duquel une rotation commune des yeux et des épaules peut
+    /// venir du roulis de la caméra. La pente corporelle reste mesurée ; elle
+    /// n'est simplement pas publiable lorsque ce roulis commun est confirmé.
     var maximumShoulderSlopeRollDegrees: Double = 6
+    /// Marge résiduelle entre le roulis des yeux et la pente des épaules pour
+    /// classer une frame comme roulis commun. Une différence plus grande est
+    /// une pente relative à traiter, même si le visage est tourné.
+    var maximumCommonRollResidualDegrees: Double = 2
     /// La pente demande une durée dédiée afin de ne pas ralentir les autres
     /// recommandations du profil sensible.
     var shoulderSlopeRequiredDuration: TimeInterval? = nil

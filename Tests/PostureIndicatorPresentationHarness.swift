@@ -93,7 +93,7 @@ enum PostureIndicatorPresentationHarness {
 
         expect(PostureIndicatorPresentation.orderedIDs == [
             .shoulderSlope, .raisedShoulders, .headTilt, .closedShoulders,
-            .apparentProximity, .torsoInclination, .estimatedBlinks
+            .apparentProximity, .torsoInclination, .estimatedBlinks, .handOnFace
         ], "l'ordre du rail doit rester stable")
 
         var head = result(.headTilt, state: .attention, ttl: 2)

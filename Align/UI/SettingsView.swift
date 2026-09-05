@@ -168,10 +168,10 @@ struct SettingsView: View {
         case .torsoInclination: "Torse incliné"
         case .raisedShoulders: "Épaules relevées"
         case .shoulderSlope: "Épaules inclinées"
-        case .estimatedBlinks: "Clignements estimés — Estimation"
-        case .closedShoulders: "Tête–épaules — Estimation"
+        case .estimatedBlinks: "Clignements estimés"
+        case .closedShoulders: "Tête–épaules"
         case .headTilt: "Tête inclinée"
-        case .handOnFace: "Main sur le visage — Estimation 2D"
+        case .handOnFace: "Main sur le visage"
         }
     }
 

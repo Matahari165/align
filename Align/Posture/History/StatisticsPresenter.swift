@@ -200,8 +200,8 @@ nonisolated enum StatisticsPresenter {
                 String(format: "%.1f/min · visage et deux yeux fiables", $0)
             } ?? "Données insuffisantes"
             let secondary = summary.estimatedBlinkObservedDuration > 0
-                ? "Estimation · \(duration(summary.estimatedBlinkObservedDuration)) fiables · \(value.notificationCount) rappel(s)"
-                : "Estimation · Aucune information fiable"
+                ? "\(duration(summary.estimatedBlinkObservedDuration)) fiables · \(value.notificationCount) rappel(s)"
+                : "Aucune information fiable"
             return .init(id: value.signalID, title: title(value.signalID), experimental: true,
                          primary: primary, secondary: secondary,
                          accessibilityLabel: "Clignements estimés. \(primary). \(secondary).")
@@ -222,7 +222,7 @@ nonisolated enum StatisticsPresenter {
             experimental: isExperimental,
             primary: primary,
             secondary: secondary,
-            accessibilityLabel: "\(title(value.signalID))\(isExperimental ? ", estimation" : ""). \(primary). \(secondary)."
+            accessibilityLabel: "\(title(value.signalID)). \(primary). \(secondary)."
         )
     }
 

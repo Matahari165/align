@@ -15,6 +15,8 @@ private enum LocalPostureNotificationServiceHarness {
                "l’autorisation doit déclarer les alertes et le son, y compris en migration")
 
         let shoulder = LocalPostureNotificationCopy.body(for: .shoulderSlope)
+        expect(LocalPostureNotificationCopy.title(for: .shoulderSlope) == "Pente des épaules",
+               "le titre de notification doit identifier le problème détecté")
         expect(shoulder == "Une épaule semble plus haute que l’autre. Réaligne tes épaules.",
                "la pente des épaules doit décrire une asymétrie latérale sans choisir un côté")
         expect(!(shoulder ?? "").localizedCaseInsensitiveContains("gauche") &&
