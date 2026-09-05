@@ -105,8 +105,8 @@ struct StatisticsView: View {
                 .font(.caption)
                 .foregroundStyle(AlignTheme.quiet)
 
-            HStack(spacing: 0) {
-                ForEach(Array(viewState.coverageMetrics.enumerated()), id: \.element.id) { index, metric in
+            HStack(spacing: 14) {
+                ForEach(viewState.coverageMetrics) { metric in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(metric.value)
                             .font(.callout.weight(.semibold))
@@ -117,20 +117,9 @@ struct StatisticsView: View {
                             .lineLimit(1)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    if index < viewState.coverageMetrics.count - 1 {
-                        Divider()
-                            .frame(height: 24)
-                            .overlay(AlignTheme.hairline)
-                            .padding(.horizontal, 10)
-                    }
                 }
             }
             .padding(.top, 6)
-
-            RoundedRectangle(cornerRadius: 2)
-                .fill(AlignTheme.accent)
-                .frame(height: 4)
-                .shadow(color: AlignTheme.accent.opacity(0.25), radius: 5, y: 1)
         }
         .padding(12)
         .background(AlignTheme.elevated.opacity(0.58), in: RoundedRectangle(cornerRadius: 10))
@@ -219,7 +208,6 @@ struct StatisticsView: View {
                                         RoundedRectangle(cornerRadius: 3)
                                             .fill(AlignTheme.accent)
                                             .frame(height: chartBarHeight(for: value))
-                                            .shadow(color: AlignTheme.accent.opacity(0.18), radius: 3, y: 1)
                                     } else {
                                         Capsule()
                                             .fill(AlignTheme.quiet.opacity(0.28))

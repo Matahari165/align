@@ -23,38 +23,6 @@ struct ContentView: View {
                     upperBodyDevelopmentOptions: camera.upperBodyDevelopmentOptions
                 )
 
-                if camera.state == .running,
-                   camera.upperBodyDevelopmentVisualizationEnabled {
-                    VStack {
-                        HStack {
-                            Label("DÉVELOPPEMENT · estimations 2D", systemImage: "wrench.and.screwdriver")
-                                .font(.caption.weight(.bold))
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
-                                .background(AlignTheme.canvas.opacity(0.94), in: Capsule())
-                                .overlay(Capsule().stroke(AlignTheme.hairline, lineWidth: 1))
-                                .foregroundStyle(AlignTheme.accentSoft)
-                            Spacer()
-                        }
-                        Spacer()
-                        HStack {
-                            Text(camera.upperBodyDevelopmentSummary)
-                                .font(.caption.monospaced())
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(AlignTheme.elevated.opacity(0.92), in: Capsule())
-                                .overlay(Capsule().stroke(AlignTheme.hairline, lineWidth: 1))
-                                .foregroundStyle(AlignTheme.ivory)
-                            Spacer()
-                        }
-                    }
-                    .padding(10)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(
-                        "Mode développement, estimations 2D. \(camera.upperBodyDevelopmentSummary)"
-                    )
-                }
-
                 if camera.state != .running {
                     Rectangle()
                         .fill(AlignTheme.canvas.opacity(0.92))
@@ -79,8 +47,6 @@ struct ContentView: View {
                 onRequestNotifications: camera.requestProximityNotificationAuthorization,
                 onCalibrate: camera.calibratePosture
             )
-
-            statusBand
         }
         .frame(minWidth: 560, minHeight: 430)
         .background(AlignTheme.canvas)
@@ -88,6 +54,9 @@ struct ContentView: View {
             appModel.attemptAutomaticCameraStart()
         }
         .toolbar {
+            ToolbarItem {
+                cameraToolbarAction
+            }
             ToolbarItem {
                 Button {
                     showsStatistics = true
@@ -138,86 +107,53 @@ struct ContentView: View {
         }
     }
 
-    private var statusBand: some View {
-        let presentation = activePresentation
-        return HStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(AlignTheme.accent.opacity(0.14))
-                Image(systemName: presentation.symbolName)
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(AlignTheme.accent)
-            }
-            .frame(width: 27, height: 27)
-            .accessibilityHidden(true)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(presentation.title)
-                    .font(.headline)
-                    .foregroundStyle(AlignTheme.ivory)
-                Text(presentation.explanation)
-                    .font(.callout)
-                    .foregroundStyle(AlignTheme.quiet)
-                    .lineLimit(2)
-            }
-
-            Spacer(minLength: 12)
-            windowCameraAction
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(AlignTheme.elevated.opacity(0.96))
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(AlignTheme.hairline)
-                .frame(height: 1)
-        }
-        .controlSize(.small)
-    }
-
     @ViewBuilder
-    private var windowCameraAction: some View {
+    private var cameraToolbarAction: some View {
         switch camera.state {
         case .denied:
-            Link("Ouvrir Réglages Système…", destination: cameraPrivacySettingsURL)
-                .buttonStyle(.borderedProminent)
-        case .running, .interrupted:
-            Button("Arrêter") {
-                camera.stop()
+            Link(destination: cameraPrivacySettingsURL) {
+                Label("Autoriser la caméra", systemImage: "video.slash")
+                    .labelStyle(.iconOnly)
             }
-            .buttonStyle(.bordered)
+            .help("Autoriser la caméra dans les Réglages Système")
+            .accessibilityLabel("Autoriser la caméra")
+        case .running, .interrupted:
+            Button {
+                camera.stop()
+            } label: {
+                Label("Arrêter la caméra", systemImage: "stop.circle")
+                    .labelStyle(.iconOnly)
+            }
+            .help("Arrêter la caméra")
+            .accessibilityLabel("Arrêter la caméra")
         case .requestingPermission, .configuring:
             ProgressView()
                 .controlSize(.small)
                 .accessibilityLabel("Démarrage de la caméra en cours")
         case .idle:
-            Button(CameraStatusPresentation.startTitle()) {
+            Button {
                 camera.start()
+            } label: {
+                Label(CameraStatusPresentation.startTitle(), systemImage: "video.fill")
+                    .labelStyle(.iconOnly)
             }
-            .buttonStyle(.borderedProminent)
+            .help(CameraStatusPresentation.startTitle())
+            .accessibilityLabel(CameraStatusPresentation.startTitle())
             .keyboardShortcut(.defaultAction)
         case .unavailable, .failed:
-            Button("Réessayer") {
+            Button {
                 camera.start()
+            } label: {
+                Label("Réessayer la caméra", systemImage: "arrow.clockwise")
+                    .labelStyle(.iconOnly)
             }
-            .buttonStyle(.bordered)
+            .help("Réessayer la caméra")
+            .accessibilityLabel("Réessayer la caméra")
         }
     }
 
     private var accessibilitySummary: String {
-        activePresentation.explanation
-    }
-
-    private var activePresentation: CameraStatusPresentation {
-        guard camera.state == .running else {
-            return CameraStatusPresentation.make(for: camera)
-        }
-        let shoulders = ShoulderStatusPresentation.make(for: camera.blazePoseState)
-        return CameraStatusPresentation(
-            title: shoulders.title,
-            explanation: shoulders.explanation,
-            symbolName: shoulders.symbolName
-        )
+        CameraStatusPresentation.make(for: camera).explanation
     }
 
     private var cameraPrivacySettingsURL: URL {

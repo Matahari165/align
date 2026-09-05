@@ -11,17 +11,9 @@ struct PostureIndicatorsView: View {
         VStack(spacing: 7) {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text("Indicateurs de posture")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(AlignTheme.ivory)
-                        Text("EN DIRECT")
-                            .font(.system(size: 8, weight: .bold, design: .rounded))
-                            .foregroundStyle(AlignTheme.canvas)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
-                            .background(AlignTheme.accent, in: Capsule())
-                    }
+                    Text("Indicateurs de posture")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AlignTheme.ivory)
                     Label(railStatus, systemImage: railStatusSymbol)
                         .font(.caption2)
                         .foregroundStyle(railStatusColor)
@@ -36,17 +28,14 @@ struct PostureIndicatorsView: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.vertical, 10)
         .background(AlignTheme.elevated.opacity(0.94))
-        .overlay(alignment: .top) {
-            Rectangle().fill(AlignTheme.hairline).frame(height: 1)
-        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Indicateurs de posture, sept")
     }
 
     private var threeColumnGrid: some View {
-        Grid(horizontalSpacing: 0, verticalSpacing: 0) {
+        Grid(horizontalSpacing: 8, verticalSpacing: 8) {
             GridRow {
                 indicator(for: .shoulderSlope)
                 indicator(for: .raisedShoulders)
@@ -65,7 +54,7 @@ struct PostureIndicatorsView: View {
     }
 
     private var twoColumnGrid: some View {
-        Grid(horizontalSpacing: 0, verticalSpacing: 0) {
+        Grid(horizontalSpacing: 8, verticalSpacing: 8) {
             GridRow {
                 indicator(for: .shoulderSlope)
                 indicator(for: .raisedShoulders)
@@ -89,15 +78,15 @@ struct PostureIndicatorsView: View {
             for: snapshot.result(for: id), producedAt: snapshot.producedAt
         )
         let toneColor = color(for: presentation.tone)
-        return HStack(spacing: 7) {
+        return HStack(alignment: .top, spacing: 9) {
             ZStack {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(toneColor.opacity(0.14))
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(toneColor.opacity(0.16))
                 Image(systemName: presentation.symbolName)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(toneColor)
             }
-            .frame(width: 27, height: 27)
+            .frame(width: 30, height: 30)
             .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 0) {
@@ -114,46 +103,56 @@ struct PostureIndicatorsView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
 
-                Text(presentation.primaryValue)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(toneColor)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
+                HStack(spacing: 6) {
+                    if showsPrimaryValue(for: presentation) {
+                        Text(compactPrimaryValue(for: id, presentation: presentation))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(toneColor)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.72)
+                    }
 
-                if let secondaryValue = presentation.secondaryValue {
-                    Text(secondaryValue)
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundStyle(AlignTheme.quiet)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
+                    if let secondaryValue = presentation.secondaryValue {
+                        Text(secondaryValue)
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                            .foregroundStyle(toneColor.opacity(0.86))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    }
                 }
+                .frame(minHeight: 17, alignment: .leading)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 45, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
         .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(AlignTheme.surface.opacity(0.32))
-        .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 1)
-                .fill(toneColor.opacity(0.72))
-                .frame(width: 2)
-                .padding(.vertical, 8)
-        }
-        .overlay(alignment: .trailing) {
-            Rectangle()
-                .fill(AlignTheme.hairline)
-                .frame(width: 1)
-        }
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(AlignTheme.hairline)
-                .frame(height: 1)
-        }
+        .padding(.vertical, 8)
+        .background(AlignTheme.surface.opacity(0.40), in: RoundedRectangle(cornerRadius: 10))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(presentation.title)
         .accessibilityValue(presentation.accessibilityValue)
         .accessibilityHint(accessibilityHint(for: id))
         .help(availabilityHelp(for: id))
+    }
+
+    private func showsPrimaryValue(for presentation: PostureIndicatorPresentation) -> Bool {
+        presentation.tone != .positive ||
+            (presentation.secondaryValue == nil && presentation.isExperimental)
+    }
+
+    private func compactPrimaryValue(
+        for id: PostureIndicatorID,
+        presentation: PostureIndicatorPresentation
+    ) -> String {
+        guard presentation.tone == .negative else { return presentation.primaryValue }
+        return switch id {
+        case .apparentProximity: "À éloigner"
+        case .torsoInclination: "À redresser"
+        case .raisedShoulders: "À relâcher"
+        case .shoulderSlope: "À corriger"
+        case .headTilt: "À redresser"
+        case .estimatedBlinks: "Cligne naturellement"
+        case .closedShoulders: "À réajuster"
+        }
     }
 
     private func color(for tone: PostureIndicatorTone) -> Color {

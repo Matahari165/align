@@ -17,6 +17,7 @@ let calibration = try source("Align/UI/CalibrationPresentation.swift")
 let cameraCapture = try source("Align/Camera/CameraCaptureService.swift")
 let appModel = try source("Align/AppModel.swift")
 let appIcon = try source("Align/Assets.xcassets/AppIcon.appiconset/Contents.json")
+let infoPlist = try source("Align/Info.plist")
 
 require(content.contains("minWidth: 560, minHeight: 430"), "La taille minimale macOS doit rester 560 × 430.")
 require(content.contains("layoutPriority(1)"), "La caméra doit rester la zone dominante.")
@@ -34,12 +35,16 @@ require(indicators.contains("threeColumnGrid") && indicators.contains("twoColumn
         "Le rail doit garder les grilles compactes à trois et deux colonnes.")
 require(indicators.contains("ViewThatFits"), "Le rail doit sélectionner une grille adaptée à la largeur.")
 require(indicators.contains("Indicateurs de posture, sept"), "Le groupe VoiceOver doit annoncer sept indicateurs.")
-require(indicators.contains("case .positive: AlignTheme.ivory") &&
-        indicators.contains("case .negative: AlignTheme.copper"),
-        "Le rail doit utiliser les rôles premium ivoire/cuivre issus du presenter fiabilisé.")
+require(indicators.contains("case .positive: AlignTheme.accentSoft") &&
+        indicators.contains("case .negative: AlignTheme.attention"),
+        "Le rail doit utiliser les rôles turquoise/ambre du thème Align.")
 require(!indicators.contains(".green") && !indicators.contains(".red") &&
         !indicators.contains(".yellow") && !indicators.contains(".orange"),
         "Le rail ne doit pas dépendre des couleurs santé rouge/vert ni du jaune de géométrie.")
+require(!content.contains("EN DIRECT") &&
+        !content.contains("DÉVELOPPEMENT · estimations 2D") &&
+        !content.contains("statusBand"),
+        "L’écran principal ne doit pas afficher les badges techniques ni la bannière d’épaules.")
 
 for title in ["Recherche des épaules", "Épaules détectées", "Épaules partiellement détectées", "Épaules non détectées", "Erreur d’analyse"] {
     require(shoulders.contains(title), "État épaules manquant : \(title)")
@@ -138,5 +143,8 @@ require(settings.contains("Progression de la définition") && calibration.contai
 for size in [16, 32, 64, 128, 256, 512, 1024] {
     require(appIcon.contains("AlignIcon-\(size).png"), "Rendition AppIcon manquante : \(size) px")
 }
+require(infoPlist.contains("<key>CFBundleIconName</key>") &&
+        infoPlist.contains("<string>AppIcon</string>"),
+        "Le bundle doit déclarer explicitement AppIcon pour macOS et les notifications.")
 
 print("UIReferenceLockHarness: OK")
