@@ -6,13 +6,18 @@ struct ContentView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var showsDiagnostics = false
     @State private var showsStatistics = false
+    @StateObject private var resourceMonitor = SystemResourceMonitor()
 
     var body: some View {
-        LiveCameraPane(camera: appModel.camera)
+        LiveCameraPane(camera: appModel.camera, resourceMonitor: resourceMonitor)
             .frame(minWidth: 560, minHeight: 430)
             .background(AlignTheme.canvas)
             .onAppear {
                 appModel.attemptAutomaticCameraStart()
+                resourceMonitor.start()
+            }
+            .onDisappear {
+                resourceMonitor.stop()
             }
             .toolbar {
                 ToolbarItem {
@@ -64,6 +69,7 @@ struct ContentView: View {
                         isApplicationActive: presentation.usesForegroundCadence,
                         isWindowMiniaturized: presentation.isMiniaturized
                     )
+                    resourceMonitor.setPresentationActive(presentation.usesForegroundCadence)
                 }
             }
     }
@@ -73,9 +79,12 @@ struct ContentView: View {
 /// the app command model and sheet state must not rebuild the live preview.
 private struct LiveCameraPane: View {
     @ObservedObject var camera: CameraCaptureService
+    let resourceMonitor: SystemResourceMonitor
 
     var body: some View {
         VStack(spacing: 0) {
+            SystemResourceUsageBar(monitor: resourceMonitor)
+
             ZStack {
                 CameraPreviewView(
                     session: camera.session,
