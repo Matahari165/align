@@ -16,10 +16,10 @@ nonisolated struct PostureCalibrationPresentation: Equatable, Sendable {
 
     var title: String {
         switch phase {
-        case .idle: "À calibrer"
-        case .collecting: "Définition de tes repères…"
-        case .completed: "Repères définis"
-        case .failed: "Calibration incomplète"
+        case .idle: "Référence des yeux à initialiser"
+        case .collecting: "Mesure de l’ouverture des yeux…"
+        case .completed: "Référence des yeux prête"
+        case .failed: "Référence des yeux incomplète"
         }
     }
 }

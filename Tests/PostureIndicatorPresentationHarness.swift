@@ -32,7 +32,7 @@ enum PostureIndicatorPresentationHarness {
         let normal = PostureIndicatorPresentation.make(
             for: result(.apparentProximity, state: .normal), producedAt: now
         )
-        expect(normal.tone == .positive && normal.value == "Dans ton repère",
+        expect(normal.tone == .positive && normal.value == "Dans la zone",
                "une preuve canonique fraîche doit être présentée normalement")
 
         let attention = PostureIndicatorPresentation.make(
@@ -49,7 +49,7 @@ enum PostureIndicatorPresentationHarness {
             for: result(.torsoInclination, state: .normal, observedAt: 9, ttl: 2),
             producedAt: now
         )
-        expect(bodyStillFresh.value == "Dans ton repère",
+        expect(bodyStillFresh.value == "Dans la zone",
                "le TTL corps ne doit pas être remplacé par le TTL visage")
 
         for unreliable in [
@@ -92,8 +92,8 @@ enum PostureIndicatorPresentationHarness {
                "l'alerte canonique clignements doit rester actionnable et honnête")
 
         expect(PostureIndicatorPresentation.orderedIDs == [
-            .shoulderSlope, .raisedShoulders, .headTilt, .closedShoulders,
-            .apparentProximity, .torsoInclination, .estimatedBlinks, .handOnFace
+            .shoulderSlope, .headTilt, .apparentProximity,
+            .torsoInclination, .estimatedBlinks, .handOnFace
         ], "l'ordre du rail doit rester stable")
 
         var head = result(.headTilt, state: .attention, ttl: 2)
@@ -108,7 +108,7 @@ enum PostureIndicatorPresentationHarness {
         learning.numericValue = 8
         let learningPresentation = PostureIndicatorPresentation.make(for: learning, producedAt: now)
         expect(learningPresentation.value.contains("8.0/min") &&
-               learningPresentation.value.contains("repère en cours") &&
+               learningPresentation.value.contains("référence en cours") &&
                learningPresentation.tone == .neutral,
                "un taux observable sans référence ne signifie pas que les clignements suffisent")
         expect(PostureIndicatorPresentation.make(for: learning, producedAt: 12).value == "Yeux non mesurables",

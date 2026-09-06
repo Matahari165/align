@@ -31,23 +31,19 @@ struct PostureIndicatorsView: View {
         .padding(.vertical, 10)
         .background(AlignTheme.elevated.opacity(0.94))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Indicateurs de posture, huit")
+        .accessibilityLabel("Indicateurs de posture, six")
     }
 
     private var threeColumnGrid: some View {
         Grid(horizontalSpacing: 8, verticalSpacing: 8) {
             GridRow {
                 indicator(for: .shoulderSlope)
-                indicator(for: .raisedShoulders)
                 indicator(for: .headTilt)
-            }
-            GridRow {
-                indicator(for: .closedShoulders)
                 indicator(for: .apparentProximity)
-                indicator(for: .torsoInclination)
             }
             GridRow {
-                indicator(for: .estimatedBlinks).gridCellColumns(2)
+                indicator(for: .torsoInclination)
+                indicator(for: .estimatedBlinks)
                 indicator(for: .handOnFace)
             }
         }
@@ -58,11 +54,7 @@ struct PostureIndicatorsView: View {
         Grid(horizontalSpacing: 8, verticalSpacing: 8) {
             GridRow {
                 indicator(for: .shoulderSlope)
-                indicator(for: .raisedShoulders)
-            }
-            GridRow {
                 indicator(for: .headTilt)
-                indicator(for: .closedShoulders)
             }
             GridRow {
                 indicator(for: .apparentProximity)
@@ -142,7 +134,7 @@ struct PostureIndicatorsView: View {
     ) -> String {
         guard presentation.tone == .negative else { return presentation.primaryValue }
         return switch id {
-        case .apparentProximity: "À éloigner"
+        case .apparentProximity: "À éloigner légèrement"
         case .torsoInclination: "À redresser"
         case .raisedShoulders: "À relâcher"
         case .shoulderSlope: "À corriger"
@@ -163,11 +155,11 @@ struct PostureIndicatorsView: View {
 
     private var railStatus: String {
         guard cameraIsRunning else { return "Caméra inactive" }
-        if snapshot.isCalibrating { return "Calibration en cours" }
+        if snapshot.isCalibrating { return "Mesure des yeux en cours" }
         let available = PostureIndicatorPresentation.orderedIDs.filter {
             snapshot.result(for: $0).state != .unavailable
         }.count
-        return "\(available)/8 signaux disponibles"
+        return "\(available)/\(PostureIndicatorPresentation.orderedIDs.count) signaux disponibles"
     }
 
     private var railStatusSymbol: String {
@@ -184,15 +176,15 @@ struct PostureIndicatorsView: View {
     private func accessibilityHint(for id: PostureIndicatorID) -> String {
         switch id {
         case .apparentProximity:
-            "Proxy relatif à ton repère ; Align ne mesure pas une distance physique."
+            "Proxy géométrique 2D : Align mesure la taille apparente du visage dans l'image, pas une distance physique."
         case .closedShoulders:
             "Proportions tête–épaules comparées à ton repère. Un écart peut venir de la tête avancée ou des épaules refermées."
         case .headTilt:
-            "Tête penchée sur le côté par rapport à la ligne des épaules et à ton repère personnel."
+            "Angle de la tête par rapport à la ligne des épaules et à l'axe horizontal de l'image."
         case .shoulderSlope:
-            "Différence de hauteur entre les deux épaules, vue de face. L’angle est comparé à ton repère ; il ne mesure pas des épaules avancées."
+            "Angle de la ligne entre les deux épaules, vu de face. Il est comparé à l'horizontale de l'image ; il ne mesure pas des épaules avancées."
         case .torsoInclination:
-            "Buste penché sur le côté, mesuré entre le milieu des épaules et celui des hanches, puis comparé à ton repère."
+            "Angle entre le milieu des épaules et celui des hanches, comparé à l'axe vertical de l'image."
         case .raisedShoulders:
             "Hauteur des épaules par rapport à la base du cou et à ton repère personnel."
         case .estimatedBlinks:
@@ -230,11 +222,11 @@ struct PostureIndicatorsView: View {
                 .accessibilityLabel("Activer les alertes")
                 .buttonStyle(.bordered)
             }
-            Button(snapshot.isCalibrating ? "Calibration…" : "Calibrer") {
+            Button(snapshot.isCalibrating ? "Mesure des yeux…" : "Initialiser les yeux") {
                 onCalibrate()
             }
             .disabled(!cameraIsRunning || snapshot.isCalibrating)
-            .accessibilityHint("Adoptez une posture confortable pendant huit secondes.")
+            .accessibilityHint("Gardez simplement les deux yeux visibles pendant huit secondes.")
             .buttonStyle(.borderedProminent)
         }
         .controlSize(.small)

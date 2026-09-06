@@ -4,10 +4,9 @@ import Foundation
 /// Étage sérialisé entre les sorties CV et les alertes. Il ne possède ni caméra
 /// ni image : une instance est liée à une activation et à une génération.
 nonisolated struct PostureRuntimeCoordinator: Sendable {
-    // La pente des épaules est désormais filtrée et soumise à une qualité de
-    // cadrage dédiée : une ancienne baseline ne doit pas être comparée à ce
-    // nouveau signal sans recalibration.
-    static let ruleVersion = "rich-v3"
+    /// Version du moteur universel. Les statistiques et états d'alerte portant
+    /// sur l'ancien repère personnel ne doivent jamais être mélangés à ceux-ci.
+    static let ruleVersion = "universal-geometry-v1"
     private(set) var generation: UInt64 = 0
     private(set) var contextKey = ""
     private var lastFaceSampleID: UInt64 = 0
@@ -15,13 +14,10 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
     private var lastBodySampleID: UInt64 = 0
     private var evaluator: PostureRichSignalEvaluator
     private var observationEngine = PostureObservationEngine()
-    private var baselineSamples: [PostureRichGeometryMetrics] = []
-    private var baselineFaceSamples: [PostureFaceObservation] = []
+    private var calibrationFaceSamples: [PostureFaceObservation] = []
     private var baseline: PostureRichBaseline?
     private var calibrationBaselineBackup: PostureRichBaseline?
     private var pendingCalibrationBaseline: PostureRichBaseline?
-    private var lastBaselineBodySampleID: UInt64 = 0
-    private var lastBaselineBodyCapturedAt: TimeInterval?
     private var lastBaselineFaceSampleID: UInt64 = 0
     private var lastBaselineFaceCapturedAt: TimeInterval?
     private var lastPublishedSample: [PostureObservationSignalID: UInt64] = [:]
@@ -42,13 +38,12 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         case .discreet:
             configuration = .discreet
         }
-
-        // Une variation normale de distance ne doit pas transformer chaque
-        // rapprochement en nouveau signal. Cette zone morte reste générale et
-        // ne dépend pas des coordonnées d'une calibration unique.
-        configuration.proximityEnterRatio = max(configuration.proximityEnterRatio, 1.35)
-        configuration.proximityExitRatio = max(configuration.proximityExitRatio, 1.20)
-        configuration.proximityDuration = max(configuration.proximityDuration, 4.0)
+        configuration.referenceMode = .universalGeometry
+        configuration.universalGeometry = .standard
+        // The canonical observation engine owns the two-second proximity
+        // persistence. Keep the rich evaluator instantaneous here so the
+        // same interval is not counted twice before alert arbitration.
+        configuration.proximityDuration = 0
         return configuration
     }
 
@@ -80,11 +75,8 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         isCalibrationActive = true
         calibrationBaselineBackup = baseline
         pendingCalibrationBaseline = nil
-        baselineSamples.removeAll(keepingCapacity: true)
-        baselineFaceSamples.removeAll(keepingCapacity: true)
+        calibrationFaceSamples.removeAll(keepingCapacity: true)
         baseline = nil
-        lastBaselineBodySampleID = lastBodySampleID
-        lastBaselineBodyCapturedAt = nil
         lastBaselineFaceSampleID = lastFaceSampleID
         lastBaselineFaceCapturedAt = nil
         blinkTargetPerMinute = nil
@@ -106,7 +98,34 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
             return false
         }
 
-        baseline = regularized(candidate)
+        // La session reste utile pour mesurer l'ouverture habituelle des yeux,
+        // mais aucune valeur de posture ou de proximité ne devient une
+        // référence produit. Conserver uniquement ce sous-ensemble évite de
+        // réintroduire silencieusement l'ancien calibrage personnel.
+        guard let blinkOpeningBaseline = candidate.blinkOpeningBaseline else {
+            baseline = calibrationBaselineBackup
+            return false
+        }
+        baseline = PostureRichBaseline(
+            generation: candidate.generation,
+            contextKey: candidate.contextKey,
+            ruleVersion: Self.ruleVersion,
+            torsoInclinationDegrees: nil,
+            torsoAxisDeviation: nil,
+            shoulderSlopeDegrees: nil,
+            shoulderOpeningRatio: nil,
+            leftShoulderElevation: nil,
+            rightShoulderElevation: nil,
+            proximityScale: nil,
+            sampleCount: blinkOpeningBaseline.sampleCount,
+            torsoInclinationMAD: nil,
+            torsoAxisMAD: nil,
+            shoulderSlopeMAD: nil,
+            blinkOpeningBaseline: blinkOpeningBaseline,
+            familySampleCounts: .init(blinkOpening: blinkOpeningBaseline.sampleCount),
+            headTiltDegrees: nil,
+            headTiltMAD: nil
+        )
         return true
     }
 
@@ -144,8 +163,6 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         baseline = regularized(restored)
         pendingCalibrationBaseline = nil
         calibrationBaselineBackup = nil
-        lastBaselineBodySampleID = 0
-        lastBaselineBodyCapturedAt = nil
     }
 
     mutating func reset(generation: UInt64, contextKey: String, preserveCalibration: Bool = false) {
@@ -165,13 +182,10 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         evaluator.reset()
         observationEngine = PostureObservationEngine()
         _ = observationEngine.reset(generation: generation, at: 0)
-        baselineSamples.removeAll(keepingCapacity: true)
-        baselineFaceSamples.removeAll(keepingCapacity: true)
+        calibrationFaceSamples.removeAll(keepingCapacity: true)
         baseline = nil
         calibrationBaselineBackup = nil
         pendingCalibrationBaseline = nil
-        lastBaselineBodySampleID = 0
-        lastBaselineBodyCapturedAt = nil
         lastBaselineFaceSampleID = 0
         lastBaselineFaceCapturedAt = nil
     }
@@ -198,7 +212,6 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         guard bodySample > lastBodySampleID || faceSample > lastFaceSampleID else { return nil }
         let isNewBodySample = geometry.map { $0.sampleID > lastBodySampleID } ?? false
         let isNewFaceSample = face.map { $0.sampleID > lastFaceSampleID } ?? false
-        collectCalibrationSample(geometry)
         collectCalibrationFaceSample(face)
         let candidateBaseline = pendingCalibrationBaseline ??
             (isCalibrationActive ? nil : (self.baseline ?? externalBaseline))
@@ -241,9 +254,10 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         if let face { lastFaceSampleID = max(lastFaceSampleID, face.sampleID) }
         let canonical = observationEngine.ingest(
             rich: evaluation, contextKey: contextKey, now: now,
-            calibration: isCalibrationActive
-                ? .calibrating
-                : (usableBaseline == nil ? .missing : .valid),
+            // Les signaux de posture sont immédiatement évaluables avec la
+            // géométrie universelle. Le moteur de clignements gère sa propre
+            // maturité à partir de `normalizedValue`.
+            calibration: .valid,
             signalIDs: Set(
                 (isNewBodySample ? Array(PostureObservationEngine.bodySignalIDs) : []) +
                 (isNewFaceSample ? Array(PostureObservationEngine.faceSignalIDs) : [])
@@ -275,9 +289,7 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         lastFaceSampleID = face.sampleID
         let canonical = observationEngine.ingest(
             rich: evaluation, contextKey: face.contextKey, now: now,
-            calibration: isCalibrationActive
-                ? .calibrating
-                : (usableBaseline == nil ? .missing : .valid),
+            calibration: .valid,
             signalIDs: PostureObservationEngine.faceSignalIDs
         )
         lastEvaluation = evaluation
@@ -316,7 +328,7 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
             // exit threshold and make the rail flicker near the face.
             normalizedValue: isGood ? sample.observation.distanceRatio : nil,
             quality: quality,
-            calibration: isCalibrationActive ? .calibrating : .valid,
+            calibration: .valid,
             cameraContextID: sample.contextKey,
             framingSignature: sample.contextKey,
             assessmentHint: nil,
@@ -339,7 +351,6 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
               geometry.contextKey == contextKey,
               geometry.sampleID > lastBodySampleID,
               geometry.capturedAt.isFinite, now >= geometry.capturedAt else { return nil }
-        collectCalibrationSample(geometry)
         let candidateBaseline = pendingCalibrationBaseline ??
             (isCalibrationActive ? nil : (baseline ?? self.baseline))
         let usableBaseline = candidateBaseline.flatMap {
@@ -353,25 +364,11 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         lastBodySampleID = geometry.sampleID
         let canonical = observationEngine.ingest(
             rich: evaluation, contextKey: geometry.contextKey, now: now,
-            calibration: isCalibrationActive
-                ? .calibrating
-                : (usableBaseline == nil ? .missing : .valid),
+            calibration: .valid,
             signalIDs: PostureObservationEngine.bodySignalIDs
         )
         lastEvaluation = evaluation
         return (evaluation, canonical)
-    }
-
-    private mutating func collectCalibrationSample(_ geometry: PostureRichGeometryMetrics?) {
-        guard isCalibrationActive, let geometry,
-              geometry.contextKey == contextKey,
-              geometry.sampleID > lastBaselineBodySampleID,
-              lastBaselineBodyCapturedAt.map({ geometry.capturedAt > $0 }) ?? true else { return }
-        lastBaselineBodySampleID = geometry.sampleID
-        lastBaselineBodyCapturedAt = geometry.capturedAt
-        baselineSamples.append(geometry)
-        if baselineSamples.count > 32 { baselineSamples.removeFirst() }
-        rebuildCalibrationBaseline()
     }
 
     private mutating func collectCalibrationFaceSample(_ face: PostureFaceObservation?) {
@@ -382,19 +379,20 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
               lastBaselineFaceCapturedAt.map({ face.capturedAt > $0 }) ?? true else { return }
         lastBaselineFaceSampleID = face.sampleID
         lastBaselineFaceCapturedAt = face.capturedAt
-        baselineFaceSamples.append(face)
-        // Les corps arrivent à ~2 Hz alors que le visage arrive à ~10 Hz :
-        // douze corps cohérents couvrent plus de cinq secondes. Conserver
-        // 128 ticks visage permet encore d'apparier toute cette fenêtre.
-        if baselineFaceSamples.count > 128 { baselineFaceSamples.removeFirst() }
+        calibrationFaceSamples.append(face)
+        // La calibration ne collecte plus aucune famille corporelle. Les
+        // ticks visage servent uniquement à produire l'ouverture habituelle
+        // des yeux ; la taille du visage éventuellement reconstruite par le
+        // builder est ensuite jetée avec le reste du candidat.
+        if calibrationFaceSamples.count > 128 { calibrationFaceSamples.removeFirst() }
         rebuildCalibrationBaseline()
     }
 
     private mutating func rebuildCalibrationBaseline() {
         guard isCalibrationActive else { return }
         pendingCalibrationBaseline = PostureRichBaselineBuilder.make(
-            samples: baselineSamples,
-            faceSamples: baselineFaceSamples,
+            samples: [],
+            faceSamples: calibrationFaceSamples,
             generation: generation,
             contextKey: contextKey,
             ruleVersion: Self.ruleVersion,
@@ -460,9 +458,7 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
             rich: evaluation,
             contextKey: contextKey,
             now: now,
-            calibration: isCalibrationActive
-                ? .calibrating
-                : (baseline == nil ? .missing : .valid),
+            calibration: .valid,
             signalIDs: PostureObservationEngine.bodySignalIDs
         )
         return (evaluation, canonical)

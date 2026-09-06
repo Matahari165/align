@@ -1,75 +1,110 @@
-# Interprétation de la posture et rappels
+# Référence géométrique et rappels Align
 
-## Mesures proposées
+## Principe
 
-Le suivi visible des épaules est la base de cette étape. Les mesures comparent la position courante à un repère personnel de huit secondes, établi dans le cadrage de travail habituel.
+La posture de production n'est plus comparée à la manière dont la personne
+s'est tenue pendant une calibration. Elle est comparée à des axes géométriques
+communs à l'image caméra. Un petit déplacement vers l'avant ou vers l'arrière
+ne change donc pas, à lui seul, le repère angulaire.
 
-| Indicateur | Ce qui est mesuré | Conditions |
-| --- | --- | --- |
-| Inclinaison des épaules | Écart angulaire de la ligne entre les épaules | Deux épaules fiables |
-| Épaules relevées | Hauteur de chaque épaule par rapport au cou, rapportée à la largeur des épaules | Cou et épaules fiables |
-| Tête penchée | Angle de la ligne des yeux par rapport à celle des épaules | Visage et épaules appairés ; correction du format de l'image |
-| Tête–épaules | Rapport largeur des épaules / taille apparente du visage | Visage et épaules fiables ; le cou n'est pas nécessaire |
-| Proximité apparente | Taille du visage comparée à la calibration ; ×1,25 signifie un visage 25 % plus grand | Visage suffisamment frontal |
-| Torse incliné | Inclinaison du torse comparée au repère | Épaules et hanches visibles |
-| Clignements estimés | Événements des deux yeux par minute réellement observable | Images suffisamment rapprochées ; les trous ne comptent pas |
+La version active des règles est `universal-geometry-v1`. Les anciennes valeurs
+de posture ne sont pas réutilisées. La calibration de huit secondes ne sert
+plus qu'à mesurer l'ouverture habituelle de chaque œil pour rendre la détection
+des clignements plus fiable.
 
-Le rapport tête–épaules ne permet pas de distinguer à lui seul une tête avancée d'épaules refermées. Align ne prétend pas mesurer directement la courbure du dos ni une distance en centimètres. Une calibration mémorise une position choisie ; elle ne prouve pas que cette position est idéale.
+## Signaux utilisés
 
-Les angles tête/épaules sont calculés dans le même espace pixel avant soustraction. Une rotation commune de l'image s'annule dans l'angle relatif. La pente absolue des épaules reste comparée à la calibration : déplacer la caméra demande de refaire le repère.
+| Signal | Référence de production | Écart d'entrée | Retour dans la zone | Durée avant attention |
+| --- | --- | ---: | ---: | ---: |
+| Torse incliné | Axe entre le milieu des épaules et celui des hanches, 0° = vertical | ±10° | ±6° | 0,8 s sensible · 1 s équilibré · 1,5 s discret |
+| Épaules inclinées | Angle de la ligne entre les deux épaules, 0° = horizontale | ±6° | ±3,5° | 1 s sensible/équilibré · 1,5 s discret |
+| Tête inclinée | Différence entre la ligne des yeux et la ligne des épaules | ±10° | ±6° | 0,8 s sensible · 1 s équilibré · 1,5 s discret |
+| Proximité apparente | Taille du visage dans l'image, proxy 2D | 0,24 | 0,21 | 2 s continus |
+| Main au visage | Distance 2D main–visage | seuil du détecteur | seuil de sortie du détecteur | 2,5 s continus |
+| Clignements | Ouverture habituelle de chaque œil + débit personnel appris | ouverture sous 65 % de la référence | ouverture au-dessus de 80 % | rappel yeux ouverts : 15/20/30 s selon sensibilité |
 
-## Rappels
+Les angles utilisent une hystérésis : le seuil de sortie est plus proche de
+zéro que le seuil d'entrée. Exemple : une inclinaison du torse doit dépasser
+10° pendant la durée du profil pour déclencher une attention ; elle doit ensuite
+revenir sous 6° pour fermer l'épisode.
 
-Les sept observations peuvent déclencher un rappel, uniquement avec une preuve fraîche et de bonne qualité. Les rappels corporels attendent un écart persistant ; le réglage par défaut est Sensible. Un rappel peut revenir après 60 secondes pour le même signal, avec au moins 30 secondes entre signaux différents. Les yeux ont un délai de répétition de 120 secondes. Chaque signal peut être suspendu dans les réglages.
+La proximité est uniquement une taille apparente du visage dans le cadre. Elle
+ne donne pas une distance en centimètres. Elle dépend donc encore du cadrage,
+du zoom et de la caméra ; si l'image est mauvaise ou si le visage est trop
+tourné, le signal devient indisponible plutôt que d'inventer une mesure.
 
-Les clignements utilisent deux approches :
+Les métriques « épaules relevées » et « tête–épaules » restent calculées pour
+le diagnostic technique, mais ne sont pas affichées comme rappels et ne peuvent
+pas envoyer de notification : aucun seuil géométrique universel suffisamment
+fiable n'a été retenu pour elles.
 
-- un rappel pratique après une période prolongée d'yeux ouverts continuellement observés ; le profil Sensible utilise 15 secondes, le profil équilibré 20 secondes et le profil discret 30 secondes. Ce sont des préférences de rappel, pas des normes médicales ;
-- une baisse durable par rapport à un repère personnel appris sur trois fenêtres indépendantes d'une minute, chacune comprenant au moins 45 secondes observables.
+## Clignements
 
-Le débit brut peut être affiché pendant l'apprentissage, sans dire si la personne cligne assez. Une fermeture des yeux, une preuve invalide ou une interruption du suivi casse le compteur de la longue période d'yeux ouverts.
+Le détecteur reconnaît un cycle des deux yeux : ouverture, fermeture, puis
+réouverture. Les deux yeux doivent être visibles et cohérents. La fermeture
+doit durer au moins 50 ms et au plus 500 ms ; une interruption de suivi de plus
+de 350 ms casse le clignement en cours.
 
-Une réservation de notification est annulée si la posture revient au repère, si la preuve devient incertaine ou si elle expire pendant l'attente de macOS. Le test de notification des réglages est explicitement identifié et n'entre pas dans les statistiques.
+Deux références différentes sont utilisées :
 
-Les rappels demandent le son système, au premier plan comme en arrière-plan. Leur durée dépend du réglage macOS d’Align : le style Persistant les conserve jusqu’à leur fermeture. Les réglages de l’application donnent accès à ce choix. Les messages décrivent l’axe réellement mesuré : une épaule plus haute que l’autre, tête ou buste penchés sur le côté. Le côté gauche/droit n’est pas inventé lorsque la notification ne possède pas cette information.
+- l'ouverture habituelle de l'œil gauche et de l'œil droit est mesurée pendant
+  l'initialisation de huit secondes ;
+- le débit de clignements est appris automatiquement sur trois fenêtres d'une
+  minute, avec au moins 45 secondes réellement observées par fenêtre. Cela
+  représente au minimum trois minutes de suivi exploitable, pas trois minutes
+  de caméra aveugle.
 
-## Cadence de traitement
+Quand le débit appris est disponible, une fréquence inférieure à 70 % de cette
+cible pendant cinq minutes continues ouvre un épisode de baisse. Il faut ensuite
+deux minutes au-dessus du seuil pour le fermer. Indépendamment de cette cible,
+un rappel pratique peut apparaître lorsque les deux yeux restent ouverts sans
+clignement détecté pendant 15 secondes en mode sensible, 20 secondes en mode
+équilibré ou 30 secondes en mode discret. Ce rappel n'est pas une norme
+médicale.
 
-Pendant les huit secondes de calibration, le corps est sollicité deux fois par seconde, même en arrière-plan, pour pouvoir réunir les douze mesures nécessaires au repère. Une détection trop lente ou insuffisante peut encore empêcher la calibration d'un indicateur ; il reste alors indisponible.
+## Notifications
 
-Le calcul RTMPose du corps s’exécute sur une file de travail distincte de celle du visage. Une seule image corporelle peut être en calcul ; aucune file d’images en retard ne s’accumule. Le résultat garde son heure de capture et le visage appairé à ce moment. Au retour, Align vérifie la génération, le contexte et la fraîcheur avant de le publier. Le débit live des yeux utilise une fenêtre glissante, distincte des fenêtres indépendantes servant à apprendre le repère.
+Une notification n'est jamais envoyée sur une seule image. Il faut :
 
-Une interruption des yeux supérieure à 350 ms casse le clignement en cours mais conserve les portions valides de la fenêtre glissante ; elle ne remet plus tout le débit à zéro. Le temps manquant n’est jamais compté. Une absence longue casse aussi l’épisode courant, mais les observations encore âgées de moins d’une minute restent utilisables au retour et les plus anciennes sortent naturellement de la fenêtre. Pendant la collecte, le rail affiche les secondes réellement observées sur les 45 nécessaires ; une donnée périmée ne garde pas une fausse progression. Une réacquisition dans le même contexte caméra ne supprime donc ni la cible personnelle ni les secondes valides déjà acquises.
+1. une observation récente et de bonne qualité ;
+2. le maintien de l'écart pendant la durée indiquée ci-dessus ;
+3. un signal activé et non suspendu dans les réglages ;
+4. l'autorisation des notifications macOS.
 
-## Évolution et vérification
+Après l'entrée en attention publiée par le moteur, le coordinateur ajoute une
+petite durée de confirmation avant de réserver la notification :
 
-Les statistiques suivent les épisodes, les rappels et les retours au repère, par heure réellement observée. L'inclinaison des épaules est sélectionnée par défaut. Les périodes sans observation restent inconnues. Les comparaisons entre périodes sont suspendues si les règles ou la sensibilité ont changé.
+- posture et proximité : 7,5 s en mode sensible, 15 s en mode équilibré,
+  22,5 s en mode discret ;
+- clignements : 0,5 s, 1 s ou 1,5 s selon ces mêmes profils ;
+- main au visage : 0,125 s, 0,25 s ou 0,375 s.
 
-Vérifications automatiques pertinentes :
+Cela donne, à titre pratique, environ 8,3/16/24 s pour un angle du torse ou de
+la tête, 9,5/17/24,5 s pour la proximité, 2,6/2,75/2,9 s pour la main au
+visage et 15,5/21/31,5 s pour le rappel « yeux ouverts » — avant d'éventuels
+blocages de livraison. Une mesure doit donc d'abord franchir sa durée
+géométrique du tableau, puis cette confirmation.
+Le coordinateur impose aussi au moins 30 s entre deux signaux différents,
+60 s entre deux rappels de posture du même type et 120 s entre deux rappels de
+clignements. Ces durées sont des protections anti-spam, pas des seuils de
+détection.
 
-- calcul angulaire sur des repères faciaux réellement transformés, dans une image non carrée ;
-- calibration indépendante sans hanches et ratio tête–épaules sans cou ;
-- rejet de points pauvres, d'un visage trop tourné, de données périmées et d'une ancienne génération ;
-- apprentissage sur fenêtres indépendantes et conservation de la fraîcheur des valeurs affichées ;
-- répétition des rappels, équité entre signaux et annulation des livraisons asynchrones devenues invalides ;
-- conservation des anciennes données et absence de comparaison trompeuse entre règles différentes.
+Le coordinateur réserve ensuite la livraison. Une réservation est annulée si
+la mesure revient dans la zone, si la preuve devient incertaine, si le contexte
+caméra change ou si la livraison expire. Les rappels peuvent se répéter selon
+le profil de sensibilité, avec les protections de récurrence déjà définies par
+le coordinateur.
 
-La compilation et ces scénarios ne prouvent pas l'exactitude anatomique. La validation réelle doit vérifier séparément le cadrage habituel, la stabilité pendant le travail, la disponibilité des yeux et l'apparition des notifications macOS. Pour mesurer objectivement les progrès, comparer quelques gestes identifiés au départ et des périodes de travail neutres, puis relever les faux rappels par heure observée et le délai de retour au repère.
+## Qualité et limites
 
-## Vérification locale du 5 septembre 2026
+Le moteur exige des repères suffisants : épaules et hanches pour le torse,
+deux épaules pour leur pente, visage et épaules pour la tête, visage frontal
+pour la proximité et les yeux pour les clignements. Une mesure trop ancienne,
+incomplète ou incohérente devient indisponible ; elle ne déclenche pas de
+rappel.
 
-- Compilation Release et contrôle du modèle RTMPose embarqué : réussis.
-- Quatorze harnesses de calcul, temporalité, continuité visage, affichage, historique et alertes : réussis.
-- Test du worker réel avec une inférence simulée bloquante : réussi. Il vérifie que la file du visage reste disponible, qu'une seconde frame n'est pas mise en attente, qu'une ancienne activation ne publie rien et qu'un calcul expiré est rejeté. Commande : `sh Tests/UpperBodyInferenceWorkerHarness.sh`. Le script extrait le worker de production ; son implémentation n'est pas dupliquée dans le test.
-- Interface à trois puis deux colonnes : vérifiée dans l'application.
-- Calibration réelle sur la dernière Release : 16 mesures utilisables pour les épaules, la tête penchée et le rapport tête–épaules ; 69 mesures faciales. Ces trois indicateurs et la proximité sont affichés dans le cadrage courant. Le cou et les hanches insuffisamment fiables laissent les deux autres mesures corporelles indisponibles.
-- Le taux de clignements a été observé à 10,6/min après séparation du calcul du corps et du visage ; ce relevé vérifie le fonctionnement de l'affichage, pas l'exactitude du comptage.
-- Notification de test : présente dans le centre de notifications macOS. Deux rappels réels d'inclinaison des épaules ont également été enregistrés pendant l'observation naturelle.
-
-Ces résultats ne constituent pas une mesure de précision des clignements contre un comptage humain, ni une validation médicale de posture.
-
-### Retour utilisateur : son, durée et clignements
-
-- macOS Align vérifié sur Persistant, puis son activé dans les réglages système après ajout de l’autorisation sonore. Rappel de test envoyé et présent dans le centre de notifications. La sortie audio n’a pas été mesurée acoustiquement.
-- Après correction des interruptions, l’application a affiché la progression `23/45 s`, puis les débits estimés `13,0/min`, `8,9/min` et `15,6/min` en usage naturel. Le repère personnel était encore en apprentissage.
-- Tests de reprise après interruption, expiration de progression, affichage et notifications : réussis. Empreintes des sept fichiers du nouveau logo inchangées.
+Cette solution élimine la fausse référence personnelle qui signalait une
+posture « mauvaise » après un simple changement de position. Elle ne transforme
+pas une caméra 2D en mesure anatomique universelle : la précision réelle doit
+encore être vérifiée avec la caméra habituelle, plusieurs cadrages et des
+observations de faux rappels par heure.

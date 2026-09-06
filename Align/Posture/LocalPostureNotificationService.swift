@@ -33,11 +33,11 @@ nonisolated enum LocalPostureNotificationCopy {
     static func body(for signalID: PostureObservationSignalID) -> String? {
         switch signalID {
         case .proximity:
-            "Tu sembles un peu près de l’écran. Recule légèrement."
+            "Ton visage occupe beaucoup d’espace dans le cadre. Éloigne-toi légèrement."
         case .torsoInclination:
-            "Ton buste penche sur le côté par rapport à ton repère. Recentre ton buste."
+            "Ton buste penche sur le côté par rapport à l’axe de l’image. Recentre ton buste."
         case .raisedShoulders:
-            "Tes épaules restent relevées par rapport à ton repère. Relâche-les."
+            "Tes épaules semblent relevées. Relâche-les."
         case .headTilt:
             "Ta tête est penchée sur le côté. Réajuste-la."
         case .closedShoulders:

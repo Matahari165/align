@@ -42,7 +42,7 @@ struct SettingsView: View {
                 switch camera.proximityNotificationAuthorization {
                 case .authorized:
                     Label("Notifications activées", systemImage: "bell.badge")
-                    Text("Pour garder les rappels à l’écran jusqu’à leur fermeture, choisis le style Persistant dans macOS. Le son se règle au même endroit.")
+                    Text("Le style d’affichage et le son des rappels se règlent dans macOS.")
                         .font(.caption).foregroundStyle(.secondary)
                     Link("Son et affichage dans macOS…", destination: notificationSettingsURL)
                     Button("Tester un rappel") {
@@ -72,9 +72,9 @@ struct SettingsView: View {
             }
 
             Section("Repères") {
-                Text("Définis un repère personnel dans une position confortable. Chaque signal est validé séparément.")
+                Text("La posture utilise une référence géométrique commune : les angles sont mesurés par rapport aux axes de l’image et la proximité par rapport à la taille apparente du visage. Seule l’ouverture habituelle de tes yeux est mesurée ici pour les clignements.")
                     .font(.callout).foregroundStyle(.secondary)
-                Button("Définir mes repères…") {
+                Button("Initialiser la référence des yeux…") {
                     camera.calibratePosture()
                 }
                 if camera.calibrationPresentation.phase != .idle {
@@ -83,14 +83,14 @@ struct SettingsView: View {
                             .font(.callout.weight(.semibold))
                         if case .collecting = appModel.camera.calibrationPresentation.phase {
                             ProgressView(value: camera.calibrationPresentation.progress)
-                                .accessibilityLabel("Progression de la définition des repères")
+                                .accessibilityLabel("Progression de la mesure de l’ouverture des yeux")
                         }
-                        ForEach(PostureObservationSignalID.allCases, id: \.self) { id in
+                        ForEach([PostureObservationSignalID.estimatedBlinks], id: \.self) { id in
                             calibrationOutcome(id)
                         }
                     }
                 }
-                Text("La calibration reste locale à ce Mac et ne conserve aucune image.")
+                Text("La mesure reste locale à ce Mac et ne conserve aucune image.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -189,7 +189,7 @@ struct SettingsView: View {
         let symbol: String
         switch outcome {
         case .pending: label = "En attente"; symbol = "ellipsis.circle"
-        case .ready: label = "Repère prêt"; symbol = "checkmark.circle"
+        case .ready: label = "Référence prête"; symbol = "checkmark.circle"
         case .unavailable(let reason): label = "Données insuffisantes — \(reason)"; symbol = "minus.circle"
         }
         return Label("\(signalShortTitle(id)) · \(label)", systemImage: symbol)

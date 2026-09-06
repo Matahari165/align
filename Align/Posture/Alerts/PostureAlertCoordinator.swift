@@ -67,7 +67,7 @@ nonisolated struct PostureAlertCandidate: Equatable, Codable, Sendable {
         createdAt: TimeInterval,
         isExperimental: Bool,
         sensitivity: PostureRecommendationSensitivity = .sensitive,
-        ruleProfileID: String = "runtime-v2"
+        ruleProfileID: String = PostureAlertCoordinator.ruleProfileID
     ) {
         self.identifier = identifier
         self.signalID = signalID
@@ -164,6 +164,7 @@ nonisolated struct PostureAlertSettingsStore {
 
 /// Pure arbitration. Delivery and authorization remain MainActor side effects.
 nonisolated struct PostureAlertCoordinator: Sendable {
+    static let ruleProfileID = "universal-geometry-v1"
     /// A notification request may await macOS authorization or delivery. Keep
     /// that in-flight reservation alive slightly longer than the observation
     /// TTL, while still bounding how long a silent runtime can deliver it.
@@ -185,8 +186,8 @@ nonisolated struct PostureAlertCoordinator: Sendable {
         globalConfiguration: PostureGlobalAlertConfiguration,
         sensitivity: PostureRecommendationSensitivity = .sensitive,
         priority: [PostureObservationSignalID] = [
-            .proximity, .raisedShoulders, .torsoInclination, .headTilt,
-            .shoulderSlope, .closedShoulders, .estimatedBlinks, .handOnFace
+            .proximity, .torsoInclination, .headTilt,
+            .shoulderSlope, .estimatedBlinks, .handOnFace
         ]
     ) {
         self.baseSignalConfigurations = signalConfigurations
@@ -293,9 +294,9 @@ nonisolated struct PostureAlertCoordinator: Sendable {
             reservationID: reservationID,
             createdAt: now,
             isExperimental: signal.signalID == .estimatedBlinks ||
-                signal.signalID == .closedShoulders || signal.signalID == .handOnFace,
+                signal.signalID == .handOnFace,
             sensitivity: sensitivity,
-            ruleProfileID: "runtime-v2"
+            ruleProfileID: Self.ruleProfileID
         )
     }
 

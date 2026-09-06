@@ -12,6 +12,9 @@ public enum PostureValidationDirection: String, Codable, Sendable {
 }
 
 public enum PostureValidationAttention: String, Codable, Sendable {
+    case shoulderSlope
+    case headTilt
+    case apparentProximity
     case leftShoulderRaised
     case rightShoulderRaised
     case bothShouldersRaised
@@ -23,6 +26,9 @@ public enum PostureValidationAttention: String, Codable, Sendable {
 /// Phase exacte du protocole. Une phase peut ne demander aucune attention.
 public enum PostureValidationExpectation: String, Codable, Sendable {
     case neutral
+    case shoulderSlope
+    case headTilt
+    case apparentProximity
     case leftShoulderRaised
     case rightShoulderRaised
     case bothShouldersRaised
@@ -34,6 +40,9 @@ public enum PostureValidationExpectation: String, Codable, Sendable {
 
     public var expectedAttention: PostureValidationAttention? {
         switch self {
+        case .shoulderSlope: return .shoulderSlope
+        case .headTilt: return .headTilt
+        case .apparentProximity: return .apparentProximity
         case .leftShoulderRaised: return .leftShoulderRaised
         case .rightShoulderRaised: return .rightShoulderRaised
         case .bothShouldersRaised: return .bothShouldersRaised
@@ -161,20 +170,20 @@ public struct PostureValidationPlan: Codable, Equatable, Sendable {
         [
             .init(id: "neutral-1", expectation: .neutral, duration: duration,
                   instruction: "Reste en posture naturelle."),
-            .init(id: "left-shoulder-raised", expectation: .leftShoulderRaised,
-                  duration: duration, instruction: "Lève l'épaule gauche."),
+            .init(id: "shoulder-slope-1", expectation: .shoulderSlope,
+                  duration: duration, instruction: "Incline la ligne de tes épaules."),
             .init(id: "neutral-2", expectation: .neutral, duration: duration,
                   instruction: "Reviens en posture naturelle."),
-            .init(id: "right-shoulder-raised", expectation: .rightShoulderRaised,
-                  duration: duration, instruction: "Lève l'épaule droite."),
+            .init(id: "head-tilt-1", expectation: .headTilt,
+                  duration: duration, instruction: "Incline la tête sur le côté."),
             .init(id: "neutral-3", expectation: .neutral, duration: duration,
                   instruction: "Reviens en posture naturelle."),
-            .init(id: "both-shoulders-raised", expectation: .bothShouldersRaised,
-                  duration: duration, instruction: "Lève les deux épaules."),
-            .init(id: "shoulders-closed", expectation: .shouldersClosed,
-                  duration: duration, instruction: "Ferme les épaules vers l'avant."),
-            .init(id: "shoulders-open", expectation: .shouldersOpen,
-                  duration: duration, instruction: "Ouvre les épaules naturellement."),
+            .init(id: "apparent-proximity", expectation: .apparentProximity,
+                  duration: duration, instruction: "Approche-toi légèrement de la caméra."),
+            .init(id: "shoulder-slope-2", expectation: .shoulderSlope,
+                  duration: duration, instruction: "Incline la ligne de tes épaules de l'autre côté."),
+            .init(id: "head-tilt-2", expectation: .headTilt,
+                  duration: duration, instruction: "Incline la tête de l'autre côté."),
             .init(id: "torso-lean-left", expectation: .torsoLeanLeft,
                   duration: duration, instruction: "Incline le torse vers la gauche."),
             .init(id: "torso-lean-right", expectation: .torsoLeanRight,

@@ -10,10 +10,12 @@ nonisolated enum PostureObservationSignalID: String, CaseIterable, Codable, Hash
     case headTilt
     case handOnFace
 
-    /// Les rappels utilisent exclusivement des observations fiables et calibrées.
+    /// Les rappels utilisent exclusivement des observations fiables. Les
+    /// signaux dont aucun seuil universel défendable n'existe restent
+    /// disponibles pour le diagnostic, mais ne peuvent pas notifier.
     static let alertableCases: [Self] = [
-        .proximity, .torsoInclination, .raisedShoulders, .estimatedBlinks,
-        .shoulderSlope, .closedShoulders, .headTilt, .handOnFace
+        .proximity, .torsoInclination, .estimatedBlinks,
+        .shoulderSlope, .headTilt, .handOnFace
     ]
 }
 

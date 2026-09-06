@@ -213,7 +213,6 @@ final class CameraCaptureService: ObservableObject {
     @Published private(set) var blazePoseState: ShoulderTrackingState?
     @Published private(set) var postureIndicators = PostureIndicatorsSnapshot.initial
     @Published private(set) var postureRichEvaluation: PostureRichEvaluation?
-    @Published private(set) var postureValidationBaseline: PostureRichBaseline?
     @Published private(set) var postureObservations: PostureObservationsSnapshot = .init(generation: 0, producedAt: 0, signals: [])
     @Published private(set) var proximityNotificationAuthorization: LocalPostureNotificationService.Authorization = .unknown
     @Published private(set) var diagnostics = CameraAnalysisDiagnostics.empty
@@ -303,10 +302,9 @@ final class CameraCaptureService: ObservableObject {
                 self.postureIndicators = snapshot
             case .postureRichEvaluation(let evaluation):
                 self.postureRichEvaluation = evaluation
-            case .postureRuntime(let evaluation, let snapshot, let baseline):
+            case .postureRuntime(let evaluation, let snapshot):
                 self.postureRichEvaluation = evaluation
                 self.postureObservations = snapshot
-                self.postureValidationBaseline = baseline
                 self.recordPostureValidation(
                     evaluation: evaluation,
                     snapshot: snapshot
@@ -523,7 +521,6 @@ final class CameraCaptureService: ObservableObject {
         blazePoseState = nil
         postureIndicators = .initial
         postureRichEvaluation = nil
-        postureValidationBaseline = nil
         calibrationPresentation = .idle
         postureObservations = .init(
             generation: UInt64(activePoseGeneration?.activationID ?? 0),
@@ -542,12 +539,13 @@ final class CameraCaptureService: ObservableObject {
     func calibratePosture() {
         guard state == .running, let generation = activePoseGeneration else { return }
         invalidatePostureValidation(
-            reason: "Validation annulée : nouveau repère posture en cours de calibration."
+            reason: "Validation annulée : nouvelle mesure de la référence des yeux en cours."
         )
-        postureValidationBaseline = nil
         calibrationPresentation = .init(
             phase: .collecting, progress: 0, outcomes: Dictionary(
-                uniqueKeysWithValues: PostureObservationSignalID.allCases.map { ($0, .pending) }
+                uniqueKeysWithValues: [PostureObservationSignalID.estimatedBlinks].map {
+                    ($0, .pending)
+                }
             )
         )
         let delegate = sampleDelegate
@@ -656,7 +654,7 @@ final class CameraCaptureService: ObservableObject {
               let generation = activePoseGeneration,
               !postureObservations.contextKey.isEmpty else {
             postureValidationState = .invalidated(
-                "Validation annulée : calibre d’abord le repère posture complet."
+                "Validation annulée : attends que les mesures géométriques soient disponibles."
             )
             return
         }
@@ -769,16 +767,12 @@ final class CameraCaptureService: ObservableObject {
     }
 
     private var postureValidationBaselineReady: Bool {
-        guard let baseline = postureValidationBaseline,
-              baseline.generation == postureObservations.generation,
-              baseline.contextKey == postureObservations.contextKey,
-              baseline.ruleVersion == PostureRuntimeCoordinator.ruleVersion,
-              baseline.sampleCount >= 12,
-              baseline.torsoInclinationDegrees?.isFinite == true,
-              baseline.leftShoulderElevation?.isFinite == true,
-              baseline.rightShoulderElevation?.isFinite == true,
-              baseline.shoulderOpeningRatio?.isFinite == true else { return false }
-        return true
+        // La posture n'attend plus un repère personnel. La validation guidée
+        // nécessite seulement un contexte caméra stable et une génération
+        // courante; la qualité de chaque métrique est ensuite enregistrée
+        // comme preuve disponible, limitée ou absente.
+        return postureObservations.generation > 0 &&
+            !postureObservations.contextKey.isEmpty
     }
 
     private func recordPostureValidation(
@@ -802,7 +796,7 @@ final class CameraCaptureService: ObservableObject {
         let sample = PostureValidationRuntimeAdapter.makeSample(
             snapshot: snapshot,
             evaluation: evaluation,
-            baseline: postureValidationBaseline,
+            baseline: nil,
             expectedAttention: phase.expectedAttention
         )
         guard !postureValidationPublicationGate.isDuplicate(sample, phaseID: phase.id) else {
@@ -948,7 +942,6 @@ final class CameraCaptureService: ObservableObject {
         upperBodyDevelopmentSummary = "Torse · en attente"
         postureIndicators = .initial
         postureRichEvaluation = nil
-        postureValidationBaseline = nil
         if resetDiagnostics {
             diagnostics = .empty
         }
@@ -979,7 +972,7 @@ nonisolated private enum PoseProcessingEvent: Sendable {
     case upperBodyDevelopmentSummary(String)
     case postureIndicators(PostureIndicatorsSnapshot)
     case postureRichEvaluation(PostureRichEvaluation)
-    case postureRuntime(PostureRichEvaluation, PostureObservationsSnapshot, PostureRichBaseline?)
+    case postureRuntime(PostureRichEvaluation, PostureObservationsSnapshot)
     case postureObservations(PostureObservationsSnapshot)
     case calibration(PostureCalibrationPresentation)
     case silhouetteOverlay(PoseOverlay, UInt64)
@@ -1252,6 +1245,8 @@ private enum CameraError: LocalizedError {
 
 nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
     private static let persistedRichBaselineKey = "posture.richBaseline.v1"
+    private static let persistedBlinkOpeningBaselineKey = "posture.blinkOpeningBaseline.v1"
+    private static let legacyPersonalRuleVersion = "rich-v3"
 
     private let detector = PoseDetector()
     // RTMPose is the sole product engine for this activation. There is no
@@ -1372,9 +1367,9 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         self.segmentationCancellation = segmentationCancellation
         self.onFrameLiveness = onFrameLiveness
         self.onEvent = onEvent
-        // This delegate owns all mutable posture state on `sampleQueue`. The
-        // scalar baseline is loaded once before that state is used; images,
-        // video, landmarks, and raw coordinates are never persisted.
+        // This delegate owns all mutable posture state on `sampleQueue`. Only
+        // the eye-opening reference is loaded once before that state is used;
+        // images, video, landmarks, and raw coordinates are never persisted.
         persistedRichBaseline = Self.loadPersistedRichBaseline()
     }
 
@@ -1548,7 +1543,9 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         onEvent(.calibration(.init(
             phase: .collecting,
             progress: 0,
-            outcomes: Dictionary(uniqueKeysWithValues: PostureObservationSignalID.allCases.map { ($0, .pending) })
+            outcomes: Dictionary(uniqueKeysWithValues: [PostureObservationSignalID.estimatedBlinks].map {
+                ($0, .pending)
+            })
         )), generation)
         schedulePostureCalibrationFinish(after: 0.5,
                                          generation: generation)
@@ -1568,7 +1565,9 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                     self.onEvent(.calibration(.init(
                         phase: .collecting,
                         progress: min(0.99, max(0, elapsed / PostureIndicatorContract.calibrationDuration)),
-                        outcomes: Dictionary(uniqueKeysWithValues: PostureObservationSignalID.allCases.map { ($0, .pending) })
+                        outcomes: Dictionary(uniqueKeysWithValues: [PostureObservationSignalID.estimatedBlinks].map {
+                            ($0, .pending)
+                        })
                     )), scheduledGeneration)
                     self.schedulePostureCalibrationFinish(after: 0.5, generation: scheduledGeneration)
                     return
@@ -1579,54 +1578,25 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                     : nil
                 let ready = candidateBaseline.map(Self.isPersistableRichBaseline) ?? false
                 if ready, let baseline = candidateBaseline {
-                    // Keep the old value until the new calibration has
-                    // produced a complete, finite scalar baseline and its
-                    // encoded payload is ready. A failed/partial calibration
-                    // therefore cannot destroy the last known-good baseline.
+                    // Keep the old eye-opening reference until the new
+                    // measurement has produced a complete, finite payload.
+                    // A failed/partial measurement therefore cannot destroy
+                    // the last known-good reference.
                     self.persistSuccessfulBaseline(baseline)
                 } else {
-                    // Calibration is explicit because a baseline measured for
-                    // another camera/format/orientation/rule is not comparable.
-                    // If this attempt failed, recover the previous scalar
-                    // baseline only when the current stable context still
-                    // matches it; otherwise the next observations stay at
-                    // `needsCalibration`.
+                    // The eye-opening reference is tied to the stable camera
+                    // context. If this attempt failed, recover it only when
+                    // that context still matches; geometric posture remains
+                    // immediately usable without it.
                     self.restorePersistedBaselineIfCompatible()
                 }
-                let outcomes = Dictionary(uniqueKeysWithValues: PostureObservationSignalID.allCases.map { id in
-                    if id == .handOnFace {
-                        return (id, PostureCalibrationSignalOutcome.ready)
-                    }
-                    guard ready, let baseline = self.postureRuntimeCoordinator.baselineSnapshot else {
-                        return (id, PostureCalibrationSignalOutcome.unavailable("Repère insuffisant"))
-                    }
-                    switch id {
-                    case .proximity:
-                        return (id, baseline.proximityScale != nil
-                            ? .ready : .unavailable("Visage insuffisant"))
-                    case .torsoInclination:
-                        return (id, baseline.torsoInclinationDegrees != nil
-                            ? .ready : .unavailable("Hanches insuffisantes"))
-                    case .raisedShoulders:
-                        return (id, baseline.leftShoulderElevation != nil && baseline.rightShoulderElevation != nil
-                            ? .ready : .unavailable("Épaules insuffisantes"))
-                    case .shoulderSlope:
-                        return (id, baseline.shoulderSlopeDegrees != nil
-                            ? .ready : .unavailable("Épaules insuffisantes"))
-                    case .headTilt:
-                        return (id, baseline.headTiltDegrees != nil
-                            ? .ready : .unavailable("Visage et épaules insuffisants"))
-                    case .estimatedBlinks:
-                        return (id, .unavailable("Repère de clignements séparé"))
-                    case .closedShoulders:
-                        return (id, baseline.shoulderOpeningRatio != nil
-                            ? .ready : .unavailable("Ouverture des épaules insuffisante"))
-                    case .handOnFace:
-                        return (id, .ready)
-                    }
-                })
+                let outcomes: [PostureObservationSignalID: PostureCalibrationSignalOutcome] = [
+                    .estimatedBlinks: ready
+                        ? .ready
+                        : .unavailable("Yeux insuffisamment visibles")
+                ]
                 self.onEvent(.calibration(.init(
-                    phase: ready ? .completed : .failed("Repères insuffisants"),
+                    phase: ready ? .completed : .failed("Référence des yeux insuffisante"),
                     progress: 1,
                     outcomes: outcomes
                 )), scheduledGeneration)
@@ -1900,8 +1870,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                             ) ?? runtime.snapshot
                             onEvent(.postureRuntime(
                                 runtime.evaluation,
-                                snapshot,
-                                postureRuntimeCoordinator.baselineSnapshot
+                                snapshot
                             ), generation)
                             onEvent(.postureIndicators(indicators(from: snapshot)), generation)
                         }
@@ -2525,8 +2494,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         ) {
             onEvent(.postureRuntime(
                 runtime.evaluation,
-                runtime.snapshot,
-                postureRuntimeCoordinator.baselineSnapshot
+                runtime.snapshot
             ), generation)
             onEvent(.postureIndicators(indicators(from: runtime.snapshot)), generation)
         }
@@ -2951,7 +2919,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             guard let signalID else { return .unavailable(id) }
             let signal = snapshot.signal(signalID)
             let state: PostureIndicatorState
-            if postureRuntimeCoordinator.isCalibrationActive {
+            if postureRuntimeCoordinator.isCalibrationActive && id == .estimatedBlinks {
                 state = .calibrating
             } else {
                 switch signal.availability {
@@ -2978,7 +2946,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                 observedAt: signal.observedAt,
                 quality: quality,
                 hasValidBaseline: hasValidBaseline,
-                isExperimental: id == .estimatedBlinks || id == .closedShoulders || id == .handOnFace,
+                isExperimental: id == .estimatedBlinks || id == .handOnFace,
                 freshnessTTL: PostureObservationEngine.freshnessTTL(for: signalID),
                 leftShoulderDelta: signal.leftShoulderDelta,
                 rightShoulderDelta: signal.rightShoulderDelta,
@@ -3031,17 +2999,81 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         }
     }
 
-    /// Only the already-defined scalar baseline is stored. The stable context
-    /// is deliberately checked at restore time: a changed camera, pixel
-    /// format/orientation, or posture-rule revision changes the meaning of
-    /// those scalars and therefore requires an explicit calibration.
+    /// Only the eye-opening reference is stored. The stable context is
+    /// deliberately checked at restore time so a reference learned with
+    /// another camera or format cannot be reused accidentally. Geometric
+    /// posture never depends on this persisted value.
     private static func loadPersistedRichBaseline() -> PostureRichBaseline? {
-        guard let data = UserDefaults.standard.data(forKey: persistedRichBaselineKey),
-              let baseline = try? JSONDecoder().decode(PostureRichBaseline.self, from: data),
-              isPersistableRichBaseline(baseline) else {
+        let decoder = JSONDecoder()
+        let defaults = UserDefaults.standard
+
+        if let data = defaults.data(forKey: persistedBlinkOpeningBaselineKey),
+           let baseline = try? decoder.decode(PostureRichBaseline.self, from: data),
+           isBlinkOnlyBaseline(baseline),
+           isPersistableRichBaseline(baseline) {
+            return baseline
+        }
+
+        // Migrate the previous full personal baseline without importing its
+        // posture values into the new engine. Keeping the old key untouched
+        // makes this migration recoverable and lets older builds continue to
+        // read their own payload if the user returns to them.
+        guard let data = defaults.data(forKey: persistedRichBaselineKey),
+              let legacy = try? decoder.decode(PostureRichBaseline.self, from: data),
+              legacy.ruleVersion == legacyPersonalRuleVersion ||
+                legacy.ruleVersion == PostureRuntimeCoordinator.ruleVersion,
+              let migrated = blinkOnlyBaseline(from: legacy),
+              isPersistableRichBaseline(migrated) else {
             return nil
         }
-        return baseline
+        if let migratedData = try? JSONEncoder().encode(migrated) {
+            defaults.set(migratedData, forKey: persistedBlinkOpeningBaselineKey)
+        }
+        return migrated
+    }
+
+    private static func blinkOnlyBaseline(
+        from source: PostureRichBaseline
+    ) -> PostureRichBaseline? {
+        guard source.generation > 0,
+              !source.contextKey.isEmpty,
+              let blink = source.blinkOpeningBaseline else { return nil }
+        return PostureRichBaseline(
+            generation: source.generation,
+            contextKey: source.contextKey,
+            ruleVersion: PostureRuntimeCoordinator.ruleVersion,
+            torsoInclinationDegrees: nil,
+            torsoAxisDeviation: nil,
+            shoulderSlopeDegrees: nil,
+            shoulderOpeningRatio: nil,
+            leftShoulderElevation: nil,
+            rightShoulderElevation: nil,
+            proximityScale: nil,
+            sampleCount: blink.sampleCount,
+            torsoInclinationMAD: nil,
+            torsoAxisMAD: nil,
+            shoulderSlopeMAD: nil,
+            blinkOpeningBaseline: blink,
+            familySampleCounts: .init(blinkOpening: blink.sampleCount),
+            headTiltDegrees: nil,
+            headTiltMAD: nil
+        )
+    }
+
+    private static func isBlinkOnlyBaseline(_ baseline: PostureRichBaseline) -> Bool {
+        baseline.torsoInclinationDegrees == nil &&
+            baseline.torsoAxisDeviation == nil &&
+            baseline.shoulderSlopeDegrees == nil &&
+            baseline.headTiltDegrees == nil &&
+            baseline.shoulderOpeningRatio == nil &&
+            baseline.leftShoulderElevation == nil &&
+            baseline.rightShoulderElevation == nil &&
+            baseline.proximityScale == nil &&
+            baseline.torsoInclinationMAD == nil &&
+            baseline.torsoAxisMAD == nil &&
+            baseline.shoulderSlopeMAD == nil &&
+            baseline.headTiltMAD == nil &&
+            baseline.blinkOpeningBaseline != nil
     }
 
     private static func isPersistableRichBaseline(_ baseline: PostureRichBaseline) -> Bool {
@@ -3134,11 +3166,13 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     /// race a context reset or replace the in-memory value out of order.
     private func persistSuccessfulBaseline(_ baseline: PostureRichBaseline) {
         guard Self.isPersistableRichBaseline(baseline),
-              let data = try? JSONEncoder().encode(baseline) else {
+              let blinkOnly = Self.blinkOnlyBaseline(from: baseline),
+              Self.isPersistableRichBaseline(blinkOnly),
+              let data = try? JSONEncoder().encode(blinkOnly) else {
             return
         }
-        UserDefaults.standard.set(data, forKey: Self.persistedRichBaselineKey)
-        persistedRichBaseline = baseline
+        UserDefaults.standard.set(data, forKey: Self.persistedBlinkOpeningBaselineKey)
+        persistedRichBaseline = blinkOnly
     }
 
     /// Called only from `sampleQueue` after a failed explicit calibration.

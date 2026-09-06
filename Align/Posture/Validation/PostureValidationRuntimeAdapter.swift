@@ -75,11 +75,23 @@ nonisolated enum PostureValidationRuntimeAdapter {
         let raised = snapshot.signal(.raisedShoulders)
         let closed = snapshot.signal(.closedShoulders)
         let torso = snapshot.signal(.torsoInclination)
+        let slope = snapshot.signal(.shoulderSlope)
+        let head = snapshot.signal(.headTilt)
+        let proximity = snapshot.signal(.proximity)
 
         let predictedAttention: PostureValidationAttention? = {
             // L'ordre est fixe et indépendant de la phase attendue. Les
             // protocoles guidés demandent une action à la fois ; les valeurs
             // scalaires conservent néanmoins toutes les mesures disponibles.
+            if isReliable(slope), slope.assessment == .attention {
+                return .shoulderSlope
+            }
+            if isReliable(head), head.assessment == .attention {
+                return .headTilt
+            }
+            if isReliable(proximity), proximity.assessment == .attention {
+                return .apparentProximity
+            }
             if isReliable(raised), raised.assessment == .attention,
                let classification = evaluation?.shouldersRaised.shoulderRaiseClassification
                     ?? raised.shoulderRaiseClassification {
@@ -116,7 +128,10 @@ nonisolated enum PostureValidationRuntimeAdapter {
                 for: expectedAttention,
                 torso: torso,
                 raised: raised,
-                closed: closed
+                closed: closed,
+                slope: slope,
+                head: head,
+                proximity: proximity
             ),
             predictedDirection: predictedDirection,
             latencyMilliseconds: latencyMilliseconds(
@@ -155,9 +170,17 @@ nonisolated enum PostureValidationRuntimeAdapter {
         baseline: PostureRichBaseline?
     ) -> PostureValidationDirection? {
         guard let current = evaluation?.torsoInclination.value,
-              let neutral = baseline?.torsoInclinationDegrees,
-              current.isFinite, neutral.isFinite else { return nil }
-        let deviation = current - neutral
+              current.isFinite else { return nil }
+        // The universal engine expresses torso inclination around the camera
+        // geometry's horizontal axis. A posture baseline is only used by
+        // legacy/direct harnesses that still provide one; production now
+        // persists eye opening only.
+        let deviation: Double
+        if let neutral = baseline?.torsoInclinationDegrees, neutral.isFinite {
+            deviation = current - neutral
+        } else {
+            deviation = current
+        }
         guard deviation.isFinite, abs(deviation) > Double.ulpOfOne else { return nil }
         return deviation < 0 ? .left : .right
     }
@@ -167,6 +190,12 @@ nonisolated enum PostureValidationRuntimeAdapter {
         expectedAttention: PostureValidationAttention?
     ) -> UInt64? {
         let values: [PostureRichScalarObservation?] = switch expectedAttention {
+        case .shoulderSlope:
+            [evaluation?.shoulderSlope]
+        case .headTilt:
+            [evaluation?.headTilt]
+        case .apparentProximity:
+            [evaluation?.proximity]
         case .leftShoulderRaised, .rightShoulderRaised, .bothShouldersRaised:
             [evaluation?.shouldersRaised]
         case .shouldersClosed:
@@ -175,7 +204,8 @@ nonisolated enum PostureValidationRuntimeAdapter {
             [evaluation?.torsoInclination]
         case nil:
             [evaluation?.torsoInclination, evaluation?.shouldersRaised,
-             evaluation?.shoulderOpening]
+             evaluation?.shoulderOpening, evaluation?.shoulderSlope,
+             evaluation?.headTilt, evaluation?.proximity]
         }
         return values.compactMap { value in
             guard let value, value.sampleID > 0 else { return nil }
@@ -188,6 +218,12 @@ nonisolated enum PostureValidationRuntimeAdapter {
         expectedAttention: PostureValidationAttention?
     ) -> TimeInterval? {
         let signals: [PostureSignalSnapshot] = switch expectedAttention {
+        case .shoulderSlope:
+            [snapshot.signal(.shoulderSlope)]
+        case .headTilt:
+            [snapshot.signal(.headTilt)]
+        case .apparentProximity:
+            [snapshot.signal(.proximity)]
         case .leftShoulderRaised, .rightShoulderRaised, .bothShouldersRaised:
             [snapshot.signal(.raisedShoulders)]
         case .shouldersClosed:
@@ -196,7 +232,8 @@ nonisolated enum PostureValidationRuntimeAdapter {
             [snapshot.signal(.torsoInclination)]
         case nil:
             [snapshot.signal(.torsoInclination), snapshot.signal(.raisedShoulders),
-             snapshot.signal(.closedShoulders)]
+             snapshot.signal(.closedShoulders), snapshot.signal(.shoulderSlope),
+             snapshot.signal(.headTilt), snapshot.signal(.proximity)]
         }
         return signals.compactMap { value in
             guard let observedAt = value.observedAt, observedAt.isFinite else { return nil }
@@ -208,9 +245,18 @@ nonisolated enum PostureValidationRuntimeAdapter {
         for expectedAttention: PostureValidationAttention?,
         torso: PostureSignalSnapshot,
         raised: PostureSignalSnapshot,
-        closed: PostureSignalSnapshot
+        closed: PostureSignalSnapshot,
+        slope: PostureSignalSnapshot,
+        head: PostureSignalSnapshot,
+        proximity: PostureSignalSnapshot
     ) -> PostureValidationAvailability {
         let relevant: [PostureSignalSnapshot] = switch expectedAttention {
+        case .shoulderSlope:
+            [slope]
+        case .headTilt:
+            [head]
+        case .apparentProximity:
+            [proximity]
         case .leftShoulderRaised, .rightShoulderRaised, .bothShouldersRaised:
             [raised]
         case .shouldersClosed:
@@ -218,7 +264,7 @@ nonisolated enum PostureValidationRuntimeAdapter {
         case .torsoLeanLeft, .torsoLeanRight:
             [torso]
         case nil:
-            [torso, raised, closed]
+            [torso, slope, head, proximity]
         }
         if relevant.allSatisfy(isReliable) { return .reliable }
         if relevant.contains(where: { signal in
@@ -239,9 +285,15 @@ nonisolated enum PostureValidationRuntimeAdapter {
             evaluation?.torsoInclination.capturedAt,
             evaluation?.shouldersRaised.capturedAt,
             evaluation?.shoulderOpening.capturedAt,
+            evaluation?.shoulderSlope.capturedAt,
+            evaluation?.headTilt.capturedAt,
+            evaluation?.proximity.capturedAt,
             snapshot.signal(.torsoInclination).observedAt,
             snapshot.signal(.raisedShoulders).observedAt,
-            snapshot.signal(.closedShoulders).observedAt
+            snapshot.signal(.closedShoulders).observedAt,
+            snapshot.signal(.shoulderSlope).observedAt,
+            snapshot.signal(.headTilt).observedAt,
+            snapshot.signal(.proximity).observedAt
         ].compactMap { value -> TimeInterval? in
             guard let value, value.isFinite, value <= snapshot.producedAt else { return nil }
             return value
@@ -265,10 +317,14 @@ nonisolated enum PostureValidationRuntimeAdapter {
 
         add("proximity.scale", evaluation?.proximity.value)
         add("torso.inclinationDegrees", evaluation?.torsoInclination.value)
-        if let current = evaluation?.torsoInclination.value,
-           let neutral = baseline?.torsoInclinationDegrees,
-           current.isFinite, neutral.isFinite {
-            add("torso.deviationDegrees", current - neutral)
+        if let current = evaluation?.torsoInclination.value, current.isFinite {
+            let deviation = if let neutral = baseline?.torsoInclinationDegrees,
+                                neutral.isFinite {
+                current - neutral
+            } else {
+                current
+            }
+            add("torso.deviationDegrees", deviation)
         }
         add("shoulders.leftDelta", evaluation?.shouldersRaised.leftShoulderDelta
             ?? snapshot.signal(.raisedShoulders).leftShoulderDelta)
@@ -276,6 +332,7 @@ nonisolated enum PostureValidationRuntimeAdapter {
             ?? snapshot.signal(.raisedShoulders).rightShoulderDelta)
         add("shoulders.value", evaluation?.shouldersRaised.value)
         add("shoulders.slopeDegrees", evaluation?.shoulderSlope.value)
+        add("headTilt.degrees", evaluation?.headTilt.value)
         add("shoulders.openingRatio", evaluation?.shoulderOpening.value)
         add("blinks.ratePerMinute", evaluation?.blinkRate.value)
         add("blinks.normalizedRate", evaluation?.blinkRate.normalizedValue)

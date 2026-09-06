@@ -11,10 +11,8 @@ final class AppModel: ObservableObject {
         signalConfigurations: [
             .proximity: .init(persistence: 15, recovery: 20, cooldown: 60, dailyMaximum: 720),
             .torsoInclination: .init(persistence: 15, recovery: 30, cooldown: 60, dailyMaximum: 720),
-            .raisedShoulders: .init(persistence: 15, recovery: 30, cooldown: 60, dailyMaximum: 720),
             .headTilt: .init(persistence: 15, recovery: 30, cooldown: 60, dailyMaximum: 720),
             .shoulderSlope: .init(persistence: 15, recovery: 30, cooldown: 60, dailyMaximum: 720),
-            .closedShoulders: .init(persistence: 15, recovery: 30, cooldown: 60, dailyMaximum: 720),
             .estimatedBlinks: .init(persistence: 1, recovery: 2 * 60, cooldown: 120, dailyMaximum: 720),
             // The observation engine already requires 2.5 s of continuous
             // proximity; this short arbitration window only absorbs delivery
@@ -50,7 +48,7 @@ final class AppModel: ObservableObject {
     private var didAttemptAutomaticCameraStart = false
 
     private var isTerminating = false
-    private let alertDeliveryStateKey = "posture.alertDeliveryState.v1"
+    private let alertDeliveryStateKey = "posture.alertDeliveryState.v2"
 
     var recommendationSensitivity: PostureRecommendationSensitivity { alertSettings.sensitivity }
 
@@ -291,7 +289,7 @@ final class AppModel: ObservableObject {
                     : nil
                 let transition = PostureHistoryObservation(
                     date: Date(timeIntervalSince1970: now), signalID: signal.signalID,
-                    sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v2",
+                    sensitivity: alertCoordinator.sensitivity, ruleProfileID: PostureAlertCoordinator.ruleProfileID,
                     observedDuration: 0, attentionDuration: 0,
                     beganOpportunity: signal.assessment == .attention &&
                         signal.episodeID != previous.episodeID,
@@ -338,7 +336,7 @@ final class AppModel: ObservableObject {
             if lastHistoryKey.insert(eventKey).inserted {
                 let observation = PostureHistoryObservation(
                     date: Date(timeIntervalSince1970: now), signalID: .estimatedBlinks,
-                    sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v2",
+                    sensitivity: alertCoordinator.sensitivity, ruleProfileID: PostureAlertCoordinator.ruleProfileID,
                     observedDuration: 0, attentionDuration: 0, beganOpportunity: false,
                     acceptedEventCount: 0, deliveredNotification: false,
                     recoveryDuration: nil, eventKey: eventKey,
@@ -439,7 +437,7 @@ final class AppModel: ObservableObject {
         objectWillChange.send()
         history.enqueueControlEvent(.init(
             date: Date(), signalID: nil, action: .sensitivityChanged,
-            sensitivity: value, ruleProfileID: "runtime-v2"
+            sensitivity: value, ruleProfileID: PostureAlertCoordinator.ruleProfileID
         ))
     }
 
@@ -457,7 +455,7 @@ final class AppModel: ObservableObject {
         history.enqueueControlEvent(.init(
             date: Date(), signalID: id,
             action: enabled ? .reactivated : .disabled,
-            sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v2"
+            sensitivity: alertCoordinator.sensitivity, ruleProfileID: PostureAlertCoordinator.ruleProfileID
         ))
     }
 
@@ -481,7 +479,7 @@ final class AppModel: ObservableObject {
         objectWillChange.send()
         history.enqueueControlEvent(.init(
             date: now, signalID: id, action: .snoozed,
-            sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v2"
+            sensitivity: alertCoordinator.sensitivity, ruleProfileID: PostureAlertCoordinator.ruleProfileID
         ))
     }
 
@@ -495,7 +493,7 @@ final class AppModel: ObservableObject {
         objectWillChange.send()
         history.enqueueControlEvent(.init(
             date: Date(), signalID: id, action: .reactivated,
-            sensitivity: alertCoordinator.sensitivity, ruleProfileID: "runtime-v2"
+            sensitivity: alertCoordinator.sensitivity, ruleProfileID: PostureAlertCoordinator.ruleProfileID
         ))
     }
 
@@ -579,7 +577,7 @@ final class AppModel: ObservableObject {
             date: Date(timeIntervalSince1970: wallNow - duration),
             signalID: signal.signalID,
             sensitivity: alertCoordinator.sensitivity,
-            ruleProfileID: "runtime-v2",
+            ruleProfileID: PostureAlertCoordinator.ruleProfileID,
             observedDuration: duration,
             attentionDuration: assessment == .attention ? duration : 0,
             beganOpportunity: false,

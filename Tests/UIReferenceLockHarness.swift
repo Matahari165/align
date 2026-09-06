@@ -26,15 +26,15 @@ require(!content.contains("camera.proximityAlertBanner"), "Aucune troisième ban
 require(!content.contains("blazePoseState.displayName"), "Aucun badge d’état redondant ne doit recouvrir la caméra.")
 
 for id in [
-    "apparentProximity", "torsoInclination", "raisedShoulders",
-    "shoulderSlope", "closedShoulders", "estimatedBlinks", "headTilt", "handOnFace"
+    "apparentProximity", "torsoInclination", "shoulderSlope",
+    "estimatedBlinks", "headTilt", "handOnFace"
 ] {
     require(indicators.contains("indicator(for: .\(id))"), "Signal absent du rail complet : \(id)")
 }
 require(indicators.contains("threeColumnGrid") && indicators.contains("twoColumnGrid"),
         "Le rail doit garder les grilles compactes à trois et deux colonnes.")
 require(indicators.contains("ViewThatFits"), "Le rail doit sélectionner une grille adaptée à la largeur.")
-require(indicators.contains("Indicateurs de posture, huit"), "Le groupe VoiceOver doit annoncer huit indicateurs.")
+require(indicators.contains("Indicateurs de posture, six"), "Le groupe VoiceOver doit annoncer six indicateurs.")
 require(indicators.contains("case .positive: AlignTheme.accentSoft") &&
         indicators.contains("case .negative: AlignTheme.attention"),
         "Le rail doit utiliser les rôles turquoise/ambre du thème Align.")
@@ -86,6 +86,11 @@ require(cameraCapture.contains("upperBodyLastRejectionReason") &&
         cameraCapture.contains("upperBodyEngineDurationP95") &&
         cameraCapture.contains("postInferenceExpired"),
         "Les rejets upper-body et la latence moteur doivent être exposés comme diagnostics scalaires.")
+require(cameraCapture.contains("case .postureRuntime(let evaluation, let snapshot):") &&
+        cameraCapture.contains("baseline: nil") &&
+        !cameraCapture.contains("baseline: postureValidationBaseline") &&
+        cameraCapture.contains("return postureObservations.generation > 0"),
+        "La validation guidée doit utiliser les mesures géométriques courantes sans recevoir de baseline posture personnelle.")
 if let capture = cameraCapture.range(of: "func captureOutput"),
    let frame = cameraCapture[capture.lowerBound...].range(of: "onFrameLiveness(livenessEpoch)"),
    let activeGuard = cameraCapture[capture.lowerBound...].range(of: "guard isActive else { return }") {
@@ -117,16 +122,17 @@ require(appModel.contains("didAttemptAutomaticCameraStart") &&
         "Le démarrage automatique doit être unique et conditionné par l’autorisation.")
 require(content.contains("appModel.attemptAutomaticCameraStart()"),
         "La fenêtre principale doit déclencher le démarrage automatique une seule fois.")
-require(content.contains("@ObservedObject private var camera") &&
-        content.contains("_camera = ObservedObject(wrappedValue: appModel.camera)"),
-        "ContentView doit observer directement l’unique service caméra partagé.")
+require(content.contains("LiveCameraPane(camera: appModel.camera") &&
+        content.contains("@ObservedObject var camera: CameraCaptureService"),
+        "La fenêtre principale doit transmettre l’unique service caméra à la zone live.")
 require(cameraCapture.contains("else if self.state == .configuring"),
         "didStopRunning ne doit pas écraser un état failed/interrupted déjà publié.")
 require(cameraCapture.contains("requestAccess(for: .video)") &&
         cameraCapture.contains("case .requestingPermission") &&
         cameraCapture.contains("configureAndStart(operationID:"),
         "Le cycle permission → démarrage doit rester explicite et testable.")
-for title in ["Proximité apparente", "Torse incliné", "Épaules relevées", "Clignements estimés", "Main sur le visage"] {
+for title in ["Proximité apparente", "Torse incliné", "Épaules inclinées",
+              "Tête inclinée", "Clignements estimés", "Main sur le visage"] {
     require(settings.contains(title), "Rappel absent des réglages : \(title)")
 }
 require(!settings.contains("Toggle(\"Inclinaison des épaules") &&
@@ -137,8 +143,10 @@ require(settings.contains("private let signals = PostureObservationSignalID.aler
 for choice in ["1 h", "Aujourd’hui", "Jusqu’à réactivation"] {
     require(settings.contains(choice), "Choix de suspension absent : \(choice)")
 }
-require(settings.contains("Progression de la définition") && calibration.contains("Définition de tes repères…") && calibration.contains("Calibration incomplète"),
-        "La calibration doit publier une progression et un échec explicite.")
+require(settings.contains("Progression de la mesure de l’ouverture des yeux") &&
+        calibration.contains("Mesure de l’ouverture des yeux…") &&
+        calibration.contains("Référence des yeux incomplète"),
+        "La mesure des yeux doit publier une progression et un échec explicite.")
 
 for size in [16, 32, 64, 128, 256, 512, 1024] {
     require(appIcon.contains("AlignIcon-\(size).png"), "Rendition AppIcon manquante : \(size) px")

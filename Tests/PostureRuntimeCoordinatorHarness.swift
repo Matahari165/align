@@ -26,8 +26,8 @@ private enum PostureRuntimeCoordinatorHarness {
                                                  points: points, contours: [])
         let preCalibrationGeometry = PostureRichGeometryEvaluator.make(result: preCalibrationBody, face: nil, context: context)
         let preCalibration = coordinator.consume(geometry: preCalibrationGeometry, face: nil, baseline: nil, now: 1.11)
-        precondition(preCalibration?.snapshot.signal(.torsoInclination).quality != .good,
-                     "aucune baseline riche ne doit se construire sans clic explicite")
+        precondition(preCalibration?.snapshot.signal(.torsoInclination).quality == .good,
+                     "la géométrie universelle doit être exploitable sans clic explicite")
         coordinator.reset(generation: 7, contextKey: context.key)
         coordinator.beginCalibration()
         var lastSnapshot: PostureObservationsSnapshot?
@@ -148,8 +148,8 @@ private enum PostureRuntimeCoordinatorHarness {
             let geometry = PostureRichGeometryEvaluator.make(result: body, face: nil, context: context)
             _ = sourceCalibration.consumeBody(geometry, now: body.producedAt)
         }
-        precondition(sourceCalibration.finishCalibration(),
-                     "la calibration doit être alimentée par le chemin source-specific corps")
+        precondition(!sourceCalibration.finishCalibration(),
+                     "une mesure des yeux incomplète ne doit pas être validée par le seul corps")
 
         var shoulderOnlyCalibration = PostureRuntimeCoordinator()
         shoulderOnlyCalibration.reset(generation: 11, contextKey: context.key)
@@ -172,16 +172,12 @@ private enum PostureRuntimeCoordinatorHarness {
                 geometry, now: body.producedAt
             )?.snapshot
         }
-        precondition(shoulderOnlyCalibration.finishCalibration(),
-                     "les épaules doivent produire une baseline sans hanches")
+        precondition(!shoulderOnlyCalibration.finishCalibration(),
+                     "les épaules seules ne doivent pas fabriquer une référence oculaire")
         precondition(
-            shoulderOnlyCalibration.baselineSnapshot?.familySampleCounts?.torso == 0 &&
-            shoulderOnlyCalibration.baselineSnapshot?.familySampleCounts?.shoulderSlope == 12 &&
-            shoulderOnlyCalibration.baselineSnapshot?.familySampleCounts?.shoulderElevation == 12,
-            "la maturité de calibration doit être publiée par famille")
-        precondition(shoulderOnlyLastSnapshot?.signal(.shoulderSlope).availability == .calibrating &&
-                     shoulderOnlyLastSnapshot?.signal(.torsoInclination).availability == .calibrating,
-                     "une baseline épaules partielle ne doit ni bloquer les épaules ni valider le torse")
+            shoulderOnlyLastSnapshot?.signal(.shoulderSlope).availability == .available &&
+            shoulderOnlyLastSnapshot?.signal(.torsoInclination).availability == .insufficient,
+            "la géométrie doit rester disponible indépendamment de la mesure des yeux")
 
         var faceOnlyCalibration = PostureRuntimeCoordinator()
         faceOnlyCalibration.reset(generation: 13, contextKey: context.key)
@@ -200,10 +196,11 @@ private enum PostureRuntimeCoordinatorHarness {
         precondition(faceOnlyCalibration.finishCalibration(),
                      "le visage doit pouvoir calibrer la proximité indépendamment du corps")
         precondition(
-            faceOnlyCalibration.baselineSnapshot?.familySampleCounts?.proximity == 12 &&
+            faceOnlyCalibration.baselineSnapshot?.familySampleCounts?.proximity == 0 &&
             faceOnlyCalibration.baselineSnapshot?.familySampleCounts?.blinkOpening == 12 &&
-            faceOnlyLastSnapshot?.signal(.proximity).availability == .calibrating,
-            "la baseline visage indépendante doit publier sa maturité et sa proximité")
+            faceOnlyCalibration.baselineSnapshot?.proximityScale == nil &&
+            faceOnlyLastSnapshot?.signal(.proximity).availability == .available,
+            "la mesure visage doit conserver seulement l'ouverture des yeux et laisser la proximité géométrique")
 
         var slowMixedCalibration = PostureRuntimeCoordinator()
         slowMixedCalibration.reset(generation: 14, contextKey: context.key)
@@ -237,8 +234,9 @@ private enum PostureRuntimeCoordinatorHarness {
         precondition(slowMixedCalibration.finishCalibration(),
                      "le flux mixte lent doit produire une baseline")
         precondition(
-            slowMixedCalibration.baselineSnapshot?.familySampleCounts?.shoulderOpening == 16,
-            "la fenêtre visage doit couvrir les corps à 2 Hz pendant huit secondes")
+            (slowMixedCalibration.baselineSnapshot?.familySampleCounts?.blinkOpening ?? 0) >= 16 &&
+            slowMixedCalibration.baselineSnapshot?.familySampleCounts?.shoulderOpening == 0,
+            "la fenêtre visage doit produire la référence oculaire sans réintroduire une posture calibrée")
 
         var isolatedSources = PostureRuntimeCoordinator()
         isolatedSources.reset(generation: 12, contextKey: context.key)
@@ -317,6 +315,30 @@ private enum PostureRuntimeCoordinatorHarness {
             precondition(alerts.consume(afterLoss.snapshot, now: 3.2) == nil,
                          "noPerson suivi d’un tick visage ne doit produire aucune alerte")
         }
+        var proximityCoordinator = PostureRuntimeCoordinator()
+        proximityCoordinator.reset(generation: 20, contextKey: context.key)
+        var proximityBeforeAttention: PostureObservationsSnapshot?
+        var proximityAttention: PostureObservationsSnapshot?
+        for sample in 1...21 {
+            let timestamp = Double(sample) * 0.1
+            let closeFace = PostureFaceObservation(
+                generation: 20, sampleID: UInt64(sample), capturedAt: timestamp,
+                facePointCount: 50, contextKey: context.key,
+                signal: .init(
+                    eyeLineRollDegrees: 0, yawProxy: 0, pitchProxy: 0,
+                    interocularDistance: 0.2, faceLength: 0.6,
+                    leftEyeOpeningRatio: 0.3, rightEyeOpeningRatio: 0.3,
+                    innerBrowDistanceRatio: 0.4, faceCenter: .init(x: 0.5, y: 0.3)
+                )
+            )
+            proximityAttention = proximityCoordinator.consumeFace(
+                closeFace, now: timestamp + 0.01
+            )?.snapshot
+            if sample == 19 { proximityBeforeAttention = proximityAttention }
+        }
+        precondition(proximityBeforeAttention?.signal(.proximity).assessment != .attention &&
+                     proximityAttention?.signal(.proximity).assessment == .attention,
+                     "la proximité universelle doit attendre deux secondes une seule fois, sans double temporisation")
         print("PostureRuntimeCoordinatorHarness: OK")
     }
 

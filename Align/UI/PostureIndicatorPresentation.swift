@@ -9,9 +9,7 @@ nonisolated enum PostureIndicatorTone: Equatable, Sendable {
 nonisolated struct PostureIndicatorPresentation: Equatable, Sendable {
     static let orderedIDs: [PostureIndicatorID] = [
         .shoulderSlope,
-        .raisedShoulders,
         .headTilt,
-        .closedShoulders,
         .apparentProximity,
         .torsoInclination,
         .estimatedBlinks,
@@ -50,7 +48,7 @@ nonisolated struct PostureIndicatorPresentation: Equatable, Sendable {
         if result.id == .estimatedBlinks, result.state == .needsCalibration,
            fresh, let rate = result.numericValue, rate.isFinite, rate >= 0 {
             return presentation(title: result.id.title,
-                                value: String(format: "%.1f/min · repère en cours", rate),
+                                value: String(format: "%.1f/min · référence en cours", rate),
                                 symbol: "eye", experimental: true)
         }
         if result.id == .estimatedBlinks,
@@ -81,8 +79,9 @@ nonisolated struct PostureIndicatorPresentation: Equatable, Sendable {
             guard let delta = result.referenceDelta, delta.isFinite else { return nil }
             return String(format: "%+.1f°", delta)
         case .apparentProximity:
-            guard let value = result.numericValue, value.isFinite else { return nil }
-            return String(format: "×%.2f", value)
+            // This is an image-space face scale, not a physical distance or a
+            // personal ratio. Keep it out of the primary UI.
+            return nil
         case .estimatedBlinks:
             guard let value = result.numericValue, value.isFinite, value >= 0 else { return nil }
             return String(format: "%.1f/min", value)
@@ -127,7 +126,7 @@ nonisolated struct PostureIndicatorPresentation: Equatable, Sendable {
             return presentation(title: title, value: "Observation…", symbol: "ellipsis.circle",
                                 experimental: experimental, reliableObservation: true)
         case .normal where experimental:
-            return presentation(title: title, value: "Dans ton repère",
+            return presentation(title: title, value: "Dans la zone",
                                 symbol: "circle.dotted", experimental: true,
                                 reliableObservation: true)
         case .attention where result.id == .estimatedBlinks:
@@ -136,13 +135,13 @@ nonisolated struct PostureIndicatorPresentation: Equatable, Sendable {
                         symbolName: "exclamationmark.circle.fill", tone: .negative,
                         isExperimental: true)
         case .normal:
-            return Self(title: title, value: "Dans ton repère",
-                        accessibilityValue: "Mesure fiable, dans ton repère",
+            return Self(title: title, value: "Dans la zone",
+                        accessibilityValue: "Mesure fiable, dans la zone géométrique",
                         symbolName: "checkmark.circle.fill", tone: .positive,
                         isExperimental: false)
         case .attention:
             let value: String = switch result.id {
-            case .apparentProximity: "Un peu près"
+            case .apparentProximity: "Visage trop grand dans le cadre"
             case .torsoInclination: "Buste penché sur le côté"
             case .raisedShoulders:
                 switch result.shoulderRaiseClassification {
@@ -153,12 +152,12 @@ nonisolated struct PostureIndicatorPresentation: Equatable, Sendable {
                 }
             case .shoulderSlope: "Une épaule plus haute"
             case .headTilt: "Tête penchée sur le côté"
-            case .estimatedBlinks: "Sous ton repère"
+            case .estimatedBlinks: "Sous la plage estimée"
             case .closedShoulders: "À réajuster"
             case .handOnFace: "Éloigne ta main"
             }
             let evidence: String = switch result.id {
-            case .apparentProximity: "Proxy fiable relatif à ton repère, "
+            case .apparentProximity: "Proxy 2D fiable, "
             case .handOnFace: "Proximité 2D fiable, "
             default: "Mesure fiable, "
             }

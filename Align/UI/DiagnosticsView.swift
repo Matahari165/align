@@ -14,7 +14,7 @@ struct DiagnosticsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Diagnostics")
                         .font(.title2.weight(.semibold))
-                    Text("Benchmark local · validation posture")
+                    Text("Benchmark local · validation géométrique")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -201,9 +201,9 @@ struct DiagnosticsView: View {
     @ViewBuilder
     private var postureValidationControls: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Validation guidée de la posture")
+            Text("Validation guidée de la géométrie")
                 .font(.callout.weight(.medium))
-            Text("Protocole scalaire en mémoire · aucune image ni coordonnée enregistrée.")
+            Text("Angles, proximité apparente et torse · aucune image ni coordonnée enregistrée.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

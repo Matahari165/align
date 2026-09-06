@@ -27,8 +27,8 @@ private enum LocalPostureNotificationServiceHarness {
                "Ta tête est penchée sur le côté. Réajuste-la.",
                "la tête doit être décrite comme penchée sur le côté")
         expect(LocalPostureNotificationCopy.body(for: .torsoInclination) ==
-               "Ton buste penche sur le côté par rapport à ton repère. Recentre ton buste.",
-               "le torse doit préciser le mouvement latéral et le repère calibré")
+               "Ton buste penche sur le côté par rapport à l’axe de l’image. Recentre ton buste.",
+               "le torse doit préciser le mouvement latéral et l’axe géométrique")
 
         for id in PostureObservationSignalID.alertableCases {
             let text = LocalPostureNotificationCopy.body(for: id)

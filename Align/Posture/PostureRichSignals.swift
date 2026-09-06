@@ -103,6 +103,41 @@ nonisolated enum PostureRichSignalKind: String, CaseIterable, Hashable, Sendable
     case blinkRate
 }
 
+/// Le moteur de production utilise désormais des seuils géométriques communs
+/// pour les signaux de posture. Le mode personnel reste disponible pour les
+/// harnesses et la compatibilité de lecture, mais il ne doit pas être choisi
+/// par le runtime de la caméra.
+nonisolated enum PostureReferenceMode: String, Equatable, Sendable {
+    case personalBaseline
+    case universalGeometry
+}
+
+/// Seuils de la référence géométrique universelle. Ils s'appliquent aux
+/// angles exprimés autour de zéro et à la taille faciale apparente dans
+/// l'image. La proximité reste un proxy 2D : aucune distance physique n'est
+/// déduite de ces valeurs.
+nonisolated struct PostureUniversalGeometryConfiguration: Equatable, Sendable {
+    let torsoEnterDegrees: Double
+    let torsoExitDegrees: Double
+    let shoulderSlopeEnterDegrees: Double
+    let shoulderSlopeExitDegrees: Double
+    let headTiltEnterDegrees: Double
+    let headTiltExitDegrees: Double
+    let faceScaleEnter: Double
+    let faceScaleExit: Double
+
+    static let standard = Self(
+        torsoEnterDegrees: 10,
+        torsoExitDegrees: 6,
+        shoulderSlopeEnterDegrees: 6,
+        shoulderSlopeExitDegrees: 3.5,
+        headTiltEnterDegrees: 10,
+        headTiltExitDegrees: 6,
+        faceScaleEnter: 0.24,
+        faceScaleExit: 0.21
+    )
+}
+
 nonisolated enum PostureRichSignalState: String, Equatable, Sendable {
     case available
     case partial
@@ -145,9 +180,9 @@ nonisolated struct PostureRichScalarObservation: Equatable, Sendable {
     /// Valeur brute transportable vers la couche produit. Elle reste dans
     /// l'unité naturelle du signal (degrés, ratio ou clignements/minute).
     let numericValue: Double?
-    /// Écart signé au repère personnel, dans la même unité quand elle existe.
-    /// Ce champ reste optionnel : l'absence de baseline n'est jamais remplacée
-    /// par un zéro artificiel.
+    /// Écart signé au repère actif, dans la même unité quand elle existe.
+    /// En mode géométrique, il s'agit de la valeur autour de zéro ; en mode
+    /// personnel, c'est l'écart à la baseline. L'absence de preuve reste nil.
     let referenceDelta: Double?
     let normalizedValue: Double?
     let direction: PostureRichSignalDirection
@@ -155,9 +190,9 @@ nonisolated struct PostureRichScalarObservation: Equatable, Sendable {
     /// Elle permet à l'intégrateur de décider d'une alerte sans recalculer les
     /// intervalles; ce snapshot CV n'autorise aucune notification.
     let belowDuration: TimeInterval?
-    /// Deltas normalisés par rapport au repère personnel pour le signal
-    /// `shouldersRaised`. Les champs restent optionnels pour ne pas imposer
-    /// une forme artificielle aux autres observations scalaires.
+    /// Deltas normalisés par rapport au repère historique pour le signal
+    /// `shouldersRaised`. Les champs restent optionnels : cette famille est
+    /// diagnostique et n'est pas retenue par la référence universelle.
     let leftShoulderDelta: Double?
     let rightShoulderDelta: Double?
     let shoulderRaiseClassification: PostureShoulderRaiseClassification?
@@ -1078,6 +1113,11 @@ nonisolated enum PostureRichBaselineBuilder {
 }
 
 nonisolated struct PostureRichSignalConfiguration: Equatable, Sendable {
+    /// Les configurations créées directement restent compatibles avec les
+    /// anciens harnesses. Le runtime caméra sélectionne explicitement
+    /// `.universalGeometry`.
+    var referenceMode: PostureReferenceMode = .personalBaseline
+    var universalGeometry: PostureUniversalGeometryConfiguration = .standard
     var faceTTL: TimeInterval = 0.75
     var bodyTTL: TimeInterval = 1.20
     var maximumFusionSkew: TimeInterval = 0.30
@@ -2304,20 +2344,34 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
         }
 
         let bodyInvalidationReason = source == .invalidateBody ? explicitReason : nil
+        let usesUniversalGeometry = configuration.referenceMode == .universalGeometry
+        let universalGeometry = configuration.universalGeometry
         let torsoValue = bodyForEvaluation?.torsoInclinationDegrees
         let torsoReason = bodyInvalidationReason ??
-            (bodyBaselineUsable?.torsoInclinationDegrees == nil ? "baseline torse absente" : nil)
+            (torsoValue == nil ? "géométrie torse absente" :
+                (!usesUniversalGeometry && bodyBaselineUsable?.torsoInclinationDegrees == nil
+                    ? "baseline torse absente" : nil))
         let torsoAttention: Bool
         if let torsoValue, bodyForEvaluation?.torsoState == .available,
-           let neutral = bodyBaselineUsable?.torsoInclinationDegrees, torsoReason == nil {
+           torsoReason == nil,
+           (usesUniversalGeometry || bodyBaselineUsable?.torsoInclinationDegrees != nil) {
             let dispersion = (bodyBaselineUsable?.torsoInclinationMAD ?? 0) * 1.4826 * 2
+            let deviation = usesUniversalGeometry
+                ? torsoValue
+                : torsoValue - (bodyBaselineUsable?.torsoInclinationDegrees ?? 0)
+            let enterThreshold = usesUniversalGeometry
+                ? universalGeometry.torsoEnterDegrees
+                : max(configuration.torsoEnterDegrees, dispersion)
+            let exitThreshold = usesUniversalGeometry
+                ? universalGeometry.torsoExitDegrees
+                : max(configuration.torsoExitDegrees, dispersion * 0.5)
             if source == .face || source == .invalidateBody {
                 torsoAttention = torsoState.active
             } else {
                 torsoAttention = torsoState.update(
-                    deviation: torsoValue - neutral, timestamp: idTimestamp,
-                    enterThreshold: max(configuration.torsoEnterDegrees, dispersion),
-                    exitThreshold: max(configuration.torsoExitDegrees, dispersion * 0.5),
+                    deviation: deviation, timestamp: idTimestamp,
+                    enterThreshold: enterThreshold,
+                    exitThreshold: exitThreshold,
                     requiredDuration: configuration.requiredDuration,
                     maximumGap: configuration.maximumSampleGap
                 )
@@ -2329,8 +2383,10 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
             if source == .body || source == .combined { torsoState.reset() }
             torsoAttention = false
         }
-        let torsoReferenceDelta: Double? = if let torsoValue,
-            let neutral = bodyBaselineUsable?.torsoInclinationDegrees {
+        let torsoReferenceDelta: Double? = if usesUniversalGeometry {
+            torsoValue
+        } else if let torsoValue,
+                         let neutral = bodyBaselineUsable?.torsoInclinationDegrees {
             torsoValue - neutral
         } else { nil }
         let torso = PostureRichScalarObservation(
@@ -2345,18 +2401,30 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
 
         let slopeValue = body?.shoulderSlopeDegrees
         let slopeReason = bodyInvalidationReason ?? body?.shoulderSlopeReason ??
-            (bodyBaselineUsable?.shoulderSlopeDegrees == nil ? "baseline pente absente" : nil)
+            (slopeValue == nil ? "géométrie des épaules absente" :
+                (!usesUniversalGeometry && bodyBaselineUsable?.shoulderSlopeDegrees == nil
+                    ? "baseline pente absente" : nil))
         let slopeAttention: Bool
         if let slopeValue, body?.shoulderSlopeState == .available,
-           let neutral = bodyBaselineUsable?.shoulderSlopeDegrees, slopeReason == nil {
+           slopeReason == nil,
+           (usesUniversalGeometry || bodyBaselineUsable?.shoulderSlopeDegrees != nil) {
             let dispersion = (bodyBaselineUsable?.shoulderSlopeMAD ?? 0) * 1.4826 * 2
+            let deviation = usesUniversalGeometry
+                ? slopeValue
+                : slopeValue - (bodyBaselineUsable?.shoulderSlopeDegrees ?? 0)
+            let enterThreshold = usesUniversalGeometry
+                ? universalGeometry.shoulderSlopeEnterDegrees
+                : max(configuration.shoulderSlopeEnterDegrees, dispersion)
+            let exitThreshold = usesUniversalGeometry
+                ? universalGeometry.shoulderSlopeExitDegrees
+                : max(configuration.shoulderSlopeExitDegrees, dispersion * 0.5)
             if source == .face || source == .invalidateBody {
                 slopeAttention = shoulderSlopeState.active
             } else {
                 slopeAttention = shoulderSlopeState.update(
-                    deviation: slopeValue - neutral, timestamp: idTimestamp,
-                    enterThreshold: max(configuration.shoulderSlopeEnterDegrees, dispersion),
-                    exitThreshold: max(configuration.shoulderSlopeExitDegrees, dispersion * 0.5),
+                    deviation: deviation, timestamp: idTimestamp,
+                    enterThreshold: enterThreshold,
+                    exitThreshold: exitThreshold,
                     requiredDuration: configuration.shoulderSlopeRequiredDuration ??
                         configuration.requiredDuration,
                     maximumGap: configuration.maximumSampleGap,
@@ -2367,8 +2435,10 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
             if source == .body || source == .combined { shoulderSlopeState.reset() }
             slopeAttention = false
         }
-        let shoulderSlopeReferenceDelta: Double? = if let slopeValue,
-            let neutral = bodyBaselineUsable?.shoulderSlopeDegrees {
+        let shoulderSlopeReferenceDelta: Double? = if usesUniversalGeometry {
+            slopeValue
+        } else if let slopeValue,
+                         let neutral = bodyBaselineUsable?.shoulderSlopeDegrees {
             slopeValue - neutral
         } else { nil }
         let shoulderSlope = PostureRichScalarObservation(
@@ -2393,14 +2463,15 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
                     $0.isFinite && abs($0) <= configuration.maximumRollDegrees
                 } ?? false)
         } ?? false
-        let headTiltNeutral = bodyBaselineUsable?.headTiltDegrees
         let headTiltReason: String? = bodyInvalidationReason ?? {
             guard paired else { return "visage et épaules non appariés" }
             guard headTiltFaceQuality else { return "qualité visage insuffisante" }
             guard body?.shouldersState == .available, headTiltValue != nil else {
                 return "deux épaules et orientation visage requises"
             }
-            guard headTiltNeutral != nil else { return "baseline tête-épaules absente" }
+            if !usesUniversalGeometry && bodyBaselineUsable?.headTiltDegrees == nil {
+                return "baseline tête-épaules absente"
+            }
             return nil
         }()
         let headTiltAttention: Bool
@@ -2408,16 +2479,25 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
            abs(headTiltValue) <= configuration.maximumHeadTiltDegrees,
            body?.shouldersState == .available,
            headTiltFaceQuality,
-           let neutral = headTiltNeutral,
-           headTiltReason == nil {
+           headTiltReason == nil,
+           (usesUniversalGeometry || bodyBaselineUsable?.headTiltDegrees != nil) {
             let dispersion = (bodyBaselineUsable?.headTiltMAD ?? 0) * 1.4826 * 2
+            let deviation = usesUniversalGeometry
+                ? headTiltValue
+                : headTiltValue - (bodyBaselineUsable?.headTiltDegrees ?? 0)
+            let enterThreshold = usesUniversalGeometry
+                ? universalGeometry.headTiltEnterDegrees
+                : max(configuration.headTiltEnterDegrees, dispersion)
+            let exitThreshold = usesUniversalGeometry
+                ? universalGeometry.headTiltExitDegrees
+                : max(configuration.headTiltExitDegrees, dispersion * 0.5)
             if source == .face || source == .invalidateBody {
                 headTiltAttention = headTiltState.active
             } else {
                 headTiltAttention = headTiltState.update(
-                    deviation: headTiltValue - neutral, timestamp: idTimestamp,
-                    enterThreshold: max(configuration.headTiltEnterDegrees, dispersion),
-                    exitThreshold: max(configuration.headTiltExitDegrees, dispersion * 0.5),
+                    deviation: deviation, timestamp: idTimestamp,
+                    enterThreshold: enterThreshold,
+                    exitThreshold: exitThreshold,
                     requiredDuration: configuration.requiredDuration,
                     maximumGap: configuration.maximumSampleGap
                 )
@@ -2426,7 +2506,10 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
             if source == .body || source == .combined { headTiltState.reset() }
             headTiltAttention = false
         }
-        let headTiltReferenceDelta: Double? = if let headTiltValue, let neutral = headTiltNeutral {
+        let headTiltReferenceDelta: Double? = if usesUniversalGeometry {
+            headTiltValue
+        } else if let headTiltValue,
+                         let neutral = bodyBaselineUsable?.headTiltDegrees {
             headTiltValue - neutral
         } else { nil }
         let headTilt = PostureRichScalarObservation(
@@ -2444,8 +2527,10 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
         )
 
         let openingValue = body?.shoulderOpeningRatio
-        let openingReason: String? = bodyInvalidationReason ?? (!paired ? "visage et RTMPose non appariés" :
-            baselineUsable?.shoulderOpeningRatio == nil ? "baseline ouverture absente" : nil)
+        let openingReason: String? = bodyInvalidationReason ?? (usesUniversalGeometry
+            ? "ratio tête–épaules non retenu par la référence universelle"
+            : (!paired ? "visage et RTMPose non appariés" :
+                baselineUsable?.shoulderOpeningRatio == nil ? "baseline ouverture absente" : nil))
         let openingAttention: Bool
         if let openingValue, body?.openingRatioState == .available,
            let neutral = baselineUsable?.shoulderOpeningRatio,
@@ -2470,15 +2555,25 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
             let neutral = baselineUsable?.shoulderOpeningRatio, neutral > 0 {
             openingValue / neutral - 1
         } else { nil }
-        let opening = PostureRichScalarObservation(
-            kind: .shoulderOpening, value: openingValue,
-            state: openingReason == nil ? (body?.openingRatioState ?? .unavailable) : .unavailable,
-            quality: openingValue == nil ? .unavailable : (body?.openingRatioState == .available ? .good : .limited),
-            generation: idGeneration, sampleID: idSample, capturedAt: idTimestamp,
-            isEstimated2DProxy: true, isAttention: openingAttention,
-            reason: openingReason ?? "",
-            referenceDelta: openingReferenceDelta
-        )
+        let opening: PostureRichScalarObservation = if usesUniversalGeometry {
+            .unavailable(
+                .shoulderOpening,
+                generation: idGeneration,
+                sampleID: idSample,
+                capturedAt: idTimestamp,
+                reason: openingReason ?? "ratio tête–épaules non retenu par la référence universelle"
+            )
+        } else {
+            PostureRichScalarObservation(
+                kind: .shoulderOpening, value: openingValue,
+                state: openingReason == nil ? (body?.openingRatioState ?? .unavailable) : .unavailable,
+                quality: openingValue == nil ? .unavailable : (body?.openingRatioState == .available ? .good : .limited),
+                generation: idGeneration, sampleID: idSample, capturedAt: idTimestamp,
+                isEstimated2DProxy: true, isAttention: openingAttention,
+                reason: openingReason ?? "",
+                referenceDelta: openingReferenceDelta
+            )
+        }
 
         let leftDelta: Double? = if let value = body?.leftShoulderElevation,
                                     let neutral = bodyBaselineUsable?.leftShoulderElevation {
@@ -2570,41 +2665,63 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
         } else {
             ""
         }
-        let raised = PostureRichScalarObservation(
-            kind: .shouldersRaised, value: raisedValue,
-            state: raisedSignalState,
-            quality: raisedQuality,
-            generation: idGeneration, sampleID: idSample, capturedAt: idTimestamp,
-            isEstimated2DProxy: true, isAttention: raisedAttention,
-            reason: raisedReason,
-            referenceDelta: raisedValue,
-            leftShoulderDelta: acceptedLeftDelta,
-            rightShoulderDelta: acceptedRightDelta,
-            shoulderRaiseClassification: raiseClassification
-        )
+        let raised: PostureRichScalarObservation = if usesUniversalGeometry {
+            .unavailable(
+                .shouldersRaised,
+                generation: idGeneration,
+                sampleID: idSample,
+                capturedAt: idTimestamp,
+                reason: "élévation des épaules sans seuil anatomique universel fiable"
+            )
+        } else {
+            PostureRichScalarObservation(
+                kind: .shouldersRaised, value: raisedValue,
+                state: raisedSignalState,
+                quality: raisedQuality,
+                generation: idGeneration, sampleID: idSample, capturedAt: idTimestamp,
+                isEstimated2DProxy: true, isAttention: raisedAttention,
+                reason: raisedReason,
+                referenceDelta: raisedValue,
+                leftShoulderDelta: acceptedLeftDelta,
+                rightShoulderDelta: acceptedRightDelta,
+                shoulderRaiseClassification: raiseClassification
+            )
+        }
 
         let scale = faceForEvaluation?.faceScale
-        let proximityRatio: Double? = if let scale, let neutral = faceBaselineUsable?.proximityScale,
-            neutral > 0 { scale / neutral } else { nil }
+        let proximityValue: Double? = if usesUniversalGeometry {
+            scale
+        } else if let scale, let neutral = faceBaselineUsable?.proximityScale,
+                         neutral > 0 {
+            scale / neutral
+        } else { nil }
         let faceQuality = faceForEvaluation.map {
             $0.facePointCount >= configuration.minimumFacePoints &&
                 ($0.signal.yawProxy.map { abs($0) <= configuration.maximumProximityYaw } ?? false) &&
                 ($0.signal.eyeLineRollDegrees.map { abs($0) <= configuration.maximumRollDegrees } ?? false)
         } ?? false
         let proximityReason = faceQuality
-            ? (proximityRatio == nil ? "baseline proximité absente" : "")
+            ? (proximityValue == nil
+                ? (usesUniversalGeometry ? "taille faciale apparente absente" : "baseline proximité absente")
+                : "")
             : "qualité visage insuffisante"
         let proximityAttention: Bool
-        if let proximityRatio, faceQuality, proximityReason.isEmpty {
+        if let proximityValue, faceQuality, proximityReason.isEmpty {
             if source == .body {
                 proximityAttention = proximityState.active
             } else {
                 proximityAttention = proximityState.update(
-                    deviation: proximityRatio - 1, timestamp: idTimestamp,
-                    enterThreshold: configuration.proximityEnterRatio - 1,
-                    exitThreshold: configuration.proximityExitRatio - 1,
+                    deviation: usesUniversalGeometry ? proximityValue : proximityValue - 1,
+                    timestamp: idTimestamp,
+                    enterThreshold: usesUniversalGeometry
+                        ? universalGeometry.faceScaleEnter
+                        : configuration.proximityEnterRatio - 1,
+                    exitThreshold: usesUniversalGeometry
+                        ? universalGeometry.faceScaleExit
+                        : configuration.proximityExitRatio - 1,
                     requiredDuration: configuration.proximityDuration,
-                    maximumGap: configuration.maximumSampleGap
+                    maximumGap: configuration.maximumSampleGap,
+                    usesMagnitude: !usesUniversalGeometry
                 )
             }
         } else {
@@ -2612,13 +2729,15 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
             proximityAttention = false
         }
         let proximity = PostureRichScalarObservation(
-            kind: .proximity, value: proximityRatio,
+            kind: .proximity, value: proximityValue,
             state: faceForEvaluation == nil ? .unavailable : faceQuality ? .available : .partial,
-            quality: proximityRatio == nil ? .unavailable : faceQuality ? .good : .limited,
+            quality: proximityValue == nil ? .unavailable : faceQuality ? .good : .limited,
             generation: idGeneration, sampleID: idSample, capturedAt: idTimestamp,
             isEstimated2DProxy: true, isAttention: proximityAttention,
             reason: proximityReason,
-            referenceDelta: proximityRatio.map { $0 - 1 }
+            referenceDelta: usesUniversalGeometry
+                ? proximityValue
+                : proximityValue.map { $0 - 1 }
         )
 
         let leftEyeOpening = faceForEvaluation?.signal.leftEyeOpeningRatio

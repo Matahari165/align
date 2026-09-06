@@ -790,6 +790,82 @@ private enum PostureRichSignalHarness {
         configuration.blinkMaximumGap = 0.4
         configuration.blinkWindow = 10
 
+        var universalConfiguration = PostureRichSignalConfiguration()
+        universalConfiguration.referenceMode = .universalGeometry
+        universalConfiguration.requiredDuration = 0
+        universalConfiguration.shoulderSlopeRequiredDuration = 0
+        universalConfiguration.proximityDuration = 0
+        var universalEvaluator = PostureRichSignalEvaluator(
+            configuration: universalConfiguration
+        )
+        let deliberatelyWrongPersonalBaseline = PostureRichBaseline(
+            generation: 1, contextKey: context.key, ruleVersion: "rich-v3",
+            torsoInclinationDegrees: 40, torsoAxisDeviation: 40,
+            shoulderSlopeDegrees: 40, shoulderOpeningRatio: 0.01,
+            leftShoulderElevation: 40, rightShoulderElevation: 40,
+            proximityScale: 0.01, sampleCount: 12,
+            torsoInclinationMAD: 0, torsoAxisMAD: 0, shoulderSlopeMAD: 0,
+            familySampleCounts: .init(torso: 12, shoulderSlope: 12, headTilt: 12,
+                                      shoulderElevation: 12, shoulderOpening: 12,
+                                      proximity: 12),
+            headTiltDegrees: 40, headTiltMAD: 0
+        )
+        let universalNeutral = universalEvaluator.consume(
+            geometry: neutral, face: neutralFace,
+            baseline: deliberatelyWrongPersonalBaseline, now: 0
+        )
+        expect(!universalNeutral.torsoInclination.isAttention &&
+               !universalNeutral.shoulderSlope.isAttention &&
+               !universalNeutral.headTilt.isAttention &&
+               !universalNeutral.proximity.isAttention &&
+               abs(universalNeutral.torsoInclination.referenceDelta ?? 99) < 0.001,
+               "la géométrie neutre doit rester neutre même avec une ancienne baseline personnelle opposée")
+        let universalTilted = PostureRichGeometryEvaluator.make(
+            result: result(generation: 1, sampleID: 2, timestamp: 0.1,
+                           hipOffset: 0.20, rightShoulderDeltaY: -0.20),
+            face: face(generation: 1, sampleID: 2, timestamp: 0.1,
+                       contextKey: context.key, eyeLineRollDegrees: 15),
+            context: context
+        )
+        let universalAttention = universalEvaluator.consume(
+            geometry: universalTilted,
+            face: face(generation: 1, sampleID: 2, timestamp: 0.1,
+                       contextKey: context.key, eyeLineRollDegrees: 15),
+            baseline: deliberatelyWrongPersonalBaseline, now: 0.1
+        )
+        expect(universalAttention.torsoInclination.isAttention &&
+               universalAttention.shoulderSlope.isAttention &&
+               universalAttention.headTilt.isAttention &&
+               (universalAttention.torsoInclination.numericValue ?? 0) > 10 &&
+               abs(universalAttention.shoulderSlope.numericValue ?? 0) > 6 &&
+               abs(universalAttention.headTilt.numericValue ?? 0) > 10,
+               "les angles universels doivent utiliser zéro et leurs seuils fixes, pas la baseline personnelle")
+        let closeFace = face(generation: 1, sampleID: 3, timestamp: 0.2,
+                             contextKey: context.key, faceScaleMultiplier: 2)
+        let closeEvaluation = universalEvaluator.consume(
+            geometry: PostureRichGeometryEvaluator.make(
+                result: result(generation: 1, sampleID: 3, timestamp: 0.2),
+                face: closeFace, context: context
+            ),
+            face: closeFace,
+            baseline: deliberatelyWrongPersonalBaseline, now: 0.2
+        )
+        expect(closeEvaluation.proximity.isAttention &&
+               (closeEvaluation.proximity.numericValue ?? 0) >= 0.24,
+               "la proximité universelle doit comparer la taille faciale apparente à 0,24")
+        let recovered = universalEvaluator.consume(
+            geometry: PostureRichGeometryEvaluator.make(
+                result: result(generation: 1, sampleID: 4, timestamp: 0.3),
+                face: face(generation: 1, sampleID: 4, timestamp: 0.3,
+                           contextKey: context.key), context: context
+            ),
+            face: face(generation: 1, sampleID: 4, timestamp: 0.3,
+                       contextKey: context.key),
+            baseline: deliberatelyWrongPersonalBaseline, now: 0.3
+        )
+        expect(!recovered.proximity.isAttention,
+               "la proximité doit quitter l'attention sous le seuil d'hystérésis 0,21")
+
         var automaticBlinkConfiguration = configuration
         automaticBlinkConfiguration.blinkTargetPerMinute = nil
         automaticBlinkConfiguration.blinkMinimumObservable = 0.1

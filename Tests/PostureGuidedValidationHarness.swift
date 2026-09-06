@@ -31,8 +31,8 @@ private enum PostureGuidedValidationHarness {
 
     static func testPlansAndBoundaries() {
         let expected: [PostureValidationExpectation] = [
-            .neutral, .leftShoulderRaised, .neutral, .rightShoulderRaised, .neutral,
-            .bothShouldersRaised, .shouldersClosed, .shouldersOpen,
+            .neutral, .shoulderSlope, .neutral, .headTilt, .neutral,
+            .apparentProximity, .shoulderSlope, .headTilt,
             .torsoLeanLeft, .torsoLeanRight, .recovery
         ]
 
@@ -45,8 +45,8 @@ private enum PostureGuidedValidationHarness {
         expect(measurement.totalDuration == 220,
                "measurement20s totalise 11 phases de 20 secondes")
         expect(measurement.phase(at: 0)?.id == "neutral-1", "t=0 commence par neutral")
-        expect(measurement.phase(at: 20)?.id == "left-shoulder-raised",
-               "la borne 20 s passe à l'attention épaule gauche")
+        expect(measurement.phase(at: 20)?.id == "shoulder-slope-1",
+               "la borne 20 s passe à la pente des épaules")
         expect(measurement.phase(at: 220) == nil, "la borne finale est hors protocole")
 
         let notification = PostureValidationPlan.notification60s
@@ -58,20 +58,21 @@ private enum PostureGuidedValidationHarness {
         expect(notification.totalDuration == 660,
                "notification60s totalise 11 phases de 60 secondes")
         expect(notification.phases[0].expectedAttention == nil &&
-               notification.phases[7].expectedAttention == nil &&
                notification.phases[10].expectedAttention == nil,
-               "neutral, shouldersOpen et recovery ne demandent aucune attention")
-        expect(notification.phases[1].expectedAttention == .leftShoulderRaised &&
+               "les phases neutre et recovery ne demandent aucune attention")
+        expect(notification.phases[1].expectedAttention == .shoulderSlope &&
+               notification.phases[3].expectedAttention == .headTilt &&
+               notification.phases[5].expectedAttention == .apparentProximity &&
                notification.phases[8].expectedDirection == .left &&
                notification.phases[9].expectedDirection == .right,
-               "les phases portent l'attention et la direction G/D attendues")
+               "les phases portent les signaux géométriques et la direction du torse")
     }
 
     static func testRecordingContract() {
         var blocked = PostureValidationSession(plan: .measurement20s, baselineValidated: false)
         expect(blocked.record(timestamp: 0, predictedAttention: nil, availability: .reliable)
                == .rejected(.baselineRequired),
-               "un benchmark sans repère personnel valide est refusé")
+               "un benchmark sans validation runtime valide est refusé")
 
         var session = PostureValidationSession(plan: .measurement20s, baselineValidated: true)
         record(&session, timestamp: 0, attention: nil, availability: .reliable, scalar: 1)
@@ -96,38 +97,39 @@ private enum PostureGuidedValidationHarness {
 
         // Les cinq phases sans attention servent de contrôle des faux positifs.
         record(&session, timestamp: 0, attention: nil, availability: .reliable, scalar: 1.0)
-        record(&session, timestamp: 20, attention: .leftShoulderRaised,
+        record(&session, timestamp: 20, attention: .shoulderSlope,
                availability: .reliable, latency: 20)
-        record(&session, timestamp: 40, attention: .leftShoulderRaised,
+        record(&session, timestamp: 40, attention: nil,
                availability: .reliable, latency: 30, scalar: 1.1)
-        record(&session, timestamp: 60, attention: .rightShoulderRaised,
+        record(&session, timestamp: 60, attention: .headTilt,
                availability: .limited, latency: 40)
         record(&session, timestamp: 80, attention: nil, availability: .reliable,
                latency: 50, scalar: 0.9)
-        record(&session, timestamp: 100, attention: nil, availability: .reliable, latency: 60)
-        record(&session, timestamp: 120, attention: .shouldersClosed,
+        record(&session, timestamp: 100, attention: .apparentProximity,
                availability: .reliable, latency: 70)
-        record(&session, timestamp: 140, attention: .shouldersClosed,
+        record(&session, timestamp: 120, attention: .shoulderSlope,
                availability: .reliable, latency: 80)
+        record(&session, timestamp: 140, attention: .headTilt,
+               availability: .reliable, latency: 90)
         record(&session, timestamp: 160, attention: .torsoLeanLeft,
-               availability: .reliable, direction: .left, latency: 90)
+               availability: .reliable, direction: .left, latency: 100)
         record(&session, timestamp: 180, attention: .torsoLeanRight,
                availability: .reliable, direction: .right, latency: 100)
         record(&session, timestamp: 200, attention: nil, availability: .reliable, latency: 110)
         record(&session, timestamp: 200.6, attention: nil, availability: .reliable, latency: 110)
 
         let report = session.finish()
-        expect(report.attentionAttemptCount == 6 && report.noAttentionAttemptCount == 6,
+        expect(report.attentionAttemptCount == 7 && report.noAttentionAttemptCount == 5,
                "les dénominateurs séparent attention et absence d'attention")
         expect(report.predictedAttentionCount == 7, "les attentions prédites sont comptées sans notion de visibilité")
         expect(report.coverage.numerator == 11 && report.coverage.denominator == 12,
                "coverage = disponibilités fiables / échantillons")
-        expect(report.recall.numerator == 5 && report.recall.denominator == 6,
+        expect(report.recall.numerator == 7 && report.recall.denominator == 7,
                "recall = attention correctement prédite / phases avec attention")
-        expect(report.falsePositiveShare.numerator == 2 && report.falsePositiveShare.denominator == 6,
+        expect(report.falsePositiveShare.numerator == 0 && report.falsePositiveShare.denominator == 5,
                "false-positive share = attention prédite hors attention attendue")
-        expect(report.reliableFalsePositiveShare.numerator == 2 &&
-               report.reliableFalsePositiveShare.denominator == 6,
+        expect(report.reliableFalsePositiveShare.numerator == 0 &&
+               report.reliableFalsePositiveShare.denominator == 5,
                "le rapport sépare les faux positifs conditionnels aux données fiables")
         expect(report.directionAttemptCount == 2 && report.directionEligibleCount == 2 &&
                report.directionAccuracy.numerator == 2 && report.directionAccuracy.denominator == 2,
@@ -159,8 +161,8 @@ private enum PostureGuidedValidationHarness {
         let report = session.finish()
         expect(report.directionAttemptCount == 2 && report.directionAccuracy.value == 1,
                "les deux phases torse donnent une accuracy direction synthétique complète")
-        expect(report.phases.first(where: { $0.phaseID == "shoulders-open" })?.recall == nil,
-               "shouldersOpen n'est pas interprété comme un signal attendu")
+        expect(report.phases.first(where: { $0.phaseID == "neutral-1" })?.recall == nil,
+               "une phase neutre n'est pas interprétée comme un signal attendu")
         expect(report.phases.first(where: { $0.phaseID == "recovery" })?.falsePositiveShare?.numerator == 0,
                "recovery sans attention n'est pas un objectif de détection")
     }

@@ -38,7 +38,7 @@ nonisolated enum PostureIndicatorState: String, Sendable {
         switch self {
         case .needsCalibration: "À calibrer"
         case .calibrating: "Calibration…"
-        case .normal: "Dans le repère"
+        case .normal: "Dans la zone"
         case .pending: "Observation…"
         case .attention: "Attention"
         case .unavailable: "Indisponible"
@@ -70,7 +70,7 @@ nonisolated struct PostureIndicatorResult: Equatable, Sendable {
             observedAt: nil,
             quality: .unavailable,
             hasValidBaseline: false,
-            isExperimental: id == .estimatedBlinks || id == .closedShoulders || id == .handOnFace,
+            isExperimental: id == .estimatedBlinks || id == .handOnFace,
             freshnessTTL: id == .apparentProximity || id == .estimatedBlinks
                 ? PostureObservationEngine.proximityConfiguration.ttl
                 : id == .handOnFace
