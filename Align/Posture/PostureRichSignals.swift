@@ -121,6 +121,11 @@ nonisolated struct PostureUniversalGeometryConfiguration: Equatable, Sendable {
     let torsoExitDegrees: Double
     let shoulderSlopeEnterDegrees: Double
     let shoulderSlopeExitDegrees: Double
+    /// Ratio distance perpendiculaire entre la base du cou et la ligne des
+    /// épaules / longueur de cette ligne. Plus le ratio baisse, plus le
+    /// triangle cou-épaules est aplati.
+    let shoulderTriangleHeightEnterRatio: Double
+    let shoulderTriangleHeightExitRatio: Double
     let headTiltEnterDegrees: Double
     let headTiltExitDegrees: Double
     let faceScaleEnter: Double
@@ -131,6 +136,8 @@ nonisolated struct PostureUniversalGeometryConfiguration: Equatable, Sendable {
         torsoExitDegrees: 6,
         shoulderSlopeEnterDegrees: 6,
         shoulderSlopeExitDegrees: 3.5,
+        shoulderTriangleHeightEnterRatio: 0.20,
+        shoulderTriangleHeightExitRatio: 0.23,
         headTiltEnterDegrees: 10,
         headTiltExitDegrees: 6,
         faceScaleEnter: 0.24,
@@ -190,9 +197,9 @@ nonisolated struct PostureRichScalarObservation: Equatable, Sendable {
     /// Elle permet à l'intégrateur de décider d'une alerte sans recalculer les
     /// intervalles; ce snapshot CV n'autorise aucune notification.
     let belowDuration: TimeInterval?
-    /// Deltas normalisés par rapport au repère historique pour le signal
-    /// `shouldersRaised`. Les champs restent optionnels : cette famille est
-    /// diagnostique et n'est pas retenue par la référence universelle.
+    /// Deltas normalisés par rapport au repère historique lorsque le mode
+    /// personnel est utilisé. En mode géométrique, la valeur principale est
+    /// le ratio du triangle et ces deux champs restent nil.
     let leftShoulderDelta: Double?
     let rightShoulderDelta: Double?
     let shoulderRaiseClassification: PostureShoulderRaiseClassification?
@@ -269,6 +276,10 @@ nonisolated struct PostureRichGeometryMetrics: Equatable, Sendable {
     /// Les hanches ne sont volontairement pas requises.
     let headTiltDegrees: Double?
     let shoulderOpeningDegrees: Double?
+    /// Hauteur perpendiculaire du triangle cou-épaules, divisée par sa base.
+    /// Cette métrique est indépendante de l'échelle de l'image et n'utilise
+    /// pas de baseline personnelle.
+    let shoulderTriangleHeightRatio: Double?
     let shoulderOpeningRatio: Double?
     let leftShoulderElevation: Double?
     let rightShoulderElevation: Double?
@@ -314,7 +325,8 @@ nonisolated struct PostureRichGeometryMetrics: Equatable, Sendable {
         headTiltState: PostureRichSignalState = .unavailable,
         openingRatioState: PostureRichSignalState? = nil,
         shoulderSlopeState: PostureRichSignalState? = nil,
-        shoulderSlopeReason: String? = nil
+        shoulderSlopeReason: String? = nil,
+        shoulderTriangleHeightRatio: Double? = nil
     ) {
         self.generation = generation
         self.sampleID = sampleID
@@ -325,6 +337,7 @@ nonisolated struct PostureRichGeometryMetrics: Equatable, Sendable {
         self.shoulderSlopeDegrees = shoulderSlopeDegrees
         self.headTiltDegrees = headTiltDegrees
         self.shoulderOpeningDegrees = shoulderOpeningDegrees
+        self.shoulderTriangleHeightRatio = shoulderTriangleHeightRatio
         self.shoulderOpeningRatio = shoulderOpeningRatio
         self.leftShoulderElevation = leftShoulderElevation
         self.rightShoulderElevation = rightShoulderElevation
@@ -362,7 +375,7 @@ nonisolated struct PostureRichGeometryMetrics: Equatable, Sendable {
              reason: reason, leftEyeOpeningRatio: nil,
              rightEyeOpeningRatio: nil, headTiltDegrees: nil, headTiltState: state,
              openingRatioState: state, shoulderSlopeState: state,
-             shoulderSlopeReason: reason)
+             shoulderSlopeReason: reason, shoulderTriangleHeightRatio: nil)
     }
 }
 
@@ -527,6 +540,21 @@ nonisolated enum PostureRichGeometryEvaluator {
         let slopeConfidenceQuality = slopeConfidence >=
             signalConfiguration.minimumShoulderSlopeConfidence
         let slopeFramingQuality = result.regionOfInterest?.source != .some(.fullFrameFallback)
+        let shoulderNeckDistanceQuality: Bool = {
+            guard let neck, let leftShoulder, let rightShoulder else { return true }
+            let leftDistance = hypot(Double(leftShoulder.x - neck.x),
+                                     Double(leftShoulder.y - neck.y))
+            let rightDistance = hypot(Double(rightShoulder.x - neck.x),
+                                      Double(rightShoulder.y - neck.y))
+            let smaller = min(leftDistance, rightDistance)
+            let larger = max(leftDistance, rightDistance)
+            guard smaller > 0, larger.isFinite, smaller.isFinite,
+                  signalConfiguration.maximumShoulderNeckDistanceRatio.isFinite,
+                  signalConfiguration.maximumShoulderNeckDistanceRatio >= 1 else {
+                return false
+            }
+            return larger / smaller <= signalConfiguration.maximumShoulderNeckDistanceRatio
+        }()
         // Un roulis commun se reconnaît seulement si le visage est apparié,
         // suffisamment tourné, et que les deux droites ont presque le même
         // angle dans le repère pixel. Une pente qui diverge du visage reste
@@ -546,7 +574,7 @@ nonisolated enum PostureRichGeometryEvaluator {
         let shoulderSlopeQuality = shoulderSlopeDegrees != nil &&
             shouldersState == .available && slopeSpanQuality &&
             slopeConfidenceQuality && slopeOrientationQuality &&
-            slopeFramingQuality && !commonCameraRollOnly
+            slopeFramingQuality && shoulderNeckDistanceQuality && !commonCameraRollOnly
         let shoulderSlopeState: PostureRichSignalState = if shoulderSlopeQuality {
             .available
         } else if shoulderSlopeDegrees != nil || shoulderCount > 0 {
@@ -564,6 +592,8 @@ nonisolated enum PostureRichGeometryEvaluator {
             "confiance des épaules à confirmer"
         } else if !slopeSpanQuality {
             "distance caméra/épaules à confirmer"
+        } else if !shoulderNeckDistanceQuality {
+            "géométrie cou-épaules à confirmer"
         } else if !slopeOrientationQuality {
             "orientation visage/caméra à confirmer"
         } else {
@@ -681,6 +711,14 @@ nonisolated enum PostureRichGeometryEvaluator {
             rightElevation = nil
         }
 
+        let shoulderTriangleHeightRatio: Double? = if elevationLandmarksGood,
+            let neck, let leftShoulder, let rightShoulder {
+            triangleHeightRatio(neck: neck, leftShoulder: leftShoulder,
+                                rightShoulder: rightShoulder)
+        } else {
+            nil
+        }
+
         let reason: String? = if !faceMatchesContext {
             "context visage/corps différent : métriques fusionnées indisponibles"
         } else if result.points.isEmpty {
@@ -711,7 +749,8 @@ nonisolated enum PostureRichGeometryEvaluator {
             headTiltState: headTiltState,
             openingRatioState: openingRatioState,
             shoulderSlopeState: shoulderSlopeState,
-            shoulderSlopeReason: shoulderSlopeReason
+            shoulderSlopeReason: shoulderSlopeReason,
+            shoulderTriangleHeightRatio: shoulderTriangleHeightRatio
         )
     }
 
@@ -739,6 +778,29 @@ nonisolated enum PostureRichGeometryEvaluator {
         let cosine = max(-1, min(1, (Double(a.x) * Double(b.x) + Double(a.y) * Double(b.y)) / (normA * normB)))
         let value = acos(cosine) * 180 / .pi
         return value.isFinite ? value : nil
+    }
+
+    private static func triangleHeightRatio(
+        neck: CGPoint,
+        leftShoulder: CGPoint,
+        rightShoulder: CGPoint
+    ) -> Double? {
+        let baseX = Double(rightShoulder.x - leftShoulder.x)
+        let baseY = Double(rightShoulder.y - leftShoulder.y)
+        let baseLength = hypot(baseX, baseY)
+        let midpoint = midpoint(leftShoulder, rightShoulder)
+        let neckX = Double(neck.x - midpoint.x)
+        let neckY = Double(neck.y - midpoint.y)
+        // Cross(base, neck-midpoint) / |base| is the perpendicular distance
+        // from the neck to the shoulder line. Dividing once more by |base|
+        // makes the metric scale-free.
+        let height = abs(baseX * neckY - baseY * neckX) / baseLength
+        let value = height / baseLength
+        guard baseLength.isFinite, baseLength > 0,
+              height.isFinite, height > 0,
+              value.isFinite, value > 0,
+              midpoint.y > neck.y else { return nil }
+        return value
     }
 
     private static func finite(_ value: Double) -> Double? {
@@ -1135,6 +1197,9 @@ nonisolated struct PostureRichSignalConfiguration: Equatable, Sendable {
     /// Fraction minimale du petit côté de l'image occupée par la paire. Une
     /// paire trop petite donne une pente très sensible à quelques pixels.
     var minimumShoulderSpanFraction: Double = 0.12
+    /// Garde-fou diagnostique contre une épaule projetée très loin du cou.
+    /// Une asymétrie réelle modérée reste autorisée.
+    var maximumShoulderNeckDistanceRatio: Double = 1.85
     /// Seuil au-delà duquel une rotation commune des yeux et des épaules peut
     /// venir du roulis de la caméra. La pente corporelle reste mesurée ; elle
     /// n'est simplement pas publiable lorsque ce roulis commun est confirmé.
@@ -2575,14 +2640,26 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
             )
         }
 
-        let leftDelta: Double? = if let value = body?.leftShoulderElevation,
+        let leftDelta: Double? = if !usesUniversalGeometry,
+                                    let value = body?.leftShoulderElevation,
                                     let neutral = bodyBaselineUsable?.leftShoulderElevation {
             value - neutral
         } else { nil }
-        let rightDelta: Double? = if let value = body?.rightShoulderElevation,
+        let rightDelta: Double? = if !usesUniversalGeometry,
+                                     let value = body?.rightShoulderElevation,
                                      let neutral = bodyBaselineUsable?.rightShoulderElevation {
             value - neutral
         } else { nil }
+
+        let universalTriangleValue = body?.shoulderTriangleHeightRatio
+        let universalTriangleIsHorizontal = body?.shoulderSlopeDegrees.map {
+            abs($0) <= universalGeometry.shoulderSlopeEnterDegrees
+        } ?? false
+        let universalTriangleQuality = body?.shouldersState == .available &&
+            body?.openingState == .available &&
+            universalTriangleIsHorizontal &&
+            (universalTriangleValue?.isFinite == true) &&
+            (universalTriangleValue ?? 0) > 0
 
         // Le filtre avance uniquement sur un nouvel échantillon corps. Un
         // tick visage republie les derniers deltas acceptés, tandis qu'un
@@ -2614,14 +2691,25 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
         }
         let acceptedLeftDelta = filteredDeltas.left
         let acceptedRightDelta = filteredDeltas.right
-        let raisedValue = [acceptedLeftDelta, acceptedRightDelta].compactMap { $0 }.max()
-        let raiseClassification = classifyShoulderRaise(
-            left: acceptedLeftDelta,
-            right: acceptedRightDelta,
-            enterThreshold: configuration.shoulderElevationEnterDelta
-        )
+        let raisedValue = usesUniversalGeometry
+            ? universalTriangleValue
+            : [acceptedLeftDelta, acceptedRightDelta].compactMap { $0 }.max()
+        let raiseClassification: PostureShoulderRaiseClassification = if usesUniversalGeometry {
+            universalTriangleQuality &&
+                (universalTriangleValue ?? .greatestFiniteMagnitude) <=
+                    universalGeometry.shoulderTriangleHeightEnterRatio
+                ? .bilateral : .none
+        } else {
+            classifyShoulderRaise(
+                left: acceptedLeftDelta,
+                right: acceptedRightDelta,
+                enterThreshold: configuration.shoulderElevationEnterDelta
+            )
+        }
         let raisedQuality: PostureSignalQuality = if filteredDeltas.rejectedJump {
             .limited
+        } else if usesUniversalGeometry {
+            universalTriangleQuality ? .good : (body == nil ? .unavailable : .limited)
         } else if raisedValue == nil {
             .unavailable
         } else if body?.shouldersState == .available,
@@ -2635,13 +2723,24 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
             if source == .face || source == .invalidateBody {
                 raisedAttention = raisedState.active
             } else {
-                raisedAttention = raisedState.update(
-                    deviation: raisedValue, timestamp: idTimestamp,
-                    enterThreshold: configuration.shoulderElevationEnterDelta,
-                    exitThreshold: configuration.shoulderElevationExitDelta,
-                    requiredDuration: configuration.requiredDuration,
-                    maximumGap: configuration.maximumSampleGap
-                )
+                if usesUniversalGeometry {
+                    raisedAttention = raisedState.update(
+                        deviation: -raisedValue, timestamp: idTimestamp,
+                        enterThreshold: -universalGeometry.shoulderTriangleHeightEnterRatio,
+                        exitThreshold: -universalGeometry.shoulderTriangleHeightExitRatio,
+                        requiredDuration: configuration.requiredDuration,
+                        maximumGap: configuration.maximumSampleGap,
+                        usesMagnitude: false
+                    )
+                } else {
+                    raisedAttention = raisedState.update(
+                        deviation: raisedValue, timestamp: idTimestamp,
+                        enterThreshold: configuration.shoulderElevationEnterDelta,
+                        exitThreshold: configuration.shoulderElevationExitDelta,
+                        requiredDuration: configuration.requiredDuration,
+                        maximumGap: configuration.maximumSampleGap
+                    )
+                }
             }
         } else {
             if source == .body || source == .combined { raisedState.reset() }
@@ -2649,6 +2748,8 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
         }
         let raisedSignalState: PostureRichSignalState = if filteredDeltas.rejectedJump {
             .error
+        } else if usesUniversalGeometry {
+            body == nil ? .unavailable : (universalTriangleQuality ? .available : .partial)
         } else if raisedValue == nil {
             body == nil ? .unavailable : .partial
         } else {
@@ -2658,6 +2759,14 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
             bodyInvalidationReason
         } else if filteredDeltas.rejectedJump {
             "saut d'élévation des épaules rejeté"
+        } else if usesUniversalGeometry && body?.shouldersState != .available {
+            "deux épaules fiables requises"
+        } else if usesUniversalGeometry && body?.openingState != .available {
+            "ligne des épaules à confirmer"
+        } else if usesUniversalGeometry && !universalTriangleIsHorizontal {
+            "ligne des épaules non horizontale"
+        } else if usesUniversalGeometry && universalTriangleValue == nil {
+            "triangle cou-épaules indisponible"
         } else if raisedValue == nil {
             "deux épaules et baseline requises"
         } else if raisedQuality != .good {
@@ -2665,28 +2774,18 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
         } else {
             ""
         }
-        let raised: PostureRichScalarObservation = if usesUniversalGeometry {
-            .unavailable(
-                .shouldersRaised,
-                generation: idGeneration,
-                sampleID: idSample,
-                capturedAt: idTimestamp,
-                reason: "élévation des épaules sans seuil anatomique universel fiable"
-            )
-        } else {
-            PostureRichScalarObservation(
-                kind: .shouldersRaised, value: raisedValue,
-                state: raisedSignalState,
-                quality: raisedQuality,
-                generation: idGeneration, sampleID: idSample, capturedAt: idTimestamp,
-                isEstimated2DProxy: true, isAttention: raisedAttention,
-                reason: raisedReason,
-                referenceDelta: raisedValue,
-                leftShoulderDelta: acceptedLeftDelta,
-                rightShoulderDelta: acceptedRightDelta,
-                shoulderRaiseClassification: raiseClassification
-            )
-        }
+        let raised = PostureRichScalarObservation(
+            kind: .shouldersRaised, value: raisedValue,
+            state: raisedSignalState,
+            quality: raisedQuality,
+            generation: idGeneration, sampleID: idSample, capturedAt: idTimestamp,
+            isEstimated2DProxy: true, isAttention: raisedAttention,
+            reason: raisedReason,
+            referenceDelta: raisedValue,
+            leftShoulderDelta: usesUniversalGeometry ? nil : acceptedLeftDelta,
+            rightShoulderDelta: usesUniversalGeometry ? nil : acceptedRightDelta,
+            shoulderRaiseClassification: raiseClassification
+        )
 
         let scale = faceForEvaluation?.faceScale
         let proximityValue: Double? = if usesUniversalGeometry {

@@ -11,6 +11,7 @@ final class AppModel: ObservableObject {
         signalConfigurations: [
             .proximity: .init(persistence: 15, recovery: 20, cooldown: 60, dailyMaximum: 720),
             .torsoInclination: .init(persistence: 15, recovery: 30, cooldown: 60, dailyMaximum: 720),
+            .raisedShoulders: .init(persistence: 15, recovery: 30, cooldown: 60, dailyMaximum: 720),
             .headTilt: .init(persistence: 15, recovery: 30, cooldown: 60, dailyMaximum: 720),
             .shoulderSlope: .init(persistence: 15, recovery: 30, cooldown: 60, dailyMaximum: 720),
             .estimatedBlinks: .init(persistence: 1, recovery: 2 * 60, cooldown: 120, dailyMaximum: 720),

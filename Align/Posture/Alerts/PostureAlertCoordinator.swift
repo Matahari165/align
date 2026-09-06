@@ -164,7 +164,7 @@ nonisolated struct PostureAlertSettingsStore {
 
 /// Pure arbitration. Delivery and authorization remain MainActor side effects.
 nonisolated struct PostureAlertCoordinator: Sendable {
-    static let ruleProfileID = "universal-geometry-v1"
+    static let ruleProfileID = "universal-geometry-v2"
     /// A notification request may await macOS authorization or delivery. Keep
     /// that in-flight reservation alive slightly longer than the observation
     /// TTL, while still bounding how long a silent runtime can deliver it.
@@ -186,7 +186,7 @@ nonisolated struct PostureAlertCoordinator: Sendable {
         globalConfiguration: PostureGlobalAlertConfiguration,
         sensitivity: PostureRecommendationSensitivity = .sensitive,
         priority: [PostureObservationSignalID] = [
-            .proximity, .torsoInclination, .headTilt,
+            .proximity, .torsoInclination, .raisedShoulders, .headTilt,
             .shoulderSlope, .estimatedBlinks, .handOnFace
         ]
     ) {

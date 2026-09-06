@@ -6,7 +6,7 @@ import Foundation
 nonisolated struct PostureRuntimeCoordinator: Sendable {
     /// Version du moteur universel. Les statistiques et états d'alerte portant
     /// sur l'ancien repère personnel ne doivent jamais être mélangés à ceux-ci.
-    static let ruleVersion = "universal-geometry-v1"
+    static let ruleVersion = "universal-geometry-v2"
     private(set) var generation: UInt64 = 0
     private(set) var contextKey = ""
     private var lastFaceSampleID: UInt64 = 0

@@ -46,7 +46,7 @@ private enum StatisticsPresenterHarness {
         func trendDatabase(previousProfile: String) -> PostureHistoryDatabase {
             var trend = PostureHistoryAccumulator()
             for (date, profile) in [(now.addingTimeInterval(-86400), previousProfile),
-                                    (now, "universal-geometry-v1")] {
+                                    (now, "universal-geometry-v2")] {
                 trend.ingestCoverage(channel: .upperBody, interval: .init(start: date, duration: 100),
                                      now: now.addingTimeInterval(300), calendar: calendar)
                 trend.ingest(.init(date: date, signalID: .shoulderSlope, sensitivity: .sensitive,
@@ -57,7 +57,7 @@ private enum StatisticsPresenterHarness {
             }
             return trend.database
         }
-        let comparableDB = trendDatabase(previousProfile: "universal-geometry-v1")
+        let comparableDB = trendDatabase(previousProfile: "universal-geometry-v2")
         let comparableTrend = StatisticsPresenter.make(loadResult: .loaded(comparableDB),
             database: comparableDB, period: .day, date: now, calendar: calendar)
         expect(comparableTrend.insights.contains { $0.id == "trend-shoulders" },

@@ -7,8 +7,8 @@ private enum SettingsCalibrationHarness {
                      "huit observations doivent être visibles et historisées")
         precondition(PostureObservationSignalID.alertableCases == [
             .proximity, .torsoInclination, .estimatedBlinks,
-            .shoulderSlope, .headTilt, .handOnFace
-        ], "les réglages doivent exposer exactement les six rappels canoniques")
+            .raisedShoulders, .shoulderSlope, .headTilt, .handOnFace
+        ], "les réglages doivent exposer exactement les sept rappels canoniques")
         precondition(PostureRecommendationSensitivity.defaultValue == .sensitive,
                      "Sensible doit être le défaut")
         let choices: [PostureSnoozeChoice] = [.oneHour, .today, .untilReactivation]

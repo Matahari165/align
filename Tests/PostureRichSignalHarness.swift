@@ -218,6 +218,8 @@ private enum PostureRichSignalHarness {
                "le torse complet doit produire un angle")
         expect(neutral.shoulderOpeningRatio != nil && neutral.leftShoulderElevation != nil,
                "les proxys d'ouverture et d'élévation doivent être finis")
+        expect(abs((neutral.shoulderTriangleHeightRatio ?? 99) - 0.2625) < 0.001,
+               "le triangle neutre doit produire un ratio hauteur/base stable")
         let noNeck = PostureRichGeometryEvaluator.make(
             result: result(includeNeck: false), face: neutralFace, context: context
         )
@@ -818,8 +820,70 @@ private enum PostureRichSignalHarness {
                !universalNeutral.shoulderSlope.isAttention &&
                !universalNeutral.headTilt.isAttention &&
                !universalNeutral.proximity.isAttention &&
+               !universalNeutral.shouldersRaised.isAttention &&
+               abs((universalNeutral.shouldersRaised.value ?? 99) - 0.2625) < 0.001 &&
                abs(universalNeutral.torsoInclination.referenceDelta ?? 99) < 0.001,
                "la géométrie neutre doit rester neutre même avec une ancienne baseline personnelle opposée")
+
+        var raisedConfiguration = universalConfiguration
+        raisedConfiguration.requiredDuration = 0.5
+        var universalRaisedEvaluator = PostureRichSignalEvaluator(configuration: raisedConfiguration)
+        let flattenedGeometry = PostureRichGeometryEvaluator.make(
+            result: result(generation: 1, sampleID: 50, timestamp: 1.0,
+                           leftShoulderDeltaY: -0.04, rightShoulderDeltaY: -0.04),
+            face: face(generation: 1, sampleID: 50, timestamp: 1.0,
+                       contextKey: context.key), context: context
+        )
+        let flattenedFirst = universalRaisedEvaluator.consume(
+            geometry: flattenedGeometry,
+            face: face(generation: 1, sampleID: 50, timestamp: 1.0,
+                       contextKey: context.key),
+            baseline: deliberatelyWrongPersonalBaseline, now: 1.0
+        )
+        expect(abs((flattenedFirst.shouldersRaised.value ?? 99) - 0.1875) < 0.001 &&
+               flattenedFirst.shouldersRaised.quality == .good &&
+               !flattenedFirst.shouldersRaised.isAttention,
+               "un triangle aplati doit rester en attente avant sa durée minimale")
+        let flattenedSecond = universalRaisedEvaluator.consume(
+            geometry: PostureRichGeometryEvaluator.make(
+                result: result(generation: 1, sampleID: 51, timestamp: 1.5,
+                               leftShoulderDeltaY: -0.04, rightShoulderDeltaY: -0.04),
+                face: face(generation: 1, sampleID: 51, timestamp: 1.5,
+                           contextKey: context.key), context: context
+            ),
+            face: face(generation: 1, sampleID: 51, timestamp: 1.5,
+                       contextKey: context.key),
+            baseline: deliberatelyWrongPersonalBaseline, now: 1.5
+        )
+        expect(flattenedSecond.shouldersRaised.isAttention &&
+               flattenedSecond.shouldersRaised.shoulderRaiseClassification == .bilateral,
+               "un ratio sous 0,20 maintenu doit signaler les deux épaules relevées")
+        let recoveredRaised = universalRaisedEvaluator.consume(
+            geometry: PostureRichGeometryEvaluator.make(
+                result: result(generation: 1, sampleID: 52, timestamp: 1.6),
+                face: face(generation: 1, sampleID: 52, timestamp: 1.6,
+                           contextKey: context.key), context: context
+            ),
+            face: face(generation: 1, sampleID: 52, timestamp: 1.6,
+                       contextKey: context.key),
+            baseline: deliberatelyWrongPersonalBaseline, now: 1.6
+        )
+        expect(!recoveredRaised.shouldersRaised.isAttention,
+               "le retour au ratio neutre doit fermer immédiatement l'épisode")
+        let slopedShoulder = universalRaisedEvaluator.consume(
+            geometry: PostureRichGeometryEvaluator.make(
+                result: result(generation: 1, sampleID: 53, timestamp: 1.7,
+                               leftShoulderDeltaY: -0.08),
+                face: face(generation: 1, sampleID: 53, timestamp: 1.7,
+                           contextKey: context.key), context: context
+            ),
+            face: face(generation: 1, sampleID: 53, timestamp: 1.7,
+                       contextKey: context.key),
+            baseline: deliberatelyWrongPersonalBaseline, now: 1.7
+        )
+        expect(slopedShoulder.shoulderSlope.isAttention &&
+               !slopedShoulder.shouldersRaised.isAttention,
+               "une base inclinée doit rester du ressort du signal latéral, pas du triangle bilatéral")
         let universalTilted = PostureRichGeometryEvaluator.make(
             result: result(generation: 1, sampleID: 2, timestamp: 0.1,
                            hipOffset: 0.20, rightShoulderDeltaY: -0.20),

@@ -26,7 +26,7 @@ require(!content.contains("camera.proximityAlertBanner"), "Aucune troisième ban
 require(!content.contains("blazePoseState.displayName"), "Aucun badge d’état redondant ne doit recouvrir la caméra.")
 
 for id in [
-    "apparentProximity", "torsoInclination", "shoulderSlope",
+    "apparentProximity", "torsoInclination", "raisedShoulders", "shoulderSlope",
     "estimatedBlinks", "headTilt", "handOnFace"
 ] {
     require(indicators.contains("indicator(for: .\(id))"), "Signal absent du rail complet : \(id)")
@@ -34,7 +34,7 @@ for id in [
 require(indicators.contains("threeColumnGrid") && indicators.contains("twoColumnGrid"),
         "Le rail doit garder les grilles compactes à trois et deux colonnes.")
 require(indicators.contains("ViewThatFits"), "Le rail doit sélectionner une grille adaptée à la largeur.")
-require(indicators.contains("Indicateurs de posture, six"), "Le groupe VoiceOver doit annoncer six indicateurs.")
+require(indicators.contains("Indicateurs de posture, sept"), "Le groupe VoiceOver doit annoncer sept indicateurs.")
 require(indicators.contains("case .positive: AlignTheme.accentSoft") &&
         indicators.contains("case .negative: AlignTheme.attention"),
         "Le rail doit utiliser les rôles turquoise/ambre du thème Align.")

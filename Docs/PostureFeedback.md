@@ -7,7 +7,7 @@ s'est tenue pendant une calibration. Elle est comparée à des axes géométriqu
 communs à l'image caméra. Un petit déplacement vers l'avant ou vers l'arrière
 ne change donc pas, à lui seul, le repère angulaire.
 
-La version active des règles est `universal-geometry-v1`. Les anciennes valeurs
+La version active des règles est `universal-geometry-v2`. Les anciennes valeurs
 de posture ne sont pas réutilisées. La calibration de huit secondes ne sert
 plus qu'à mesurer l'ouverture habituelle de chaque œil pour rendre la détection
 des clignements plus fiable.
@@ -18,6 +18,7 @@ des clignements plus fiable.
 | --- | --- | ---: | ---: | ---: |
 | Torse incliné | Axe entre le milieu des épaules et celui des hanches, 0° = vertical | ±10° | ±6° | 0,8 s sensible · 1 s équilibré · 1,5 s discret |
 | Épaules inclinées | Angle de la ligne entre les deux épaules, 0° = horizontale | ±6° | ±3,5° | 1 s sensible/équilibré · 1,5 s discret |
+| Épaules relevées | Hauteur perpendiculaire entre la base du cou et la ligne des épaules, divisée par sa largeur | ratio ≤ 0,20 | ratio ≥ 0,23 | 0,8 s sensible · 1 s équilibré · 1,5 s discret |
 | Tête inclinée | Différence entre la ligne des yeux et la ligne des épaules | ±10° | ±6° | 0,8 s sensible · 1 s équilibré · 1,5 s discret |
 | Proximité apparente | Taille du visage dans l'image, proxy 2D | 0,24 | 0,21 | 2 s continus |
 | Main au visage | Distance 2D main–visage | seuil du détecteur | seuil de sortie du détecteur | 2,5 s continus |
@@ -33,10 +34,18 @@ ne donne pas une distance en centimètres. Elle dépend donc encore du cadrage,
 du zoom et de la caméra ; si l'image est mauvaise ou si le visage est trop
 tourné, le signal devient indisponible plutôt que d'inventer une mesure.
 
-Les métriques « épaules relevées » et « tête–épaules » restent calculées pour
-le diagnostic technique, mais ne sont pas affichées comme rappels et ne peuvent
-pas envoyer de notification : aucun seuil géométrique universel suffisamment
-fiable n'a été retenu pour elles.
+Le signal « épaules relevées » est maintenant un rappel actif. Il ne compare
+plus une élévation à une calibration personnelle : il mesure l'aplatissement du
+triangle cou–épaules par sa hauteur perpendiculaire divisée par la largeur de la
+base. Le ratio est donc indépendant de la taille du visage dans l'image. La
+pente de cette base reste un signal séparé pour repérer une épaule plus haute
+que l'autre. Le ratio tête–épaules fermé reste diagnostique, car sa cause peut
+être la tête avancée ou les épaules refermées.
+
+Pour ne pas transformer un point d'épaule douteux en alerte, les deux épaules,
+la base du cou et la cohérence de la paire doivent être fiables. La mesure est
+alors disponible ; sinon elle reste limitée ou indisponible et ne déclenche
+pas de rappel.
 
 ## Clignements
 
@@ -74,7 +83,7 @@ Une notification n'est jamais envoyée sur une seule image. Il faut :
 Après l'entrée en attention publiée par le moteur, le coordinateur ajoute une
 petite durée de confirmation avant de réserver la notification :
 
-- posture et proximité : 7,5 s en mode sensible, 15 s en mode équilibré,
+- posture, épaules relevées et proximité : 7,5 s en mode sensible, 15 s en mode équilibré,
   22,5 s en mode discret ;
 - clignements : 0,5 s, 1 s ou 1,5 s selon ces mêmes profils ;
 - main au visage : 0,125 s, 0,25 s ou 0,375 s.

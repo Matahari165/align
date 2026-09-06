@@ -31,19 +31,22 @@ struct PostureIndicatorsView: View {
         .padding(.vertical, 10)
         .background(AlignTheme.elevated.opacity(0.94))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Indicateurs de posture, six")
+        .accessibilityLabel("Indicateurs de posture, sept")
     }
 
     private var threeColumnGrid: some View {
         Grid(horizontalSpacing: 8, verticalSpacing: 8) {
             GridRow {
                 indicator(for: .shoulderSlope)
+                indicator(for: .raisedShoulders)
                 indicator(for: .headTilt)
-                indicator(for: .apparentProximity)
             }
             GridRow {
+                indicator(for: .apparentProximity)
                 indicator(for: .torsoInclination)
                 indicator(for: .estimatedBlinks)
+            }
+            GridRow {
                 indicator(for: .handOnFace)
             }
         }
@@ -54,14 +57,17 @@ struct PostureIndicatorsView: View {
         Grid(horizontalSpacing: 8, verticalSpacing: 8) {
             GridRow {
                 indicator(for: .shoulderSlope)
+                indicator(for: .raisedShoulders)
+            }
+            GridRow {
                 indicator(for: .headTilt)
-            }
-            GridRow {
                 indicator(for: .apparentProximity)
-                indicator(for: .torsoInclination)
             }
             GridRow {
+                indicator(for: .torsoInclination)
                 indicator(for: .estimatedBlinks)
+            }
+            GridRow {
                 indicator(for: .handOnFace)
             }
         }
@@ -186,7 +192,7 @@ struct PostureIndicatorsView: View {
         case .torsoInclination:
             "Angle entre le milieu des épaules et celui des hanches, comparé à l'axe vertical de l'image."
         case .raisedShoulders:
-            "Hauteur des épaules par rapport à la base du cou et à ton repère personnel."
+            "Ratio géométrique entre la hauteur du triangle base du cou–épaules et sa largeur. Plus il baisse, plus le triangle est aplati ; la pente de la base est contrôlée séparément."
         case .estimatedBlinks:
             "Clignements par minute sur le temps où les deux yeux sont visibles. La référence s'apprend sur plusieurs minutes."
         case .handOnFace:

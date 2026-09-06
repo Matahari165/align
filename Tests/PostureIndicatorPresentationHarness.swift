@@ -92,7 +92,7 @@ enum PostureIndicatorPresentationHarness {
                "l'alerte canonique clignements doit rester actionnable et honnête")
 
         expect(PostureIndicatorPresentation.orderedIDs == [
-            .shoulderSlope, .headTilt, .apparentProximity,
+            .shoulderSlope, .raisedShoulders, .headTilt, .apparentProximity,
             .torsoInclination, .estimatedBlinks, .handOnFace
         ], "l'ordre du rail doit rester stable")
 

@@ -10,12 +10,12 @@ nonisolated enum PostureObservationSignalID: String, CaseIterable, Codable, Hash
     case headTilt
     case handOnFace
 
-    /// Les rappels utilisent exclusivement des observations fiables. Les
-    /// signaux dont aucun seuil universel défendable n'existe restent
-    /// disponibles pour le diagnostic, mais ne peuvent pas notifier.
+    /// Les rappels utilisent exclusivement des observations fiables. Le
+    /// triangle cou-épaules dispose désormais d'un seuil géométrique commun ;
+    /// le ratio tête-épaules fermé reste diagnostique faute de seuil universel.
     static let alertableCases: [Self] = [
         .proximity, .torsoInclination, .estimatedBlinks,
-        .shoulderSlope, .headTilt, .handOnFace
+        .raisedShoulders, .shoulderSlope, .headTilt, .handOnFace
     ]
 }
 

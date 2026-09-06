@@ -37,7 +37,7 @@ nonisolated enum LocalPostureNotificationCopy {
         case .torsoInclination:
             "Ton buste penche sur le côté par rapport à l’axe de l’image. Recentre ton buste."
         case .raisedShoulders:
-            "Tes épaules semblent relevées. Relâche-les."
+            "Le triangle entre la base de ton cou et tes épaules semble aplati. Relâche tes épaules."
         case .headTilt:
             "Ta tête est penchée sur le côté. Réajuste-la."
         case .closedShoulders:

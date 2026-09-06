@@ -9,6 +9,7 @@ nonisolated enum PostureIndicatorTone: Equatable, Sendable {
 nonisolated struct PostureIndicatorPresentation: Equatable, Sendable {
     static let orderedIDs: [PostureIndicatorID] = [
         .shoulderSlope,
+        .raisedShoulders,
         .headTilt,
         .apparentProximity,
         .torsoInclination,
