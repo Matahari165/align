@@ -81,23 +81,8 @@ final class AppModel: ObservableObject {
         alertSettings.controls[id, default: .init()]
     }
 
-    init() {
-        camera = CameraCaptureService()
-        history = PostureHistoryController()
-        notificationService = LocalPostureNotificationService()
-        alertSettings = PostureAlertSettingsStore().load()
-        alertCoordinator.setSensitivity(alertSettings.sensitivity)
-        restoreAlertDeliveryState()
-        for (id, control) in alertSettings.controls {
-            alertCoordinator.setEnabled(control.isEnabled, for: id)
-            if control.isSnoozedUntilReactivation {
-                alertCoordinator.snooze(id, choice: .untilReactivation, now: Date())
-            } else if let until = control.snoozedUntil {
-                alertCoordinator.snooze(id, until: until)
-            }
-        }
-        camera.setPostureRecommendationSensitivity(alertSettings.sensitivity)
-        connectRuntime()
+    convenience init() {
+        self.init(camera: CameraCaptureService())
     }
 
     init(camera: CameraCaptureService) {

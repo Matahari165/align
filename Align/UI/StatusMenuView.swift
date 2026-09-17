@@ -67,6 +67,9 @@ struct StatusMenuView: View {
     }
 
     private var cameraPrivacySettingsURL: URL {
-        URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")!
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera") else {
+            preconditionFailure("The camera privacy settings URL must be valid")
+        }
+        return url
     }
 }

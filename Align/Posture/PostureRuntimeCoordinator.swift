@@ -20,7 +20,6 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
     private var pendingCalibrationBaseline: PostureRichBaseline?
     private var lastBaselineFaceSampleID: UInt64 = 0
     private var lastBaselineFaceCapturedAt: TimeInterval?
-    private var lastPublishedSample: [PostureObservationSignalID: UInt64] = [:]
     private var lastEvaluation: PostureRichEvaluation?
     private var blinkTargetPerMinute: Double?
     private(set) var isCalibrationActive = false
@@ -66,7 +65,7 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
     /// ne doit jamais être déduite d'un premier débit observé : en l'absence
     /// de cette valeur, l'évaluateur attend ses fenêtres indépendantes.
     mutating func setBlinkTarget(_ target: Double?) {
-        guard target == nil || (target?.isFinite == true && target! > 0) else { return }
+        guard target.map({ $0.isFinite && $0 > 0 }) ?? true else { return }
         blinkTargetPerMinute = target
         evaluator.setBlinkTarget(target)
     }
@@ -173,7 +172,6 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         lastFaceSampleID = 0
         lastHandFaceSampleID = 0
         lastBodySampleID = 0
-        lastPublishedSample.removeAll(keepingCapacity: true)
         lastEvaluation = nil
         blinkTargetPerMinute = nil
         var configuration = Self.configuration(for: sensitivity)
@@ -517,7 +515,6 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         lastFaceSampleID = 0
         lastHandFaceSampleID = 0
         lastBodySampleID = 0
-        lastPublishedSample.removeAll(keepingCapacity: true)
         return observationEngine.reset(generation: generation, at: now)
     }
 }

@@ -212,6 +212,9 @@ struct SettingsView: View {
     }
 
     private var notificationSettingsURL: URL {
-        URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") else {
+            preconditionFailure("The notification settings URL must be valid")
+        }
+        return url
     }
 }
