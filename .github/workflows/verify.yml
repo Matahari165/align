@@ -1,0 +1,59 @@
+name: Verify Align
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    # Align targets macOS 26.5 APIs; fail clearly if GitHub does not expose
+    # the matching Xcode image instead of claiming a compatible build.
+    runs-on: macos-26
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode 26.5
+        shell: bash
+        run: |
+          set -euo pipefail
+          developer_dir=/Applications/Xcode_26.5.app/Contents/Developer
+          if [[ ! -x "$developer_dir/usr/bin/xcodebuild" ]]; then
+            echo "::error::Xcode 26.5 is required but was not found at $developer_dir"
+            echo "Installed Xcode bundles:"
+            find /Applications -maxdepth 1 -name 'Xcode*.app' -print | sort || true
+            exit 1
+          fi
+          echo "DEVELOPER_DIR=$developer_dir" >> "$GITHUB_ENV"
+          "$developer_dir/usr/bin/xcodebuild" -version
+
+      - name: Check whitespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git diff --check "${{ github.event.pull_request.base.sha }}...HEAD"
+          elif git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+            git diff --check HEAD^ HEAD
+          else
+            git show --check --format= HEAD
+          fi
+
+      - name: Run MediaPipe pose dry-run
+        run: python3 Tools/mediapipe_pose_spike.py --dry-run
+
+      - name: Run MediaPipe LiteRT dry-run
+        env:
+          PYTHONPATH: Tools
+        run: python3 Tools/mediapipe_litert_same_frame.py --dry-run
+
+      - name: Build and run supported harnesses
+        run: ./Tools/verify.sh

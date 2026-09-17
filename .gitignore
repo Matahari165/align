@@ -1,0 +1,52 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode and Swift build products
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+*.moved-aside
+.build/
+.swiftpm/
+
+# Swift / Objective-C generated artifacts
+*.dSYM
+*.dSYM.zip
+*.ipa
+
+# Python experiments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+ENV/
+.env/
+.venv-*/
+*.egg-info/
+
+# Local experiment output
+*.log
+*.tmp
+*.swp
+reports/
+coverage/
+
+# Local credentials and machine configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.mobileprovision
+
+# Intentionally do not ignore bundled model/runtime artifacts (*.onnx, *.tflite,
+# *.dylib): the current prototype tracks them together with their notices.

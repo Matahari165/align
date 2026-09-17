@@ -48,7 +48,7 @@ Le rapport terminal indique, pour chaque phase : présence simultanée des deux
 épaules, pertes et récupération, jitter entre deux résultats consécutifs et
 latence d'inférence. Le modèle est appelé par défaut à 1 Hz, c'est-à-dire une
 analyse par seconde, sans file d'attente ; l'aperçu conserve le dernier tracé
-pendant au plus 1,2 seconde. Le jitter suppose que Jeremy reste immobile ; un
+pendant au plus 1,2 seconde. Le jitter suppose que la personne reste immobile ; un
 vrai mouvement augmente naturellement cette mesure. Le rapport affiche aussi
 les angles médians de la ligne des épaules et de l'axe tête-épaules. Il affiche
 séparément les erreurs techniques, qui ouvrent une interruption lorsqu'elles

@@ -276,7 +276,7 @@ suffisamment important pour poursuivre MediaPipe comme candidat principal.
 
 Limites : le test MediaPipe mesure deux épaules ; son « milieu du cou » est une
 estimation entre elles, pas une articulation observée. La précision visuelle du
-tracé doit encore être confirmée par Jeremy. Le journal a aussi montré une
+tracé doit encore être confirmée pendant un essai réel. Le journal a aussi montré une
 tentative de télémétrie technique `portable_clearcut_uploader` ; l'envoi a
 échoué pendant ce test, mais MediaPipe Tasks ne peut pas être considéré comme
 strictement sans réseau tant que cette télémétrie n'est pas désactivée ou que
