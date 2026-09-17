@@ -4,6 +4,14 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 
+cd "$repo_root"
+if [ "${ALIGN_SKIP_PRIVATE_MODEL:-0}" = "1" ]; then
+  echo "== Modèle RTMPose privé ignoré pour la CI publique =="
+else
+  echo "== Modèle RTMPose local =="
+  Tools/setup-local-model.sh
+fi
+
 if [ ! -x "$DEVELOPER_DIR/usr/bin/xcodebuild" ]; then
   echo "Xcode introuvable : $DEVELOPER_DIR" >&2
   exit 1
@@ -12,7 +20,6 @@ fi
 derived_data=$(mktemp -d /private/tmp/align-verify.XXXXXX)
 trap 'rm -rf "$derived_data"' EXIT HUP INT TERM
 
-cd "$repo_root"
 echo "== Build Release =="
 "$DEVELOPER_DIR/usr/bin/xcodebuild" \
   -project Align.xcodeproj \
@@ -30,8 +37,15 @@ if [ ! -d "$app_path" ]; then
   exit 1
 fi
 
-echo "== RTMPose bundle =="
-Tests/RTMPoseBundlePackagingHarness.sh "$app_path"
+if [ "${ALIGN_SKIP_PRIVATE_MODEL:-0}" = "1" ]; then
+  if find "$app_path" -name 'rtmpose-m-halpe26-end2end.onnx' -print -quit | grep -q .; then
+    echo "Le bundle public ne doit pas contenir le modèle RTMPose privé." >&2
+    exit 1
+  fi
+else
+  echo "== RTMPose bundle =="
+  Tests/RTMPoseBundlePackagingHarness.sh "$app_path"
+fi
 
 echo "== Upper-body inference worker =="
 Tests/UpperBodyInferenceWorkerHarness.sh

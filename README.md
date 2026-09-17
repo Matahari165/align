@@ -40,7 +40,7 @@ RTMPose is the only upper-body engine used by the product activation. BlazePose/
 ## Privacy and local data
 
 - Camera access is declared through the macOS camera entitlement and `NSCameraUsageDescription`.
-- Inference runs locally using Apple Vision and bundled model/runtime artifacts.
+- Inference runs locally using Apple Vision and the locally supplied RTMPose model/runtime artifacts.
 - No network client, telemetry service, image upload, or cloud storage path is part of the app target.
 - Raw frames, videos, face landmarks, and raw pose coordinates are not persisted by the product path.
 - User settings and bounded, scalar posture-history aggregates are stored locally in Application Support so the statistics view can work across launches.
@@ -54,7 +54,7 @@ RTMPose is the only upper-body engine used by the product activation. BlazePose/
 | UI | SwiftUI with AppKit integration |
 | Capture | AVFoundation / `AVCaptureSession` |
 | Face signals | Apple Vision face landmarks and derived geometry |
-| Upper-body inference | RTMPose-M Halpe26, bundled ONNX model |
+| Upper-body inference | RTMPose-M Halpe26, locally supplied ONNX model |
 | Inference runtime | ONNX Runtime 1.19.2 through a small C bridge |
 | State and feedback | Swift value types, serial workers, deterministic observation and alert policies |
 | Persistence | Local JSON aggregates and settings only |
@@ -64,7 +64,23 @@ RTMPose is the only upper-body engine used by the product activation. BlazePose/
 
 The project is configured for macOS 26.5 or newer and uses Swift 5 language mode. A complete Xcode installation is required for the application build and Swift harnesses. The shared `Align` scheme is committed for clean-checkout discovery.
 
-The repository intentionally tracks the RTMPose model, ONNX Runtime dynamic library, and legacy LiteRT artifacts used by the current project layout. Review the bundled notices before redistribution:
+The public repository does not contain the RTMPose model weight. The weight stays in a stable, user-owned location on the Mac and is copied into the ignored build checkout only after its SHA-256 has been verified. No download is performed by the project.
+
+The default source location is:
+
+```text
+~/Library/Application Support/Align/Models/rtmpose-m-halpe26-end2end.onnx
+```
+
+To use another local copy, set `ALIGN_RTMPOSE_MODEL_PATH` to its absolute path. On a new checkout, prepare the model before opening or building the app:
+
+```sh
+./Tools/setup-local-model.sh
+```
+
+The script expects SHA-256 `26f3a19e61304a600dfb82d1001d41d24343b89fc70a33ffc84657e0b0bf2ec`, copies atomically to `Align/Pose/RTMPose/Models/`, and leaves the source file untouched. `./Tools/verify.sh` runs this setup automatically before the Release build.
+
+The ONNX Runtime dynamic library and legacy LiteRT artifacts remain in the repository with their notices. Review the notices before redistribution:
 
 - [RTMPose third-party notices](Align/Pose/RTMPose/Models/ThirdPartyNotices.txt)
 - [LiteRT Apache notice](Align/LiteRT/LICENSE-Apache-2.0.txt)
@@ -87,7 +103,7 @@ The main verification entry point is:
 ./Tools/verify.sh
 ```
 
-It selects the standard Xcode installation, builds a Release bundle in a temporary directory, and runs the RTMPose packaging and upper-body worker harnesses. A completed run is still pending in this checkout because the local Xcode cache layer returned I/O errors.
+Locally, it verifies the RTMPose model, selects the standard Xcode installation, builds a Release bundle in a temporary directory, and runs the RTMPose packaging and upper-body worker harnesses. Public CI sets `ALIGN_SKIP_PRIVATE_MODEL=1`: it proves the source builds without redistributing the weight and asserts that the private model is absent from the resulting bundle. A completed local run is still pending in this checkout because the local Xcode cache layer returned I/O errors.
 
 The equivalent build command is:
 
@@ -106,12 +122,12 @@ The source-level harnesses under `Tests/` are not registered XCTest targets. Pac
 ## Current limitations
 
 - Camera behavior, signing, permission transitions, and the full Release build have not been verified in this checkout because only the Command Line Tools are selected instead of Xcode.
-- The repository has a shared Xcode scheme, but no CI workflow yet.
+- The repository has a shared Xcode scheme, but public clean checkouts need an authorized local RTMPose model before compiling the application; the setup script never downloads one.
 - The active signals are 2D visual proxies. They are sensitive to framing, lighting, occlusion, camera placement, and the visible body region.
 - A real camera session is required to evaluate tracking quality; dry-runs and source harnesses cannot establish user-facing accuracy.
 - Core ML execution remains an explicit opt-in path in the adapter and is not presented as validated.
 - Historical measurements in the existing benchmark notes describe earlier commits or experiments. They are not current product guarantees; no new benchmark is claimed here.
-- Model binaries are large. The RTMPose weight must not be redistributed publicly until its model-specific licence is confirmed; removing it from the public history and documenting setup is a release gate.
+- The RTMPose weight is intentionally excluded from the public repository until its model-specific redistribution terms are confirmed. Each developer or evaluator must supply an authorized local copy with the documented SHA-256.
 
 ## Repository map
 
@@ -119,7 +135,7 @@ The source-level harnesses under `Tests/` are not registered XCTest targets. Pac
 Align/                         Application source and bundled resources
   Camera/                      Capture lifecycle, cadence, and frame admission
   Pose/                        Vision, RTMPose adapter, and legacy pose code
-    RTMPose/                   Active ONNX bridge, model, runtime, notices
+    RTMPose/                   Active ONNX bridge, local model staging, runtime, notices
   Posture/                     Signals, observations, alerts, history, validation
   UI/                          SwiftUI/AppKit presentation and diagnostics
   LiteRT/                      Legacy BlazePose/LiteRT model assets and notices
@@ -132,4 +148,4 @@ Align.xcodeproj/               macOS application project
 
 ## Project status
 
-Align is an actively evolving local pilot. The codebase demonstrates a complete product-shaped loop—from camera lifecycle and model inference to explainable signals, guarded notifications, UI state, and local history—while keeping the verification boundary visible. A completed Release verification, an anonymized product screenshot, and resolution of the RTMPose weight licence remain gates before public publication.
+Align is an actively evolving local pilot. The codebase demonstrates a complete product-shaped loop—from camera lifecycle and model inference to explainable signals, guarded notifications, UI state, and local history—while keeping the verification boundary visible. A completed Release verification, an anonymized product screenshot, and a confirmed redistribution path for the RTMPose weight remain release-readiness gates.

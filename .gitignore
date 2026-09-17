@@ -48,5 +48,6 @@ coverage/
 *.p12
 *.mobileprovision
 
-# Intentionally do not ignore bundled model/runtime artifacts (*.onnx, *.tflite,
-# *.dylib): the current prototype tracks them together with their notices.
+# The RTMPose weight is kept outside the public repository. The setup script
+# verifies and copies the owner's local copy here immediately before a build.
+/Align/Pose/RTMPose/Models/rtmpose-m-halpe26-end2end.onnx

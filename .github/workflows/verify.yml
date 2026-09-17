@@ -56,4 +56,6 @@ jobs:
         run: python3 Tools/mediapipe_litert_same_frame.py --dry-run
 
       - name: Build and run supported harnesses
+        env:
+          ALIGN_SKIP_PRIVATE_MODEL: "1"
         run: ./Tools/verify.sh
