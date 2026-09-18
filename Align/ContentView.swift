@@ -109,6 +109,8 @@ private struct LiveCameraPane: View {
             .accessibilityLabel("Aperçu de la caméra")
             .accessibilityValue(accessibilitySummary)
 
+            PostureValidationLivePanel(camera: camera)
+
             PostureIndicatorsView(
                 snapshot: camera.postureIndicators,
                 cameraIsRunning: camera.state == .running,
@@ -121,6 +123,98 @@ private struct LiveCameraPane: View {
 
     private var accessibilitySummary: String {
         CameraStatusPresentation.make(for: camera).explanation
+    }
+}
+
+private struct PostureValidationLivePanel: View {
+    @ObservedObject var camera: CameraCaptureService
+
+    var body: some View {
+        Group {
+            switch camera.postureValidationState {
+            case .idle:
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Test caméra des postures")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AlignTheme.ivory)
+                        Text("Suis les consignes tout en contrôlant ton cadrage.")
+                            .font(.caption2)
+                            .foregroundStyle(AlignTheme.quiet)
+                    }
+                    Spacer(minLength: 8)
+                    Button("Tester les postures") {
+                        camera.startPostureValidation(mode: .comprehensive20s)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(camera.state != .running)
+                }
+
+            case .running(let progress):
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("Étape \(progress.phaseIndex + 1)/\(progress.phaseCount)")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(AlignTheme.accentSoft)
+                        Text(progress.instruction)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AlignTheme.ivory)
+                        Spacer(minLength: 8)
+                        Text("\(progress.phaseSecondsRemaining) s")
+                            .font(.system(.caption, design: .monospaced).weight(.semibold))
+                            .foregroundStyle(AlignTheme.attention)
+                        Button("Annuler") {
+                            camera.cancelPostureValidation()
+                        }
+                        .controlSize(.small)
+                    }
+                    ProgressView(value: progress.phaseProgress)
+                        .tint(AlignTheme.accent)
+                        .accessibilityLabel("Progression de l'étape")
+                        .accessibilityValue("\(progress.phaseSecondsRemaining) secondes restantes")
+                }
+
+            case .completed:
+                HStack(spacing: 10) {
+                    Label("Test terminé", systemImage: "checkmark.circle.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AlignTheme.accentSoft)
+                    Text("Le rapport détaillé reste disponible dans Diagnostics.")
+                        .font(.caption2)
+                        .foregroundStyle(AlignTheme.quiet)
+                    Spacer(minLength: 8)
+                    Button("Recommencer") {
+                        camera.startPostureValidation(mode: .comprehensive20s)
+                    }
+                    .controlSize(.small)
+                    Button("Fermer") {
+                        camera.cancelPostureValidation()
+                    }
+                    .controlSize(.small)
+                }
+
+            case .invalidated(let reason):
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(AlignTheme.attention)
+                        .accessibilityHidden(true)
+                    Text(reason)
+                        .font(.caption)
+                        .foregroundStyle(AlignTheme.ivory)
+                    Spacer(minLength: 8)
+                    Button("Fermer") {
+                        camera.cancelPostureValidation()
+                    }
+                    .controlSize(.small)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(AlignTheme.canvas)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Test guidé des postures")
     }
 }
 

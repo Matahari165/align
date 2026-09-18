@@ -233,9 +233,9 @@ struct DiagnosticsView: View {
                         .font(.callout.weight(.medium))
                     ProgressView(value: progress.totalProgress)
                         .accessibilityLabel("Progression de la validation posture")
-                    Text(progress.mode == .measurement20s
-                         ? "Mesure 20 secondes par phase"
-                         : "Mesure 60 secondes par phase")
+                    Text(progress.mode == .notification60s
+                         ? "Mesure 60 secondes par phase"
+                         : "Mesure 20 secondes par phase")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

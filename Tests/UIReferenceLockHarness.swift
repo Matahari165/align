@@ -24,6 +24,12 @@ require(content.contains("layoutPriority(1)"), "La caméra doit rester la zone d
 require(!content.contains("inactiveCameraMessage"), "Le statut caméra inactif ne doit pas être dupliqué dans l’aperçu.")
 require(!content.contains("camera.proximityAlertBanner"), "Aucune troisième bannière ne doit recouvrir la caméra.")
 require(!content.contains("blazePoseState.displayName"), "Aucun badge d’état redondant ne doit recouvrir la caméra.")
+require(content.contains("PostureValidationLivePanel(camera: camera)"),
+        "Le test guidé doit rester accessible depuis le panneau caméra principal.")
+require(content.contains("startPostureValidation(mode: .comprehensive20s)"),
+        "Le bouton caméra doit lancer le protocole complet.")
+require(content.contains("progress.phaseSecondsRemaining"),
+        "Le test caméra doit afficher le temps restant pour chaque posture.")
 
 for id in [
     "apparentProximity", "torsoInclination", "raisedShoulders", "shoulderSlope",

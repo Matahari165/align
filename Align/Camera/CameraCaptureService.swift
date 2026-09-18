@@ -161,6 +161,7 @@ nonisolated struct PostureValidationProgress: Equatable, Sendable {
     let phaseCount: Int
     let phaseProgress: Double
     let totalProgress: Double
+    let phaseSecondsRemaining: Int
 }
 
 enum PostureValidationViewState {
@@ -831,7 +832,8 @@ final class CameraCaptureService: ObservableObject {
             phaseIndex: phaseIndex,
             phaseCount: plan.phases.count,
             phaseProgress: min(1, phaseElapsed / phase.duration),
-            totalProgress: min(1, clampedElapsed / plan.totalDuration)
+            totalProgress: min(1, clampedElapsed / plan.totalDuration),
+            phaseSecondsRemaining: max(0, Int(ceil(phase.duration - phaseElapsed)))
         )
     }
 
