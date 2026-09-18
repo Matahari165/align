@@ -1549,6 +1549,8 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     private let onEvent: @Sendable (PoseProcessingEvent, PoseProcessingGeneration) -> Void
     private let sampleQueue: DispatchQueue
     private var analysisCadence = AnalysisCadenceController()
+    private var adaptiveFaceCadence = AdaptiveFaceCadenceController()
+    private var eyeMotionProbe = EyeMotionProbe()
     private var upperBodyModelMode: UpperBodyModelMode
     private var isActive = false
     /// A capture session can emit frames before the MainActor receives the
@@ -1679,6 +1681,8 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             self.faceTargetContinuity.reset()
             self.faceTargetContextKey = ""
             self.acceptedFaceTargetEpoch = 0
+            self.adaptiveFaceCadence.reset()
+            self.eyeMotionProbe.reset()
             self.cameraIdentifier = identifier
         }
     }
@@ -1688,6 +1692,8 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         faceTargetContinuity.reset()
         faceTargetContextKey = ""
         acceptedFaceTargetEpoch = 0
+        adaptiveFaceCadence.reset()
+        eyeMotionProbe.reset()
     }
 
     func setUpperBodyModelMode(_ mode: UpperBodyModelMode) {
@@ -1719,6 +1725,8 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         postureRuntimeCoordinator.reset(generation: UInt64(generation.activationID), contextKey: "")
         benchmarkSegmentationToken = nil
         analysisCadence.reset()
+        adaptiveFaceCadence.reset()
+        eyeMotionProbe.reset()
         expirationWorkItem?.cancel()
         expirationWorkItem = nil
         overlayExpirationWorkItem?.cancel()
@@ -1981,6 +1989,20 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
 
         let uptime = ProcessInfo.processInfo.systemUptime
         let capturedAt = monotonicCaptureTime(for: sampleBuffer, fallback: uptime)
+        if let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
+            let eyeProbe = eyeMotionProbe.observe(pixelBuffer)
+            adaptiveFaceCadence.observeEyeProbe(
+                isReliable: eyeProbe.isReliable,
+                detectedMotion: eyeProbe.detectedMotion,
+                at: uptime
+            )
+        } else {
+            adaptiveFaceCadence.observeEyeProbe(
+                isReliable: false,
+                detectedMotion: false,
+                at: uptime
+            )
+        }
         callbackBudget.beginCallback()
         guard let unit = nextVisionUnit(at: uptime), callbackBudget.claim(unit) else { return }
         analyses += 1
@@ -2162,6 +2184,12 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                     break
                 }
                 latestFaceDetection = face
+                let eyeRegions = eyeMotionProbe.updateRegions(from: face.polylines)
+                adaptiveFaceCadence.observeEyeProbe(
+                    isReliable: eyeRegions.isAvailable && !eyeRegions.referenceChanged,
+                    detectedMotion: false,
+                    at: faceProducedAt
+                )
                 if face.polylines.isEmpty {
                     faceAcquisitionCadence.requireFullDetection()
                 }
@@ -2693,6 +2721,10 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
 
     private func nextVisionUnit(at uptime: TimeInterval) -> VisionAnalysisUnit? {
         let presentation = analysisCadence.presentation
+        let faceInterval = adaptiveFaceCadence.interval(
+            at: uptime,
+            isCalibrating: postureRuntimeCoordinator.isCalibrationActive
+        )
         let bodyInterval = adaptiveUpperBodyCadence.interval(
             at: uptime,
             isCalibrating: postureRuntimeCoordinator.isCalibrationActive
@@ -2711,8 +2743,14 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                     priority: 4
                 )
                 : nil,
-            analysisCadence.isDue(at: uptime)
-                ? VisionAnalysisCandidate(unit: .face, overdue: analysisCadence.lastAnalysisUptime == nil ? 1 : analysisCadence.overdue(at: uptime), priority: 3)
+            analysisCadence.isDue(at: uptime, interval: faceInterval)
+                ? VisionAnalysisCandidate(
+                    unit: .face,
+                    overdue: analysisCadence.lastAnalysisUptime == nil
+                        ? 1
+                        : analysisCadence.overdue(at: uptime, interval: faceInterval),
+                    priority: 3
+                )
                 : nil,
             (presentation.runsNormalBodyAnalysis && bodyCadence.isDue(at: uptime))
                 ? VisionAnalysisCandidate(unit: .body, overdue: bodyCadence.lastAttemptUptime == nil ? 1 : bodyCadence.overdue(at: uptime), priority: 2)
@@ -3184,6 +3222,8 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         overlayFreshness.recordMiss()
         latestFaceDetection = .empty
         latestUpperBodyFaceROI = nil
+        adaptiveFaceCadence.reset()
+        eyeMotionProbe.reset()
         onEvent(.overlay(combinedOverlay()), generation)
         onEvent(.benchmarkOverlayVisibility(!combinedOverlay().isEmpty, ProcessInfo.processInfo.systemUptime), generation)
     }
