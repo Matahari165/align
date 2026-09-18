@@ -56,6 +56,50 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Pause visuelle 20-20-20") {
+                Toggle("Pause visuelle", isOn: Binding(
+                    get: { appModel.screenBreakSettings.isEnabled },
+                    set: { appModel.setScreenBreakEnabled($0) }
+                ))
+                .accessibilityLabel("Activer la pause visuelle")
+                Text("Après un temps d’écran continu, tout l’écran se floute doucement avec un rappel et un compte à rebours, puis s’efface seul.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Stepper(
+                    "Écran continu : \(Int(appModel.screenBreakSettings.workMinutes)) min",
+                    value: Binding(
+                        get: { appModel.screenBreakSettings.workMinutes },
+                        set: { appModel.setScreenBreakWorkMinutes($0) }
+                    ),
+                    in: 1...120, step: 1
+                )
+                .disabled(!appModel.screenBreakSettings.isEnabled)
+                .accessibilityLabel("Intervalle avant pause, en minutes")
+                Stepper(
+                    "Durée de la pause : \(Int(appModel.screenBreakSettings.breakSeconds)) s",
+                    value: Binding(
+                        get: { appModel.screenBreakSettings.breakSeconds },
+                        set: { appModel.setScreenBreakBreakSeconds($0) }
+                    ),
+                    in: 5...120, step: 5
+                )
+                .disabled(!appModel.screenBreakSettings.isEnabled)
+                .accessibilityLabel("Durée de la pause, en secondes")
+                Toggle("Écran flouté plein-écran", isOn: Binding(
+                    get: { appModel.screenBreakSettings.usesFullscreenOverlay },
+                    set: { appModel.setScreenBreakUsesFullscreenOverlay($0) }
+                ))
+                .disabled(!appModel.screenBreakSettings.isEnabled)
+                Toggle("Notification en plus", isOn: Binding(
+                    get: { appModel.screenBreakSettings.sendsNotification },
+                    set: { appModel.setScreenBreakSendsNotification($0) }
+                ))
+                .disabled(!appModel.screenBreakSettings.isEnabled)
+                Button("Tester la pause plein-écran") {
+                    appModel.previewScreenBreakOverlay()
+                }
+                .disabled(!appModel.screenBreakSettings.isEnabled)
+            }
+
             Section("Notifications") {
                 switch camera.proximityNotificationAuthorization {
                 case .authorized:
