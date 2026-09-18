@@ -661,6 +661,7 @@ final class CameraCaptureService: ObservableObject {
 
         let plan: PostureValidationPlan = switch mode {
         case .measurement20s: .measurement20s
+        case .comprehensive20s: .comprehensive20s
         case .notification60s: .notification60s
         }
         let now = ProcessInfo.processInfo.systemUptime

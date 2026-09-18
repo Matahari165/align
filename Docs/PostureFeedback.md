@@ -37,10 +37,18 @@ tourné, le signal devient indisponible plutôt que d'inventer une mesure.
 Le signal « épaules relevées » est maintenant un rappel actif. Il ne compare
 plus une élévation à une calibration personnelle : il mesure l'aplatissement du
 triangle cou–épaules par sa hauteur perpendiculaire divisée par la largeur de la
-base. Le ratio est donc indépendant de la taille du visage dans l'image. La
-pente de cette base reste un signal séparé pour repérer une épaule plus haute
-que l'autre. Le ratio tête–épaules fermé reste diagnostique, car sa cause peut
+base. Le ratio est donc indépendant de la taille du visage dans l'image. Une
+base fortement inclinée reste traitée par le signal séparé « épaules
+inclinées » : sans cette séparation, une seule épaule haute pourrait être prise
+à tort pour deux épaules relevées. Le ratio tête–épaules fermé reste
+diagnostique, car sa cause peut
 être la tête avancée ou les épaules refermées.
+
+Une inclinaison de tête n'est pas rejetée au seul motif qu'elle dépasse 20° :
+c'est précisément le mouvement que ce signal doit mesurer. La proximité utilise
+également une taille faciale qui reste calculable lorsque le visage est incliné.
+Dans les deux cas, un visage trop tourné de profil reste refusé, car sa projection
+2D déforme la mesure.
 
 Pour ne pas transformer un point d'épaule douteux en alerte, les deux épaules,
 la base du cou et la cohérence de la paire doivent être fiables. La mesure est
