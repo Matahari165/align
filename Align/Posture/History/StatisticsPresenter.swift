@@ -44,6 +44,20 @@ nonisolated struct StatisticsViewState: Equatable, Sendable {
     let series: [StatisticsSeriesPoint]
     let rows: [StatisticsSignalRow]
     let blinkDetail: String
+
+    static let loading = StatisticsViewState(
+        state: .loading,
+        periodLabel: "",
+        coverageTitle: "Chargement…",
+        coverageDetail: "",
+        coverageAccessibilityLabel: "Chargement des statistiques",
+        coverageMetrics: [],
+        insights: [],
+        screenSeries: [],
+        series: [],
+        rows: [],
+        blinkDetail: ""
+    )
 }
 
 nonisolated struct PostureInsight: Equatable, Sendable, Identifiable {

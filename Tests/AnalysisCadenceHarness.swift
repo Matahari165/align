@@ -113,11 +113,10 @@ private enum AnalysisCadenceHarness {
         expect(cadence.shouldAnalyze(at: 20), "la reprise après pause doit accepter la première frame")
 
         var upperBodyCadence = UpperBodyCadenceController()
-        expect(upperBodyCadence.isDue(at: 30, interval: 0.5), "upperBody doit accepter la première frame")
+        expect(upperBodyCadence.isDue(at: 30, interval: 1), "upperBody doit accepter la première frame")
         upperBodyCadence.recordAttempt(at: 30)
-        expect(!upperBodyCadence.isDue(at: 30.49, interval: 0.5), "upperBody ne doit pas dépasser 2 Hz visible")
-        expect(upperBodyCadence.isDue(at: 30.5, interval: 0.5), "upperBody doit reprendre à 2 Hz visible")
-        expect(!upperBodyCadence.isDue(at: 30.99, interval: 1), "upperBody arrière-plan doit rester à 1 Hz")
+        expect(!upperBodyCadence.isDue(at: 30.99, interval: 1), "upperBody ne doit pas dépasser 1 Hz")
+        expect(upperBodyCadence.isDue(at: 31, interval: 1), "upperBody doit reprendre à 1 Hz")
         let selected = VisionAnalysisSelector.select([
             VisionAnalysisCandidate(unit: .face, overdue: 0.02, priority: 3),
             VisionAnalysisCandidate(unit: .upperBody, overdue: 0.2, priority: 4)

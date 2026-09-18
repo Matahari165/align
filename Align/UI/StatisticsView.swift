@@ -9,7 +9,10 @@ struct StatisticsView: View {
     @State private var showsMethod = false
     @State private var confirmsErase = false
     @State private var compactDetailsExpanded = false
+    @State private var viewState = StatisticsViewState.loading
     @FocusState private var closeFocused: Bool
+
+    private let refreshIntervalNanoseconds: UInt64 = 3_600_000_000_000
 
     var body: some View {
         GeometryReader { proxy in
@@ -46,7 +49,18 @@ struct StatisticsView: View {
         }
         .frame(minWidth: 560, idealWidth: 720, minHeight: 430, idealHeight: 560)
         .background(AlignTheme.canvas)
-        .task { await history.loadIfNeeded() }
+        .task {
+            await history.loadIfNeeded()
+            refreshViewState()
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: refreshIntervalNanoseconds)
+                guard !Task.isCancelled else { return }
+                refreshViewState()
+            }
+        }
+        .onChange(of: period) { refreshViewState() }
+        .onChange(of: selectedDate) { refreshViewState() }
+        .onChange(of: selectedSignal) { refreshViewState() }
         .onAppear { closeFocused = true }
         .sheet(isPresented: $showsMethod) { methodSheet }
         .confirmationDialog(
@@ -55,7 +69,10 @@ struct StatisticsView: View {
             titleVisibility: .visible
         ) {
             Button("Effacer l’historique", role: .destructive) {
-                Task { await history.erase() }
+                Task {
+                    await history.erase()
+                    refreshViewState()
+                }
             }
             Button("Annuler", role: .cancel) {}
         } message: {
@@ -63,8 +80,14 @@ struct StatisticsView: View {
         }
     }
 
-    private var viewState: StatisticsViewState {
-        StatisticsPresenter.make(loadResult: history.loadResult, database: history.database, period: period, date: selectedDate, selectedSignal: selectedSignal)
+    private func refreshViewState() {
+        viewState = StatisticsPresenter.make(
+            loadResult: history.loadResult,
+            database: history.database,
+            period: period,
+            date: selectedDate,
+            selectedSignal: selectedSignal
+        )
     }
 
     private var header: some View {

@@ -5,8 +5,9 @@ Ce fichier conserve uniquement des mesures agrégées. Aucune image, vidéo ou c
 ## Protocole always-on — 5 septembre 2026
 
 La politique actuelle vise une capture à 20 images/s, avec analyse visage +
-mains à 10 Hz et RTMPose à 2 Hz au premier plan / 1 Hz en arrière-plan. Les
-analyses ne sont pas réduites par ce changement de capture : vingt images/s
+mains à 10 Hz et RTMPose à 1 Hz hors calibration. La calibration conserve
+RTMPose à 2 Hz pour rassembler sa référence sans ralentissement. Les analyses
+ne sont pas réduites par ce changement de capture : vingt images/s
 permettent un rythme régulier de deux images par échéance faciale et
 conservent la qualité temporelle des signaux. La segmentation reste réservée
 au benchmark.

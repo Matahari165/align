@@ -285,7 +285,7 @@ nonisolated struct AnalysisPresentationState: Equatable, Sendable {
     }
 
     var upperBodyInterval: TimeInterval {
-        isForegroundVisible ? 0.5 : 1.0
+        1.0
     }
 
     /// Eight seconds of calibration require at least twelve body samples.
