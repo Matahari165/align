@@ -75,6 +75,18 @@ private enum AnalysisCadenceHarness {
         expect(cadence.presentation.upperBodyInterval(isCalibrating: false) == 1,
                "la fin de calibration doit restaurer la cadence corporelle économique")
 
+        var faceCadence = AdaptiveFaceCadenceController()
+        expect(faceCadence.interval(at: 1, isCalibrating: false) == 0.1,
+               "sans référence oculaire, le visage doit rester en mode sécurisé")
+        faceCadence.observeEyeProbe(isReliable: true, detectedMotion: false, at: 1)
+        expect(approximately(faceCadence.interval(at: 1.1, isCalibrating: false), 1.0 / 3.0),
+               "une référence stable doit autoriser le suivi facial à 3 Hz")
+        faceCadence.observeEyeProbe(isReliable: true, detectedMotion: true, at: 2)
+        expect(faceCadence.interval(at: 2.5, isCalibrating: false) == 0.1,
+               "un mouvement des yeux doit restaurer immédiatement les 10 Hz")
+        expect(approximately(faceCadence.interval(at: 3.1, isCalibrating: false), 1.0 / 3.0),
+               "le mode économique doit revenir après la rafale de sécurité")
+
 
         cadence.updatePresentation(AnalysisPresentationState(
             isApplicationActive: true,

@@ -22,9 +22,10 @@ nonisolated final class RTMPoseUpperBodyAdapter: UpperBodyPoseEngine, @unchecked
     init(
         modelURL: URL? = nil,
         runtimeURL: URL? = nil,
-        // CPU ONNX Runtime is the verified path. Core ML remains explicit
-        // opt-in until a converted model/provider bundle is validated.
-        useCoreML: Bool = false,
+        // Prefer Core ML on ANE-capable Macs. Core ML chooses the compatible
+        // hardware per operation; creation falls back atomically to the
+        // verified CPU session when acceleration is unavailable.
+        useCoreML: Bool = true,
         confidenceThreshold: Float = 0.20
     ) {
         self.modelURL = modelURL ?? Self.bundledURL(

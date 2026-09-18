@@ -448,14 +448,22 @@ nonisolated struct AnalysisCadenceController: Sendable {
     }
 
     func isDue(at uptime: TimeInterval) -> Bool {
+        isDue(at: uptime, interval: presentation.faceInterval)
+    }
+
+    func isDue(at uptime: TimeInterval, interval: TimeInterval) -> Bool {
         guard let lastAnalysisUptime else { return true }
         let clockTolerance: TimeInterval = 0.000_001
-        return uptime - lastAnalysisUptime + clockTolerance >= presentation.faceInterval
+        return uptime - lastAnalysisUptime + clockTolerance >= interval
     }
 
     func overdue(at uptime: TimeInterval) -> TimeInterval {
+        overdue(at: uptime, interval: presentation.faceInterval)
+    }
+
+    func overdue(at uptime: TimeInterval, interval: TimeInterval) -> TimeInterval {
         guard let lastAnalysisUptime else { return 0 }
-        return max(0, uptime - lastAnalysisUptime - presentation.faceInterval)
+        return max(0, uptime - lastAnalysisUptime - interval)
     }
 
     mutating func recordAnalysis(at uptime: TimeInterval) {
@@ -464,6 +472,37 @@ nonisolated struct AnalysisCadenceController: Sendable {
 
     mutating func reset() {
         lastAnalysisUptime = nil
+    }
+}
+
+/// Full facial landmarks are expensive, but eye motion can be sampled from a
+/// few luma pixels. Keep a 3 Hz geometry heartbeat and immediately restore the
+/// proven 10 Hz cadence whenever the eye probe sees motion or loses confidence.
+nonisolated struct AdaptiveFaceCadenceController: Sendable {
+    static let trackingInterval: TimeInterval = 1.0 / 3.0
+    static let safetyInterval: TimeInterval = 0.1
+    static let motionBurstDuration: TimeInterval = 1.0
+
+    private(set) var hasReliableEyeReference = false
+    private(set) var safetyModeUntil: TimeInterval?
+
+    mutating func observeEyeProbe(isReliable: Bool, detectedMotion: Bool, at uptime: TimeInterval) {
+        guard uptime.isFinite else { return }
+        hasReliableEyeReference = isReliable
+        if !isReliable || detectedMotion {
+            safetyModeUntil = uptime + Self.motionBurstDuration
+        }
+    }
+
+    func interval(at uptime: TimeInterval, isCalibrating: Bool) -> TimeInterval {
+        if isCalibrating || !hasReliableEyeReference { return Self.safetyInterval }
+        if safetyModeUntil.map({ uptime < $0 }) == true { return Self.safetyInterval }
+        return Self.trackingInterval
+    }
+
+    mutating func reset() {
+        hasReliableEyeReference = false
+        safetyModeUntil = nil
     }
 }
 
