@@ -431,7 +431,8 @@ nonisolated final class PoseDetector: @unchecked Sendable {
 
     func detectFace(
         in pixelBuffer: CVPixelBuffer,
-        includeHands: Bool = true
+        includeHands: Bool = true,
+        preferredFaceBoundingBox: CGRect? = nil
     ) throws -> FaceDetectionOutput {
         let orientation = CGImagePropertyOrientation.up
         let handler = VNImageRequestHandler(
@@ -439,6 +440,18 @@ nonisolated final class PoseDetector: @unchecked Sendable {
             orientation: orientation,
             options: [:]
         )
+
+        // Reusing the last accepted face region avoids a full-frame face
+        // search on every 10 Hz landmark request. Vision still computes fresh
+        // eye landmarks from the current frame, preserving blink cadence.
+        if let preferredFaceBoundingBox {
+            faceRequest.inputFaceObservations = [
+                VNFaceObservation(boundingBox: preferredFaceBoundingBox)
+            ]
+        } else {
+            faceRequest.inputFaceObservations = nil
+        }
+        defer { faceRequest.inputFaceObservations = nil }
 
         // When hands are due, both requests consume the exact same frame.
         // Intermediate face-only calls preserve blink cadence without paying

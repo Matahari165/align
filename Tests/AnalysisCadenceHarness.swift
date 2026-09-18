@@ -114,8 +114,29 @@ private enum AnalysisCadenceHarness {
 
         var handCadence = HandAnalysisCadenceController()
         expect(handCadence.shouldAnalyze(at: 20), "les mains doivent accepter la première frame")
-        expect(!handCadence.shouldAnalyze(at: 20.49), "les mains ne doivent pas dépasser 2 Hz")
-        expect(handCadence.shouldAnalyze(at: 20.5), "les mains doivent reprendre à 2 Hz")
+        expect(!handCadence.shouldAnalyze(at: 20.99), "les mains au repos ne doivent pas dépasser 1 Hz")
+        expect(handCadence.shouldAnalyze(at: 21), "les mains au repos doivent reprendre à 1 Hz")
+        handCadence.recordResult(hasHands: true, at: 21)
+        expect(!handCadence.shouldAnalyze(at: 21.49), "une main visible ne doit pas dépasser 2 Hz")
+        expect(handCadence.shouldAnalyze(at: 21.5), "une main visible doit temporairement reprendre à 2 Hz")
+        for halfSecond in 44...51 {
+            expect(handCadence.shouldAnalyze(at: Double(halfSecond) / 2),
+                   "la cadence active doit rester à 2 Hz pendant cinq secondes")
+        }
+        expect(!handCadence.shouldAnalyze(at: 26), "la cadence active doit expirer après cinq secondes")
+        expect(handCadence.shouldAnalyze(at: 26.5), "les mains doivent revenir à 1 Hz après la phase active")
+
+        var faceAcquisition = FaceAcquisitionCadenceController()
+        let knownFace = CGRect(x: 0.4, y: 0.3, width: 0.2, height: 0.3)
+        expect(faceAcquisition.preferredFaceBounds(at: 30, latestBounds: knownFace) == nil,
+               "la première analyse du visage doit chercher dans toute l'image")
+        expect(faceAcquisition.preferredFaceBounds(at: 30.1, latestBounds: knownFace) == knownFace,
+               "les landmarks intermédiaires doivent réutiliser le visage accepté")
+        expect(faceAcquisition.preferredFaceBounds(at: 30.5, latestBounds: knownFace) == nil,
+               "une recherche complète doit être répétée à 2 Hz")
+        faceAcquisition.requireFullDetection()
+        expect(faceAcquisition.preferredFaceBounds(at: 30.6, latestBounds: knownFace) == nil,
+               "une perte doit réarmer immédiatement la recherche complète")
 
         var adaptiveBody = AdaptiveUpperBodyCadenceController()
         expect(approximately(adaptiveBody.interval(at: 0, isCalibrating: false), 5),
@@ -124,16 +145,31 @@ private enum AnalysisCadenceHarness {
             bounds: CGRect(x: 0.40, y: 0.30, width: 0.20, height: 0.30),
             at: 1
         )
-        expect(approximately(adaptiveBody.interval(at: 2, isCalibrating: false), 1),
-               "le premier visage fiable doit réveiller l'analyse corporelle")
+        expect(approximately(adaptiveBody.interval(at: 2, isCalibrating: false), 5),
+               "le premier visage fiable ne doit pas simuler un mouvement")
+        for step in 1...8 {
+            let jitter = step.isMultiple(of: 2) ? 0.003 : -0.003
+            adaptiveBody.observeFace(
+                bounds: CGRect(x: 0.40 + jitter, y: 0.30, width: 0.20, height: 0.30),
+                at: 2 + Double(step) * 0.1
+            )
+        }
+        expect(approximately(adaptiveBody.interval(at: 3, isCalibrating: false), 5),
+               "le bruit normal du rectangle visage ne doit pas réveiller le corps")
         expect(approximately(adaptiveBody.interval(at: 12, isCalibrating: false), 5),
                "l'analyse corporelle doit ralentir après le mouvement")
         adaptiveBody.observeFace(
             bounds: CGRect(x: 0.44, y: 0.30, width: 0.20, height: 0.30),
             at: 13
         )
+        expect(approximately(adaptiveBody.interval(at: 13.1, isCalibrating: false), 5),
+               "une seule variation ne doit pas réveiller le corps")
+        adaptiveBody.observeFace(
+            bounds: CGRect(x: 0.44, y: 0.30, width: 0.20, height: 0.30),
+            at: 13.1
+        )
         expect(approximately(adaptiveBody.interval(at: 14, isCalibrating: false), 1),
-               "un nouveau mouvement du visage doit réveiller le corps")
+               "un mouvement confirmé doit réveiller le corps")
 
         var upperBodyCadence = UpperBodyCadenceController()
         expect(upperBodyCadence.isDue(at: 30, interval: 1), "upperBody doit accepter la première frame")

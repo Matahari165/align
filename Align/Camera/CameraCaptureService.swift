@@ -212,9 +212,9 @@ final class CameraCaptureService: ObservableObject {
 
     @Published private(set) var state: State = .idle
     @Published private(set) var trackingMode: PoseTrackingMode?
-    @Published private(set) var recognizedPointCount = 0
+    private(set) var recognizedPointCount = 0
     @Published private(set) var overlay = PoseOverlay.empty
-    @Published private(set) var blazePoseState: ShoulderTrackingState?
+    private(set) var blazePoseState: ShoulderTrackingState?
     @Published private(set) var postureIndicators = PostureIndicatorsSnapshot.initial
     private(set) var postureRichEvaluation: PostureRichEvaluation?
     private(set) var postureObservations: PostureObservationsSnapshot = .init(
@@ -242,6 +242,11 @@ final class CameraCaptureService: ObservableObject {
     private let visualPublicationInterval: TimeInterval = 0.25
     private var lastOverlayPublicationAt: TimeInterval?
     private var lastIndicatorPublicationAt: TimeInterval?
+    private var latestTrackingMode: PoseTrackingMode?
+    private var latestRecognizedPointCount = 0
+    private var latestBlazePoseState: ShoulderTrackingState?
+    private var latestPostureIndicators = PostureIndicatorsSnapshot.initial
+    private var latestUpperBodyDevelopmentSummary = "Torse · en attente"
     private var operationID = 0
     private var activationID = 0
     private var activePoseGeneration: PoseProcessingGeneration?
@@ -287,8 +292,12 @@ final class CameraCaptureService: ObservableObject {
 
             switch event {
             case .status(let status):
-                self.recognizedPointCount = status?.recognizedPointCount ?? 0
-                self.trackingMode = status?.mode
+                self.latestRecognizedPointCount = status?.recognizedPointCount ?? 0
+                self.latestTrackingMode = status?.mode
+                if self.currentAnalysisPresentation.publishesVisualUpdates {
+                    self.recognizedPointCount = self.latestRecognizedPointCount
+                    self.trackingMode = self.latestTrackingMode
+                }
             case .analysisFailed:
                 self.invalidateBenchmark(reason: "Benchmark annulé : l’analyse Vision s’est interrompue.")
                 self.setPoseProcessingActive(false, resetDiagnostics: false)
@@ -309,29 +318,31 @@ final class CameraCaptureService: ObservableObject {
                    self.shouldPublishOverlay() {
                     self.overlay = overlay
                 }
-                // L'état canonique du suivi reste valide lorsque la fenêtre
-                // est masquée. Seul l'overlay est une sortie de présentation;
-                // une perte réelle continue donc à publier `.lost` même en
-                // arrière-plan, tandis qu'un retour au premier plan peut
-                // republier l'état réellement courant.
-                self.blazePoseState = state
+                // Keep the canonical state current without invalidating the
+                // hidden SwiftUI hierarchy. The latest value is published
+                // once when the window becomes visible again.
+                self.latestBlazePoseState = state
+                if self.currentAnalysisPresentation.publishesVisualUpdates {
+                    self.blazePoseState = state
+                }
             case .upperBodyDevelopmentSummary(let summary):
-                self.upperBodyDevelopmentSummary = summary
-            case .postureIndicators(let snapshot):
-                if self.shouldPublishIndicators() {
-                    self.postureIndicators = snapshot
+                self.latestUpperBodyDevelopmentSummary = summary
+                if self.currentAnalysisPresentation.publishesVisualUpdates {
+                    self.upperBodyDevelopmentSummary = summary
                 }
             case .postureRichEvaluation(let evaluation):
                 self.postureRichEvaluation = evaluation
-            case .postureRuntime(let evaluation, let snapshot):
+            case .postureRuntime(let evaluation, let snapshot, let indicators):
                 self.postureRichEvaluation = evaluation
                 self.postureObservations = snapshot
+                self.acceptLatestIndicators(indicators)
                 self.recordPostureValidation(
                     evaluation: evaluation,
                     snapshot: snapshot
                 )
-            case .postureObservations(let snapshot):
+            case .postureObservations(let snapshot, let indicators):
                 self.postureObservations = snapshot
+                self.acceptLatestIndicators(indicators)
                 self.recordPostureValidation(
                     evaluation: nil,
                     snapshot: snapshot
@@ -609,10 +620,14 @@ final class CameraCaptureService: ObservableObject {
         operationID += 1
         setPoseProcessingActive(false)
         recognizedPointCount = 0
+        latestRecognizedPointCount = 0
         trackingMode = nil
+        latestTrackingMode = nil
         overlay = .empty
         blazePoseState = nil
+        latestBlazePoseState = nil
         postureIndicators = .initial
+        latestPostureIndicators = .initial
         postureRichEvaluation = nil
         calibrationPresentation = .idle
         postureObservations = .init(
@@ -825,6 +840,9 @@ final class CameraCaptureService: ObservableObject {
                 || self.isWindowMiniaturized != isWindowMiniaturized else { return }
         self.isApplicationActive = isApplicationActive
         self.isWindowMiniaturized = isWindowMiniaturized
+        if currentAnalysisPresentation.publishesVisualUpdates {
+            publishLatestVisualState()
+        }
         if isApplicationActive {
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -844,6 +862,22 @@ final class CameraCaptureService: ObservableObject {
             )
         }
         updateAnalysisPresentation()
+    }
+
+    private func publishLatestVisualState() {
+        recognizedPointCount = latestRecognizedPointCount
+        trackingMode = latestTrackingMode
+        blazePoseState = latestBlazePoseState
+        postureIndicators = latestPostureIndicators
+        upperBodyDevelopmentSummary = latestUpperBodyDevelopmentSummary
+    }
+
+    private func acceptLatestIndicators(_ indicators: PostureIndicatorsSnapshot) {
+        latestPostureIndicators = indicators
+        if currentAnalysisPresentation.publishesVisualUpdates,
+           shouldPublishIndicators() {
+            postureIndicators = indicators
+        }
     }
 
     private func invalidateBenchmark(reason: String) {
@@ -1044,8 +1078,11 @@ final class CameraCaptureService: ObservableObject {
         activePoseGeneration = isActive ? generation : nil
         overlay = .empty
         blazePoseState = nil
+        latestBlazePoseState = nil
         upperBodyDevelopmentSummary = "Torse · en attente"
+        latestUpperBodyDevelopmentSummary = "Torse · en attente"
         postureIndicators = .initial
+        latestPostureIndicators = .initial
         postureRichEvaluation = nil
         if resetDiagnostics {
             diagnostics = .empty
@@ -1075,10 +1112,13 @@ nonisolated private enum PoseProcessingEvent: Sendable {
     case overlay(PoseOverlay)
     case upperBodyPresentation(PoseOverlay, ShoulderTrackingState)
     case upperBodyDevelopmentSummary(String)
-    case postureIndicators(PostureIndicatorsSnapshot)
     case postureRichEvaluation(PostureRichEvaluation)
-    case postureRuntime(PostureRichEvaluation, PostureObservationsSnapshot)
-    case postureObservations(PostureObservationsSnapshot)
+    case postureRuntime(
+        PostureRichEvaluation,
+        PostureObservationsSnapshot,
+        PostureIndicatorsSnapshot
+    )
+    case postureObservations(PostureObservationsSnapshot, PostureIndicatorsSnapshot)
     case calibration(PostureCalibrationPresentation)
     case silhouetteOverlay(PoseOverlay, UInt64)
     case benchmarkMeasurement(BenchmarkMeasurement, TimeInterval)
@@ -1436,6 +1476,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     private var faceObservationSampleID: UInt64 = 0
     private var faceAttempts = 0
     private var handAnalysisCadence = HandAnalysisCadenceController()
+    private var faceAcquisitionCadence = FaceAcquisitionCadenceController()
     private var latestHandObservations: [HandFaceHandObservation] = []
     private var latestHandsCapturedAt: TimeInterval?
     private var faceValidObservations = 0
@@ -1605,6 +1646,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         faceObservationSampleID = 0
         faceAttempts = 0
         handAnalysisCadence.reset()
+        faceAcquisitionCadence.reset()
         latestHandObservations.removeAll(keepingCapacity: true)
         latestHandsCapturedAt = nil
         faceValidObservations = 0
@@ -1689,8 +1731,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         let reset = postureRuntimeCoordinator.invalidate(
             at: ProcessInfo.processInfo.systemUptime
         )
-        onEvent(.postureObservations(reset), generation)
-        onEvent(.postureIndicators(indicators(from: reset)), generation)
+        onEvent(.postureObservations(reset, indicators(from: reset)), generation)
     }
 
     func setUpperBodyDevelopmentOptions(_ options: UpperBodyDevelopmentOptions) {
@@ -1705,8 +1746,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         let now = ProcessInfo.processInfo.systemUptime
         postureRuntimeCoordinator.beginCalibration()
         let reset = postureRuntimeCoordinator.invalidate(at: now)
-        onEvent(.postureObservations(reset), generation)
-        onEvent(.postureIndicators(indicators(from: reset)), generation)
+        onEvent(.postureObservations(reset, indicators(from: reset)), generation)
         let startedAt = now
         postureCalibrationStartedAt = startedAt
         onEvent(.calibration(.init(
@@ -1920,8 +1960,10 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                     capturedAt: capturedAt,
                     now: uptime
                 )
-                onEvent(.postureObservations(invalidated), generation)
-                onEvent(.postureIndicators(indicators(from: invalidated)), generation)
+                onEvent(.postureObservations(
+                    invalidated,
+                    indicators(from: invalidated)
+                ), generation)
                 clearFaceOverlay()
                 break
             }
@@ -1929,13 +1971,22 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             do {
                 prepareFaceTargetContext(for: pixelBuffer)
                 let includesFreshHands = handAnalysisCadence.shouldAnalyze(at: uptime)
+                let preferredFaceBounds = faceAcquisitionCadence.preferredFaceBounds(
+                    at: uptime,
+                    latestBounds: latestFaceDetection.primaryBoundingBox
+                )
                 let detectedFace = try detector.detectFace(
                     in: pixelBuffer,
-                    includeHands: includesFreshHands
+                    includeHands: includesFreshHands,
+                    preferredFaceBoundingBox: preferredFaceBounds
                 )
                 if includesFreshHands {
                     latestHandObservations = detectedFace.handObservations
                     latestHandsCapturedAt = capturedAt
+                    handAnalysisCadence.recordResult(
+                        hasHands: !detectedFace.handObservations.isEmpty,
+                        at: uptime
+                    )
                 }
                 faceDuration = ProcessInfo.processInfo.systemUptime - start
                 recordFaceDuration(faceDuration ?? 0)
@@ -1957,6 +2008,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                 }
                 guard let selected = continuityDecision.candidate,
                       let face = detectedFace.resolved(to: selected) else {
+                    faceAcquisitionCadence.requireFullDetection()
                     latestFaceDetection = detectedFace.withoutResolvedTarget
                     latestUpperBodyFaceROI = nil
                     latestFaceCapturedAt = nil
@@ -1972,13 +2024,18 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                         facePresence: screenPresence(for: continuityDecision),
                         reason: faceTrackingReason(for: continuityDecision)
                     )
-                    onEvent(.postureObservations(invalidated), generation)
-                    onEvent(.postureIndicators(indicators(from: invalidated)), generation)
+                    onEvent(.postureObservations(
+                        invalidated,
+                        indicators(from: invalidated)
+                    ), generation)
                     handleFaceVisibility(nil, at: faceProducedAt)
                     clearFaceOverlay()
                     break
                 }
                 latestFaceDetection = face
+                if face.polylines.isEmpty {
+                    faceAcquisitionCadence.requireFullDetection()
+                }
                 if let bounds = face.primaryBoundingBox {
                     adaptiveUpperBodyCadence.observeFace(bounds: bounds, at: faceProducedAt)
                 }
@@ -2006,8 +2063,10 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                 let expiredRuntime = postureRuntimeCoordinator.expire(now: faceProducedAt)
                 if expiredRuntime.generation == UInt64(generation.activationID),
                    expiredRuntime.signals.contains(where: { $0.availability == .insufficient }) {
-                    onEvent(.postureObservations(expiredRuntime), generation)
-                    onEvent(.postureIndicators(indicators(from: expiredRuntime)), generation)
+                    onEvent(.postureObservations(
+                        expiredRuntime,
+                        indicators(from: expiredRuntime)
+                    ), generation)
                 }
                 if let faceContext = PostureFramingContext(
                     pixelWidth: CVPixelBufferGetWidth(pixelBuffer),
@@ -2055,9 +2114,9 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                             ) ?? runtime.snapshot
                             onEvent(.postureRuntime(
                                 runtime.evaluation,
-                                snapshot
+                                snapshot,
+                                indicators(from: snapshot)
                             ), generation)
-                            onEvent(.postureIndicators(indicators(from: snapshot)), generation)
                         }
                     } else {
                         faceInvalidations += 1
@@ -2066,13 +2125,16 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                             capturedAt: capturedAt,
                             now: faceProducedAt
                         )
-                        onEvent(.postureObservations(invalidated), generation)
-                        onEvent(.postureIndicators(indicators(from: invalidated)), generation)
+                        onEvent(.postureObservations(
+                            invalidated,
+                            indicators(from: invalidated)
+                        ), generation)
                     }
                 }
                 handleFaceVisibility(face.polylines.isEmpty ? nil : capturedAt)
                 if face.polylines.isEmpty { clearFaceOverlay() }
             } catch {
+                faceAcquisitionCadence.requireFullDetection()
                 faceDuration = ProcessInfo.processInfo.systemUptime - start
                 recordFaceDuration(faceDuration ?? 0)
                 _ = faceTargetContinuity.ingestTrackingMiss(at: capturedAt)
@@ -2092,8 +2154,10 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                         capturedAt: capturedAt,
                         now: ProcessInfo.processInfo.systemUptime
                     )
-                    onEvent(.postureObservations(invalidated), generation)
-                    onEvent(.postureIndicators(indicators(from: invalidated)), generation)
+                    onEvent(.postureObservations(
+                        invalidated,
+                        indicators(from: invalidated)
+                    ), generation)
                 }
                 handleFaceVisibility(nil, at: uptime)
                 lastVisionError = "Visage : \(error.localizedDescription)"
@@ -2681,9 +2745,9 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         ) {
             onEvent(.postureRuntime(
                 runtime.evaluation,
-                runtime.snapshot
+                runtime.snapshot,
+                indicators(from: runtime.snapshot)
             ), generation)
-            onEvent(.postureIndicators(indicators(from: runtime.snapshot)), generation)
         }
 
         switch result.state {
@@ -2766,8 +2830,8 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             let expired = self.postureRuntimeCoordinator.expire(
                 now: ProcessInfo.processInfo.systemUptime
             )
-            self.onEvent(.postureObservations(expired), scheduledGeneration)
-            self.onEvent(.postureIndicators(
+            self.onEvent(.postureObservations(
+                expired,
                 self.indicators(from: expired)
             ), scheduledGeneration)
         }
@@ -2801,8 +2865,10 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         if let evaluation = runtimeInvalidation?.evaluation {
             onEvent(.postureRichEvaluation(evaluation), generation)
         }
-        onEvent(.postureObservations(observationSnapshot), generation)
-        onEvent(.postureIndicators(indicators(from: observationSnapshot)), generation)
+        onEvent(.postureObservations(
+            observationSnapshot,
+            indicators(from: observationSnapshot)
+        ), generation)
         if publishesState {
             onEvent(.upperBodyPresentation(combinedOverlay(), state), generation)
         }

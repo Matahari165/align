@@ -211,23 +211,36 @@ nonisolated struct AdaptiveUpperBodyCadenceController: Sendable {
     static let motionBurstDuration: TimeInterval = 10.0
     static let centerMovementThreshold: CGFloat = 0.015
     static let sizeChangeThreshold = 0.06
+    static let confirmationsRequired = 2
+    static let referenceSmoothingFactor: CGFloat = 0.12
 
-    private(set) var lastFaceBounds: CGRect?
+    private(set) var referenceFaceBounds: CGRect?
     private(set) var activeUntil: TimeInterval?
+    private(set) var consecutiveMotionObservations = 0
 
     mutating func observeFace(bounds: CGRect, at uptime: TimeInterval) {
         guard bounds.isFiniteAndNonEmpty, uptime.isFinite else { return }
-        defer { lastFaceBounds = bounds }
-        guard let previous = lastFaceBounds else {
-            activeUntil = uptime + Self.motionBurstDuration
+        guard let reference = referenceFaceBounds else {
+            referenceFaceBounds = bounds
             return
         }
-        let centerDelta = hypot(bounds.midX - previous.midX, bounds.midY - previous.midY)
-        let previousArea = previous.width * previous.height
+        let centerDelta = hypot(bounds.midX - reference.midX, bounds.midY - reference.midY)
+        let previousArea = reference.width * reference.height
         let area = bounds.width * bounds.height
         let sizeDelta = previousArea > 0 ? abs(area - previousArea) / previousArea : 1
         if centerDelta >= Self.centerMovementThreshold || sizeDelta >= Self.sizeChangeThreshold {
-            activeUntil = uptime + Self.motionBurstDuration
+            consecutiveMotionObservations += 1
+            if consecutiveMotionObservations >= Self.confirmationsRequired {
+                activeUntil = uptime + Self.motionBurstDuration
+                consecutiveMotionObservations = 0
+                referenceFaceBounds = bounds
+            }
+        } else {
+            consecutiveMotionObservations = 0
+            referenceFaceBounds = reference.interpolated(
+                toward: bounds,
+                factor: Self.referenceSmoothingFactor
+            )
         }
     }
 
@@ -239,8 +252,9 @@ nonisolated struct AdaptiveUpperBodyCadenceController: Sendable {
     }
 
     mutating func reset() {
-        lastFaceBounds = nil
+        referenceFaceBounds = nil
         activeUntil = nil
+        consecutiveMotionObservations = 0
     }
 }
 
@@ -248,6 +262,15 @@ nonisolated private extension CGRect {
     var isFiniteAndNonEmpty: Bool {
         minX.isFinite && minY.isFinite && width.isFinite && height.isFinite &&
             width > 0 && height > 0
+    }
+
+    func interpolated(toward other: CGRect, factor: CGFloat) -> CGRect {
+        CGRect(
+            x: origin.x + (other.origin.x - origin.x) * factor,
+            y: origin.y + (other.origin.y - origin.y) * factor,
+            width: width + (other.width - width) * factor,
+            height: height + (other.height - height) * factor
+        )
     }
 }
 
@@ -389,19 +412,62 @@ nonisolated struct AnalysisCadenceController: Sendable {
 /// Hand-to-face contact persists for seconds, so hand landmarks do not need
 /// the 10 Hz cadence reserved for short eye blinks.
 nonisolated struct HandAnalysisCadenceController: Sendable {
-    static let interval: TimeInterval = 0.5
+    static let restingInterval: TimeInterval = 1.0
+    static let activeInterval: TimeInterval = 0.5
+    static let activeDuration: TimeInterval = 5.0
     private(set) var lastAnalysisUptime: TimeInterval?
+    private(set) var activeUntil: TimeInterval?
 
     mutating func shouldAnalyze(at uptime: TimeInterval) -> Bool {
-        guard lastAnalysisUptime.map({ uptime - $0 >= Self.interval }) ?? true else {
+        let interval = activeUntil.map { uptime < $0 } == true
+            ? Self.activeInterval
+            : Self.restingInterval
+        guard lastAnalysisUptime.map({ uptime - $0 >= interval }) ?? true else {
             return false
         }
         lastAnalysisUptime = uptime
         return true
     }
 
+    mutating func recordResult(hasHands: Bool, at uptime: TimeInterval) {
+        guard hasHands else { return }
+        activeUntil = uptime + Self.activeDuration
+    }
+
     mutating func reset() {
         lastAnalysisUptime = nil
+        activeUntil = nil
+    }
+}
+
+/// Face landmarks stay at 10 Hz for blink detection, but locating the face in
+/// the whole image is only repeated periodically. Intermediate landmark
+/// requests reuse the latest accepted face region and a miss immediately
+/// rearms full-frame acquisition.
+nonisolated struct FaceAcquisitionCadenceController: Sendable {
+    static let fullDetectionInterval: TimeInterval = 0.5
+    private(set) var lastFullDetectionUptime: TimeInterval?
+
+    mutating func preferredFaceBounds(
+        at uptime: TimeInterval,
+        latestBounds: CGRect?
+    ) -> CGRect? {
+        guard let latestBounds,
+              latestBounds.isFiniteAndNonEmpty,
+              let lastFullDetectionUptime,
+              uptime - lastFullDetectionUptime < Self.fullDetectionInterval else {
+            self.lastFullDetectionUptime = uptime
+            return nil
+        }
+        return latestBounds
+    }
+
+    mutating func requireFullDetection() {
+        lastFullDetectionUptime = nil
+    }
+
+    mutating func reset() {
+        lastFullDetectionUptime = nil
     }
 }
 
