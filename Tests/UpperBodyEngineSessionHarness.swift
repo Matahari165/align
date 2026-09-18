@@ -270,6 +270,34 @@ private enum UpperBodyEngineSessionHarness {
                ["Torse · axe central (dérivé)", "Tête · ligne des oreilles"].sorted(),
                "les axes tête et torse doivent être séparés des connexions")
 
+        let lightweightResult = UpperBodyResult(
+            descriptor: .init(
+                id: "blazepose.lite", displayName: "BlazePose Lite",
+                version: "1", runtime: "test"
+            ),
+            state: .detected,
+            generation: accepted.generation,
+            sampleID: accepted.sampleID + 1,
+            capturedAt: accepted.capturedAt,
+            producedAt: accepted.producedAt,
+            points: accepted.points.filter {
+                [.nose, .leftShoulder, .rightShoulder].contains($0.id)
+            },
+            contours: [],
+            regionOfInterest: accepted.regionOfInterest
+        )
+        let lightweightOverlay = DevelopmentUpperBodyOverlayBuilder.make(
+            from: lightweightResult, at: 10.02, maximumAge: 0.30
+        )
+        expect(lightweightOverlay.points.contains { $0.name == "BASE DU COU" },
+               "BlazePose Lite doit recevoir un point de cou uniquement visuel")
+        expect(lightweightOverlay.polylines.contains { $0.name == "cou-épaule-gauche" } &&
+               lightweightOverlay.polylines.contains { $0.name == "cou-épaule-droite" } &&
+               lightweightOverlay.polylines.contains { $0.name == "ligne-épaules" },
+               "BlazePose Lite doit afficher le même triangle cou-épaules")
+        expect(lightweightResult.point(.neck) == nil,
+               "le cou visuel ne doit jamais devenir une mesure corporelle")
+
         let partialAtLeftEdge = UpperBodyResult(
             descriptor: accepted.descriptor,
             state: .partial,

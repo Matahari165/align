@@ -70,6 +70,7 @@ nonisolated enum DevelopmentUpperBodyOverlayBuilder {
         var points: [PosePoint] = []
         var lines: [PosePolyline] = []
         let geometry = result.derivedGeometry
+        let comparisonNeck = lightweightComparisonNeck(from: result)
 
         if options.showsLandmarks {
             for point in result.points {
@@ -79,6 +80,15 @@ nonisolated enum DevelopmentUpperBodyOverlayBuilder {
                     confidence: point.confidence,
                     source: source(for: point.id),
                     isLimited: point.quality == .limited
+                ))
+            }
+            if let comparisonNeck {
+                points.append(PosePoint(
+                    name: developmentName(for: .neck),
+                    location: comparisonNeck.location,
+                    confidence: comparisonNeck.confidence,
+                    source: .upperBodyHead,
+                    isLimited: comparisonNeck.quality == .limited
                 ))
             }
         }
@@ -91,6 +101,22 @@ nonisolated enum DevelopmentUpperBodyOverlayBuilder {
                 case .head: .upperBodyHead
                 }
                 lines.append(line(segment.name, segment.start, segment.end, source: source))
+            }
+            if let comparisonNeck,
+               let leftShoulder = result.point(.leftShoulder),
+               let rightShoulder = result.point(.rightShoulder) {
+                lines.append(line(
+                    "cou-épaule-gauche",
+                    comparisonNeck.location,
+                    leftShoulder.location,
+                    source: .upperBodyShoulders
+                ))
+                lines.append(line(
+                    "cou-épaule-droite",
+                    comparisonNeck.location,
+                    rightShoulder.location,
+                    source: .upperBodyShoulders
+                ))
             }
         }
 
@@ -200,6 +226,38 @@ nonisolated enum DevelopmentUpperBodyOverlayBuilder {
         case .leftHip: "HANCHE G."
         case .rightHip: "HANCHE D."
         }
+    }
+
+    /// BlazePose Lite has no explicit base-of-neck landmark. This point is
+    /// presentation-only so both engines expose the same comparison shape;
+    /// it never enters posture metrics or calibration.
+    private static func lightweightComparisonNeck(
+        from result: UpperBodyResult
+    ) -> UpperBodyPoint? {
+        guard result.descriptor.id.hasPrefix("blazepose."),
+              result.point(.neck) == nil,
+              let nose = result.point(.nose),
+              let leftShoulder = result.point(.leftShoulder),
+              let rightShoulder = result.point(.rightShoulder) else { return nil }
+        let shoulderCenter = CGPoint(
+            x: (leftShoulder.location.x + rightShoulder.location.x) * 0.5,
+            y: (leftShoulder.location.y + rightShoulder.location.y) * 0.5
+        )
+        let location = CGPoint(
+            x: shoulderCenter.x + (nose.location.x - shoulderCenter.x) * 0.28,
+            y: shoulderCenter.y + (nose.location.y - shoulderCenter.y) * 0.28
+        )
+        let confidence = min(
+            nose.confidence,
+            min(leftShoulder.confidence, rightShoulder.confidence)
+        )
+        return UpperBodyPoint(
+            id: .neck,
+            location: location,
+            confidence: confidence,
+            quality: confidence >= 0.5 ? .good : .limited,
+            provenance: .derived
+        )
     }
 
 }
