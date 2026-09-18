@@ -3,6 +3,7 @@ import Foundation
 /// Modes de protocole local. Les durées décrivent le protocole, pas une promesse de précision.
 public enum PostureValidationMode: String, Codable, Sendable {
     case measurement20s
+    case comprehensive20s
     case notification60s
 }
 
@@ -193,10 +194,57 @@ public struct PostureValidationPlan: Codable, Equatable, Sendable {
         ]
     }
 
+    /// Protocole de fiabilité complet. Il sépare les deux directions des
+    /// épaules et ajoute les scénarios auparavant déclarés mais jamais joués.
+    /// `shouldersClosed` reste un proxy ambigu tête–épaules : le rapport doit
+    /// donc montrer ses limites au lieu de le présenter comme un diagnostic.
+    private static func comprehensiveDefinitions(
+        duration: TimeInterval
+    ) -> [PostureValidationPhaseDefinition] {
+        [
+            .init(id: "neutral-start", expectation: .neutral, duration: duration,
+                  instruction: "Reste en posture naturelle."),
+            .init(id: "left-shoulder-higher", expectation: .shoulderSlope,
+                  duration: duration, instruction: "Monte l'épaule gauche et garde l'autre basse."),
+            .init(id: "neutral-after-left-shoulder", expectation: .neutral,
+                  duration: duration, instruction: "Reviens en posture naturelle."),
+            .init(id: "right-shoulder-higher", expectation: .shoulderSlope,
+                  duration: duration, instruction: "Monte l'épaule droite et garde l'autre basse."),
+            .init(id: "neutral-after-right-shoulder", expectation: .neutral,
+                  duration: duration, instruction: "Reviens en posture naturelle."),
+            .init(id: "both-shoulders-raised", expectation: .bothShouldersRaised,
+                  duration: duration, instruction: "Hausse les deux épaules vers les oreilles."),
+            .init(id: "neutral-after-raised-shoulders", expectation: .neutral,
+                  duration: duration, instruction: "Relâche complètement les épaules."),
+            .init(id: "head-tilt-left", expectation: .headTilt,
+                  duration: duration, instruction: "Incline uniquement la tête vers la gauche."),
+            .init(id: "head-tilt-right", expectation: .headTilt,
+                  duration: duration, instruction: "Incline uniquement la tête vers la droite."),
+            .init(id: "head-forward", expectation: .shouldersClosed,
+                  duration: duration,
+                  instruction: "Avance la tête vers l'écran sans rapprocher tout le torse."),
+            .init(id: "apparent-proximity", expectation: .apparentProximity,
+                  duration: duration, instruction: "Approche tout le haut du corps de la caméra."),
+            .init(id: "torso-lean-left", expectation: .torsoLeanLeft,
+                  duration: duration, instruction: "Incline le torse vers la gauche."),
+            .init(id: "torso-lean-right", expectation: .torsoLeanRight,
+                  duration: duration, instruction: "Incline le torse vers la droite."),
+            .init(id: "recovery", expectation: .recovery, duration: duration,
+                  instruction: "Reviens en posture naturelle.")
+        ]
+    }
+
     public static let measurement20s: PostureValidationPlan = {
         PostureValidationPlan(
             mode: .measurement20s,
             definitions: definitions(duration: 20)
+        )!
+    }()
+
+    public static let comprehensive20s: PostureValidationPlan = {
+        PostureValidationPlan(
+            mode: .comprehensive20s,
+            definitions: comprehensiveDefinitions(duration: 20)
         )!
     }()
 
@@ -497,7 +545,7 @@ public struct PostureValidationReport: Codable, Equatable, Sendable {
         completionStatus: PostureValidationCompletionStatus
     ) {
         self.mode = plan.mode
-        self.protocolVersion = "guided-validation-v1"
+        self.protocolVersion = "guided-validation-v2"
         self.totalDuration = plan.totalDuration
         self.completionStatus = completionStatus
         self.coveredPhaseCount = Set(samples.map(\.phaseID)).count

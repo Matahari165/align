@@ -539,7 +539,6 @@ nonisolated enum PostureRichGeometryEvaluator {
         )
         let slopeConfidenceQuality = slopeConfidence >=
             signalConfiguration.minimumShoulderSlopeConfidence
-        let slopeFramingQuality = result.regionOfInterest?.source != .some(.fullFrameFallback)
         let shoulderNeckDistanceQuality: Bool = {
             guard let neck, let leftShoulder, let rightShoulder else { return true }
             let leftDistance = hypot(Double(leftShoulder.x - neck.x),
@@ -574,7 +573,7 @@ nonisolated enum PostureRichGeometryEvaluator {
         let shoulderSlopeQuality = shoulderSlopeDegrees != nil &&
             shouldersState == .available && slopeSpanQuality &&
             slopeConfidenceQuality && slopeOrientationQuality &&
-            slopeFramingQuality && shoulderNeckDistanceQuality && !commonCameraRollOnly
+            shoulderNeckDistanceQuality && !commonCameraRollOnly
         let shoulderSlopeState: PostureRichSignalState = if shoulderSlopeQuality {
             .available
         } else if shoulderSlopeDegrees != nil || shoulderCount > 0 {
@@ -586,8 +585,6 @@ nonisolated enum PostureRichGeometryEvaluator {
             nil
         } else if commonCameraRollOnly {
             "roulis commun caméra à confirmer"
-        } else if !slopeFramingQuality {
-            "cadrage caméra à confirmer"
         } else if shouldersState != .available || !slopeConfidenceQuality {
             "confiance des épaules à confirmer"
         } else if !slopeSpanQuality {
@@ -626,9 +623,7 @@ nonisolated enum PostureRichGeometryEvaluator {
             (matchedFace?.signal.yawProxy.map {
                 $0.isFinite && abs($0) <= PostureRichSignalConfiguration().maximumYaw
             } ?? false) &&
-            (matchedFace?.signal.eyeLineRollDegrees.map {
-                $0.isFinite && abs($0) <= PostureRichSignalConfiguration().maximumRollDegrees
-            } ?? false)
+            (matchedFace?.signal.eyeLineRollDegrees.map(\.isFinite) ?? false)
         let headTiltState: PostureRichSignalState = if headTiltDegrees != nil,
             shouldersState == .available, headTiltFaceEvidence {
             .available
@@ -2524,9 +2519,7 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
         let headTiltFaceQuality = faceForEvaluation.map {
             $0.facePointCount >= configuration.minimumFacePoints &&
                 ($0.signal.yawProxy.map { $0.isFinite && abs($0) <= configuration.maximumYaw } ?? false) &&
-                ($0.signal.eyeLineRollDegrees.map {
-                    $0.isFinite && abs($0) <= configuration.maximumRollDegrees
-                } ?? false)
+                ($0.signal.eyeLineRollDegrees.map(\.isFinite) ?? false)
         } ?? false
         let headTiltReason: String? = bodyInvalidationReason ?? {
             guard paired else { return "visage et épaules non appariés" }
@@ -2764,7 +2757,7 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
         } else if usesUniversalGeometry && body?.openingState != .available {
             "ligne des épaules à confirmer"
         } else if usesUniversalGeometry && !universalTriangleIsHorizontal {
-            "ligne des épaules non horizontale"
+            "inclinaison des épaules traitée séparément"
         } else if usesUniversalGeometry && universalTriangleValue == nil {
             "triangle cou-épaules indisponible"
         } else if raisedValue == nil {
@@ -2797,7 +2790,7 @@ nonisolated struct PostureRichSignalEvaluator: Equatable, Sendable {
         let faceQuality = faceForEvaluation.map {
             $0.facePointCount >= configuration.minimumFacePoints &&
                 ($0.signal.yawProxy.map { abs($0) <= configuration.maximumProximityYaw } ?? false) &&
-                ($0.signal.eyeLineRollDegrees.map { abs($0) <= configuration.maximumRollDegrees } ?? false)
+                ($0.signal.eyeLineRollDegrees.map(\.isFinite) ?? false)
         } ?? false
         let proximityReason = faceQuality
             ? (proximityValue == nil

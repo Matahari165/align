@@ -212,6 +212,8 @@ struct DiagnosticsView: View {
                 HStack(spacing: 12) {
                     Picker("Durée", selection: $postureValidationMode) {
                         Text("Mesure · 20 s/phase").tag(PostureValidationMode.measurement20s)
+                        Text("Postures complètes · 20 s/phase")
+                            .tag(PostureValidationMode.comprehensive20s)
                         Text("Notification · 60 s/phase").tag(PostureValidationMode.notification60s)
                     }
                     .pickerStyle(.menu)

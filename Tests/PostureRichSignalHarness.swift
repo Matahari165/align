@@ -536,9 +536,9 @@ private enum PostureRichSignalHarness {
                            regionOfInterest: fallbackROI),
             face: nil, context: context
         )
-        expect(fallbackFrame.shoulderSlopeState == .partial &&
-               fallbackFrame.shoulderSlopeReason?.contains("cadrage") == true,
-               "un crop de secours ne doit pas ouvrir une recommandation d'épaule")
+        expect(fallbackFrame.shoulderSlopeState == .available &&
+               fallbackFrame.shoulderSlopeReason == nil,
+               "un crop de secours ne doit pas annuler une paire d'épaules fiable")
 
         let samples = (0..<12).map { index in
             PostureRichGeometryMetrics(
@@ -904,6 +904,22 @@ private enum PostureRichSignalHarness {
                abs(universalAttention.shoulderSlope.numericValue ?? 0) > 6 &&
                abs(universalAttention.headTilt.numericValue ?? 0) > 10,
                "les angles universels doivent utiliser zéro et leurs seuils fixes, pas la baseline personnelle")
+        let strongHeadRollFace = face(
+            generation: 1, sampleID: 21, timestamp: 0.15,
+            contextKey: context.key, eyeLineRollDegrees: 40
+        )
+        let strongHeadRoll = universalEvaluator.consume(
+            geometry: PostureRichGeometryEvaluator.make(
+                result: result(generation: 1, sampleID: 21, timestamp: 0.15),
+                face: strongHeadRollFace, context: context
+            ),
+            face: strongHeadRollFace,
+            baseline: deliberatelyWrongPersonalBaseline, now: 0.15
+        )
+        expect(strongHeadRoll.headTilt.quality == .good &&
+               strongHeadRoll.headTilt.isAttention &&
+               abs(strongHeadRoll.headTilt.numericValue ?? 0) > 20,
+               "une forte inclinaison mesurable ne doit pas être rejetée par le seuil de roulis")
         let closeFace = face(generation: 1, sampleID: 3, timestamp: 0.2,
                              contextKey: context.key, faceScaleMultiplier: 2)
         let closeEvaluation = universalEvaluator.consume(
@@ -917,6 +933,21 @@ private enum PostureRichSignalHarness {
         expect(closeEvaluation.proximity.isAttention &&
                (closeEvaluation.proximity.numericValue ?? 0) >= 0.24,
                "la proximité universelle doit comparer la taille faciale apparente à 0,24")
+        let closeRolledFace = face(
+            generation: 1, sampleID: 31, timestamp: 0.25,
+            contextKey: context.key, faceScaleMultiplier: 2, eyeLineRollDegrees: 32
+        )
+        let closeRolledEvaluation = universalEvaluator.consume(
+            geometry: PostureRichGeometryEvaluator.make(
+                result: result(generation: 1, sampleID: 31, timestamp: 0.25),
+                face: closeRolledFace, context: context
+            ),
+            face: closeRolledFace,
+            baseline: deliberatelyWrongPersonalBaseline, now: 0.25
+        )
+        expect(closeRolledEvaluation.proximity.quality == .good &&
+               closeRolledEvaluation.proximity.isAttention,
+               "un visage proche et incliné doit conserver sa proximité apparente")
         let recovered = universalEvaluator.consume(
             geometry: PostureRichGeometryEvaluator.make(
                 result: result(generation: 1, sampleID: 4, timestamp: 0.3),

@@ -66,6 +66,22 @@ private enum PostureGuidedValidationHarness {
                notification.phases[8].expectedDirection == .left &&
                notification.phases[9].expectedDirection == .right,
                "les phases portent les signaux géométriques et la direction du torse")
+
+        let comprehensive = PostureValidationPlan.comprehensive20s
+        expect(comprehensive.mode == .comprehensive20s &&
+               comprehensive.phases.count == 14 &&
+               comprehensive.totalDuration == 280,
+               "le protocole complet couvre quatorze phases de vingt secondes")
+        expect(comprehensive.phases.map(\.id).contains("left-shoulder-higher") &&
+               comprehensive.phases.map(\.id).contains("right-shoulder-higher") &&
+               comprehensive.phases.map(\.id).contains("both-shoulders-raised") &&
+               comprehensive.phases.map(\.id).contains("head-forward"),
+               "le protocole complet sépare les deux épaules, leur hausse et la tête avancée")
+        expect(comprehensive.phases.first(where: { $0.id == "both-shoulders-raised" })?
+                   .expectedAttention == .bothShouldersRaised &&
+               comprehensive.phases.first(where: { $0.id == "head-forward" })?
+                   .expectedAttention == .shouldersClosed,
+               "chaque nouvelle posture porte l'attention attendue")
     }
 
     static func testRecordingContract() {
@@ -87,7 +103,7 @@ private enum PostureGuidedValidationHarness {
         expect(session.isFinished, "finish verrouille la session")
         expect(session.record(timestamp: 1, predictedAttention: nil, availability: .reliable)
                == .rejected(.finished), "aucun échantillon ne suit finish")
-        expect(report.protocolVersion == "guided-validation-v1", "le rapport est versionné")
+        expect(report.protocolVersion == "guided-validation-v2", "le rapport est versionné")
         expect(report.completionStatus == .incomplete && !report.isConclusive,
                "une session interrompue ne doit pas être présentée comme concluante")
     }

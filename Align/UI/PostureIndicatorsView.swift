@@ -201,8 +201,13 @@ struct PostureIndicatorsView: View {
     }
 
     private func availabilityHelp(for id: PostureIndicatorID) -> String {
-        guard snapshot.result(for: id).state == .unavailable else {
+        let result = snapshot.result(for: id)
+        guard result.state == .unavailable else {
             return accessibilityHint(for: id)
+        }
+        if let reason = result.reason?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !reason.isEmpty {
+            return "Mesure indisponible : \(reason)."
         }
         switch id {
         case .torsoInclination: return "Le torse nécessite des épaules et des hanches suffisamment visibles."
