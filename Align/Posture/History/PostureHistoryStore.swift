@@ -20,17 +20,22 @@ nonisolated struct PostureHistoryDatabase: Equatable, Codable, Sendable {
     var buckets: [PostureHistoryBucket]
     var coverage: [PostureCoverageInterval] = []
     var controlEvents: [PostureHistoryControlEvent] = []
+    var screenBreakEvents: [ScreenBreakEvent] = []
     var eventKeys: [String] = []
 
-    private enum CodingKeys: String, CodingKey { case buckets, coverage, controlEvents, eventKeys }
-    init(buckets: [PostureHistoryBucket], coverage: [PostureCoverageInterval] = [], controlEvents: [PostureHistoryControlEvent] = [], eventKeys: [String] = []) {
-        self.buckets = buckets; self.coverage = coverage; self.controlEvents = controlEvents; self.eventKeys = eventKeys
+    private enum CodingKeys: String, CodingKey {
+        case buckets, coverage, controlEvents, screenBreakEvents, eventKeys
+    }
+    init(buckets: [PostureHistoryBucket], coverage: [PostureCoverageInterval] = [], controlEvents: [PostureHistoryControlEvent] = [], screenBreakEvents: [ScreenBreakEvent] = [], eventKeys: [String] = []) {
+        self.buckets = buckets; self.coverage = coverage; self.controlEvents = controlEvents
+        self.screenBreakEvents = screenBreakEvents; self.eventKeys = eventKeys
     }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         buckets = try values.decode([PostureHistoryBucket].self, forKey: .buckets)
         coverage = try values.decodeIfPresent([PostureCoverageInterval].self, forKey: .coverage) ?? []
         controlEvents = try values.decodeIfPresent([PostureHistoryControlEvent].self, forKey: .controlEvents) ?? []
+        screenBreakEvents = try values.decodeIfPresent([ScreenBreakEvent].self, forKey: .screenBreakEvents) ?? []
         eventKeys = try values.decodeIfPresent([String].self, forKey: .eventKeys) ?? []
     }
 
@@ -58,13 +63,18 @@ nonisolated struct PostureHistoryDatabase: Equatable, Codable, Sendable {
             let timestamp = event.date.timeIntervalSince1970
             return timestamp.isFinite && timestamp <= nowValue && !event.ruleProfileID.isEmpty
         }
-        return bucketsAreValid && coverageIsValid && controlsAreValid
+        let breaksAreValid = screenBreakEvents.allSatisfy {
+            let timestamp = $0.date.timeIntervalSince1970
+            return timestamp.isFinite && timestamp <= nowValue
+        }
+        return bucketsAreValid && coverageIsValid && controlsAreValid && breaksAreValid
     }
 }
 
 nonisolated enum PostureCoverageChannel: String, Codable, Sendable {
     case faceAndEyes
     case upperBody
+    case screenPresence
 }
 
 nonisolated struct PostureCoverageInterval: Equatable, Codable, Sendable {
@@ -272,6 +282,11 @@ nonisolated struct PostureHistoryAccumulator: Sendable {
         if database.coverage.count > Self.maximumBuckets {
             database.coverage.removeFirst(database.coverage.count - Self.maximumBuckets)
         }
+        if database.screenBreakEvents.count > Self.maximumBuckets {
+            database.screenBreakEvents.removeFirst(
+                database.screenBreakEvents.count - Self.maximumBuckets
+            )
+        }
     }
 
     mutating func restore(_ database: PostureHistoryDatabase, now: Date) {
@@ -293,6 +308,13 @@ nonisolated struct PostureHistoryAccumulator: Sendable {
         }
     }
 
+    mutating func recordScreenBreakEvent(_ event: ScreenBreakEvent, now: Date) {
+        guard event.date <= now else { return }
+        prune(now: now)
+        database.screenBreakEvents.append(event)
+        normalizeAndCap()
+    }
+
     private mutating func prune(now: Date) {
         database.buckets.removeAll {
             $0.bucketStart > now || now.timeIntervalSince($0.bucketStart) > Self.retention
@@ -301,6 +323,9 @@ nonisolated struct PostureHistoryAccumulator: Sendable {
             $0.end > now || now.timeIntervalSince($0.end) > Self.retention
         }
         database.controlEvents.removeAll {
+            $0.date > now || now.timeIntervalSince($0.date) > Self.retention
+        }
+        database.screenBreakEvents.removeAll {
             $0.date > now || now.timeIntervalSince($0.date) > Self.retention
         }
     }
@@ -353,6 +378,10 @@ nonisolated struct PostureHistorySummary: Equatable, Sendable {
     let faceAndEyesCoverage: TimeInterval
     let upperBodyCoverage: TimeInterval
     let totalCoverage: TimeInterval
+    let screenTime: TimeInterval
+    let longestScreenSession: TimeInterval
+    let screenBreakReminders: Int
+    let screenBreaksCompleted: Int
 }
 
 nonisolated enum PostureHistoryQuery {
@@ -375,6 +404,10 @@ nonisolated enum PostureHistoryQuery {
         let faceCoverage = coverageDuration(database.coverage, channel: .faceAndEyes, in: interval)
         let bodyCoverage = coverageDuration(database.coverage, channel: .upperBody, in: interval)
         let totalCoverage = unionDuration(database.coverage, in: interval)
+        let screenIntervals = database.coverage.filter { $0.channel == .screenPresence }
+        let screenTime = unionDuration(screenIntervals, in: interval)
+        let longestScreenSession = longestDuration(screenIntervals, in: interval)
+        let breakEvents = database.screenBreakEvents.filter { interval.contains($0.date) }
         let signals = PostureObservationSignalID.allCases.map { id in
             let buckets = included.filter { $0.signalID == id }
             let observed = buckets.reduce(0) { partial, bucket in
@@ -425,7 +458,11 @@ nonisolated enum PostureHistoryQuery {
             estimatedBlinkObservedDuration: blinkSeconds,
             faceAndEyesCoverage: faceCoverage,
             upperBodyCoverage: bodyCoverage,
-            totalCoverage: totalCoverage
+            totalCoverage: totalCoverage,
+            screenTime: screenTime,
+            longestScreenSession: longestScreenSession,
+            screenBreakReminders: breakEvents.filter { $0.kind == .reminded }.count,
+            screenBreaksCompleted: breakEvents.filter { $0.kind == .completed }.count
         )
     }
 
@@ -494,6 +531,17 @@ nonisolated enum PostureHistoryQuery {
             }
         }
         return total + (current?.duration ?? 0)
+    }
+
+    private static func longestDuration(
+        _ values: [PostureCoverageInterval],
+        in interval: DateInterval
+    ) -> TimeInterval {
+        values.compactMap { value -> TimeInterval? in
+            let start = max(value.start, interval.start)
+            let end = min(value.end, interval.end)
+            return start < end ? end.timeIntervalSince(start) : nil
+        }.max() ?? 0
     }
 
     private static func interval(

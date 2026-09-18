@@ -122,6 +122,9 @@ nonisolated struct PostureObservationsSnapshot: Equatable, Codable, Sendable {
     /// Face + both eyes were reliable for this sample, independently of
     /// whether the blink-rate baseline is mature enough to publish.
     let faceAndEyesReliable: Bool
+    /// Présence faciale distincte de la qualité des yeux. Une erreur ou une
+    /// ambiguïté reste `.unknown` et ne peut jamais valider une pause.
+    let facePresence: ScreenPresence
     /// Timestamp de la vraie preuve visage associée à cette publication.
     /// `nil` signifie que la publication vient d'une autre source et ne doit
     /// ni ouvrir ni fermer la couverture visage dans l'historique.
@@ -134,6 +137,7 @@ nonisolated struct PostureObservationsSnapshot: Equatable, Codable, Sendable {
         signals: [PostureSignalSnapshot],
         blinkEventCount: Int = 0,
         faceAndEyesReliable: Bool = false,
+        facePresence: ScreenPresence = .unknown,
         faceAndEyesObservedAt: TimeInterval? = nil
     ) {
         self.generation = generation
@@ -142,6 +146,7 @@ nonisolated struct PostureObservationsSnapshot: Equatable, Codable, Sendable {
         self.signals = signals
         self.blinkEventCount = blinkEventCount
         self.faceAndEyesReliable = faceAndEyesReliable
+        self.facePresence = facePresence
         self.faceAndEyesObservedAt = faceAndEyesObservedAt
     }
 

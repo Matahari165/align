@@ -40,6 +40,7 @@ nonisolated struct StatisticsViewState: Equatable, Sendable {
     let coverageAccessibilityLabel: String
     let coverageMetrics: [StatisticsCoverageMetric]
     let insights: [PostureInsight]
+    let screenSeries: [StatisticsSeriesPoint]
     let series: [StatisticsSeriesPoint]
     let rows: [StatisticsSignalRow]
     let blinkDetail: String
@@ -143,7 +144,8 @@ nonisolated enum StatisticsPresenter {
         guard let summary = PostureHistoryQuery.summary(database: database, period: period, containing: date, calendar: calendar) else {
             return terminal(.unavailable("Cette période ne peut pas être affichée."), period: period, date: date)
         }
-        let hasObservations = summary.totalCoverage > 0 || summary.signals.contains { $0.observedDuration > 0 }
+        let hasObservations = summary.screenTime > 0 || summary.totalCoverage > 0 ||
+            summary.signals.contains { $0.observedDuration > 0 }
         let contentState: StatisticsContentState = hasObservations
             ? .content : .empty("Aucune observation fiable pour cette période.")
         let rows = summary.signals.map { row($0, summary: summary) }
@@ -153,15 +155,17 @@ nonisolated enum StatisticsPresenter {
         return .init(
             state: contentState,
             periodLabel: periodLabel(period, date: date, calendar: calendar),
-            coverageTitle: summary.totalCoverage > 0 ? "\(duration(summary.totalCoverage)) observées" : "Données insuffisantes",
-            coverageDetail: "Seul le temps réellement fiable est compté.",
-            coverageAccessibilityLabel: "Couverture fiable. Total \(duration(summary.totalCoverage)). Visage et deux yeux \(duration(summary.faceAndEyesCoverage)). Haut du corps \(duration(summary.upperBodyCoverage)).",
+            coverageTitle: summary.screenTime > 0 ? duration(summary.screenTime) : "Données insuffisantes",
+            coverageDetail: "Présence devant l’écran réellement détectée. Les périodes inconnues ne sont pas comptées.",
+            coverageAccessibilityLabel: "Résumé. Temps devant l’écran \(duration(summary.screenTime)). Plus longue période \(duration(summary.longestScreenSession)). Pauses visuelles réalisées \(summary.screenBreaksCompleted) sur \(summary.screenBreakReminders) rappels. Couverture fiable \(duration(summary.totalCoverage)).",
             coverageMetrics: [
-                .init(id: "total", title: "Total fiable", value: duration(summary.totalCoverage)),
-                .init(id: "face", title: "Visage + yeux", value: duration(summary.faceAndEyesCoverage)),
-                .init(id: "body", title: "Haut du corps", value: duration(summary.upperBodyCoverage))
+                .init(id: "screen", title: "Devant l’écran", value: duration(summary.screenTime)),
+                .init(id: "longest", title: "Plus longue période", value: duration(summary.longestScreenSession)),
+                .init(id: "breaks", title: "Pauses réalisées", value: "\(summary.screenBreaksCompleted)/\(summary.screenBreakReminders)"),
+                .init(id: "coverage", title: "Couverture fiable", value: duration(summary.totalCoverage))
             ],
             insights: PostureInsights.make(summary: summary, database: database, period: period, date: date, calendar: calendar),
+            screenSeries: screenSeries(database: database, period: period, date: date, calendar: calendar),
             series: series(database: database, summary: summary, period: period, date: date, signalID: selectedSignal, calendar: calendar),
             rows: rows,
             blinkDetail: blink
@@ -252,6 +256,36 @@ nonisolated enum StatisticsPresenter {
         return result
     }
 
+    private static func screenSeries(
+        database: PostureHistoryDatabase,
+        period: PostureHistoryPeriod,
+        date: Date,
+        calendar: Calendar
+    ) -> [StatisticsSeriesPoint] {
+        guard let outer = interval(period, date: date, calendar: calendar) else { return [] }
+        let component: Calendar.Component = period == .day ? .hour : (period == .week ? .day : .weekOfMonth)
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.dateFormat = period == .day ? "HH" : (period == .week ? "EEE" : "'S'w")
+        var cursor = outer.start
+        var result: [StatisticsSeriesPoint] = []
+        while cursor < outer.end {
+            let next = min(calendar.date(byAdding: component, value: 1, to: cursor) ?? outer.end, outer.end)
+            let interval = DateInterval(start: cursor, end: next)
+            let seconds = PostureHistoryQuery.coverageDuration(
+                database.coverage, channel: .screenPresence, in: interval
+            )
+            result.append(.init(
+                start: cursor,
+                label: formatter.string(from: cursor),
+                value: seconds > 0 ? seconds / 60 : nil,
+                coverage: seconds
+            ))
+            cursor = next
+        }
+        return result
+    }
+
     private static func isComparable(database: PostureHistoryDatabase, interval: DateInterval) -> Bool {
         let values = database.buckets.filter { interval.contains($0.bucketStart) }
         return Set(values.map(\.sensitivity)).count <= 1 && Set(values.map(\.ruleProfileID)).count <= 1
@@ -266,6 +300,6 @@ nonisolated enum StatisticsPresenter {
     }
 
     private static func terminal(_ state: StatisticsContentState, period: PostureHistoryPeriod, date: Date) -> StatisticsViewState {
-        .init(state: state, periodLabel: periodLabel(period, date: date, calendar: .current), coverageTitle: "Données indisponibles", coverageDetail: "", coverageAccessibilityLabel: "Couverture indisponible", coverageMetrics: [], insights: [], series: [], rows: [], blinkDetail: "Données insuffisantes")
+        .init(state: state, periodLabel: periodLabel(period, date: date, calendar: .current), coverageTitle: "Données indisponibles", coverageDetail: "", coverageAccessibilityLabel: "Couverture indisponible", coverageMetrics: [], insights: [], screenSeries: [], series: [], rows: [], blinkDetail: "Données insuffisantes")
     }
 }

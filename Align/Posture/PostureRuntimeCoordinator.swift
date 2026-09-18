@@ -467,6 +467,7 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
         sampleID: UInt64,
         capturedAt: TimeInterval,
         now: TimeInterval,
+        facePresence: ScreenPresence = .unknown,
         reason: String = "Visage momentanément indisponible"
     ) -> PostureObservationsSnapshot {
         guard generation > 0, !contextKey.isEmpty, sampleID > lastFaceSampleID,
@@ -484,6 +485,7 @@ nonisolated struct PostureRuntimeCoordinator: Sendable {
             at: now,
             generation: generation,
             faceEvidenceObservedAt: capturedAt,
+            facePresence: facePresence,
             reason: reason
         )
     }

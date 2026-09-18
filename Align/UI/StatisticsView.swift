@@ -28,6 +28,7 @@ struct StatisticsView: View {
                         if case .loading = viewState.state {
                             loadingState
                         } else if case .content = viewState.state {
+                            screenTimeChart
                             if proxy.size.width < 620 {
                                 VStack(alignment: .leading, spacing: 12) { insights(limit: 2); chart }
                             } else {
@@ -92,7 +93,7 @@ struct StatisticsView: View {
     private var coverage: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Couverture fiable")
+                Text("Temps et pauses")
                     .font(.headline)
                     .foregroundStyle(AlignTheme.ivory)
                 Spacer(minLength: 12)
@@ -105,7 +106,11 @@ struct StatisticsView: View {
                 .font(.caption)
                 .foregroundStyle(AlignTheme.quiet)
 
-            HStack(spacing: 14) {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 120), spacing: 14)],
+                alignment: .leading,
+                spacing: 8
+            ) {
                 ForEach(viewState.coverageMetrics) { metric in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(metric.value)
@@ -129,6 +134,68 @@ struct StatisticsView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(viewState.coverageAccessibilityLabel)
+    }
+
+    private var screenTimeChart: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Temps devant l’écran")
+                .font(.headline)
+                .foregroundStyle(AlignTheme.ivory)
+            Text("Minutes de présence fiable · les périodes inconnues restent vides")
+                .font(.caption)
+                .foregroundStyle(AlignTheme.quiet)
+
+            if viewState.screenSeries.contains(where: { $0.value != nil }) {
+                let maximum = max(viewState.screenSeries.compactMap(\.value).max() ?? 1, 1)
+                VStack(spacing: 4) {
+                    ZStack(alignment: .bottom) {
+                        Rectangle().fill(AlignTheme.hairline).frame(height: 1)
+                        HStack(alignment: .bottom, spacing: 3) {
+                            ForEach(viewState.screenSeries) { point in
+                                Group {
+                                    if let value = point.value {
+                                        RoundedRectangle(cornerRadius: 3)
+                                            .fill(AlignTheme.accentSoft)
+                                            .frame(height: CGFloat(8 + 68 * max(0, min(1, value / maximum))))
+                                    } else {
+                                        Capsule()
+                                            .fill(AlignTheme.quiet.opacity(0.28))
+                                            .frame(height: 6)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .bottom)
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel(
+                                    point.value.map { "\(point.label), \(Int($0)) minutes devant l’écran" }
+                                        ?? "\(point.label), aucune présence fiable"
+                                )
+                            }
+                        }
+                    }
+                    .frame(height: 82, alignment: .bottom)
+                    HStack(spacing: 3) {
+                        ForEach(Array(viewState.screenSeries.enumerated()), id: \.element.id) { index, point in
+                            Text(shouldShowChartLabel(at: index) ? point.label : " ")
+                                .font(.system(size: 8, weight: .medium, design: .rounded))
+                                .foregroundStyle(AlignTheme.quiet)
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                }
+                .frame(height: 105, alignment: .bottom)
+            } else {
+                Text("Pas encore de temps fiable enregistré pour cette période.")
+                    .font(.callout)
+                    .foregroundStyle(AlignTheme.quiet)
+                    .frame(maxWidth: .infinity, minHeight: 70, alignment: .center)
+            }
+        }
+        .padding(12)
+        .background(AlignTheme.elevated.opacity(0.24), in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(AlignTheme.hairline, lineWidth: 1)
+        }
     }
 
     private func insights(limit: Int) -> some View {

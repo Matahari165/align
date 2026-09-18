@@ -119,6 +119,7 @@ nonisolated struct PostureObservationEngine: Sendable {
             blinkEventCount: signalIDs.contains(.estimatedBlinks) && evaluation.blinkEvent != nil ? 1 : 0,
             faceAndEyesReliable: signalIDs.contains(.estimatedBlinks) &&
                 evaluation.blinkRate.quality == .good,
+            facePresence: signalIDs.contains(.estimatedBlinks) ? .present : snapshot.facePresence,
             faceAndEyesObservedAt: signalIDs.contains(.estimatedBlinks)
                 ? evaluation.blinkRate.capturedAt : nil
         )
@@ -169,6 +170,7 @@ nonisolated struct PostureObservationEngine: Sendable {
         at now: TimeInterval,
         generation: UInt64,
         faceEvidenceObservedAt: TimeInterval? = nil,
+        facePresence: ScreenPresence = .unknown,
         reason: String = "Observation en attente"
     ) -> PostureObservationsSnapshot {
         guard generation == self.generation, now.isFinite else { return snapshot }
@@ -184,6 +186,7 @@ nonisolated struct PostureObservationEngine: Sendable {
             producedAt: snapshot.producedAt,
             signals: snapshot.signals,
             faceAndEyesReliable: false,
+            facePresence: facePresence,
             faceAndEyesObservedAt: faceEvidenceObservedAt
         )
         return snapshot
@@ -208,6 +211,7 @@ nonisolated struct PostureObservationEngine: Sendable {
                          producedAt: now, signals: values,
                          blinkEventCount: snapshot.blinkEventCount,
                          faceAndEyesReliable: snapshot.faceAndEyesReliable,
+                         facePresence: snapshot.facePresence,
                          faceAndEyesObservedAt: snapshot.faceAndEyesObservedAt)
     }
 }

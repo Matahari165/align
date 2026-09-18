@@ -63,6 +63,25 @@ final class PostureHistoryController: ObservableObject {
         await persist()
     }
 
+    func recordScreenBreakEvent(_ event: ScreenBreakEvent, now: Date = Date()) async {
+        let generation = persistenceGeneration
+        await loadIfNeeded()
+        guard generation == persistenceGeneration else { return }
+        accumulator.recordScreenBreakEvent(event, now: now)
+        database = accumulator.database
+        await persist()
+    }
+
+    func enqueueScreenBreakEvent(_ event: ScreenBreakEvent, now: Date = Date()) {
+        let previous = operationTail
+        let generation = persistenceGeneration
+        operationTail = Task { @MainActor [weak self] in
+            if let previous { await previous.value }
+            guard let self, generation == self.persistenceGeneration else { return }
+            await self.recordScreenBreakEvent(event, now: now)
+        }
+    }
+
     /// File explicitement les écritures lancées depuis le runtime synchrone.
     /// `flushPending` peut alors garantir qu'une fermeture ne coupe pas la
     /// dernière durée, couverture ou transition en attente.

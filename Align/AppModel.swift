@@ -39,6 +39,7 @@ final class AppModel: ObservableObject {
     private var coverageStarts: [PostureCoverageChannel: TimeInterval] = [:]
     private var coverageLastRecorded: [PostureCoverageChannel: TimeInterval] = [:]
     private var coverageWallOffset: TimeInterval?
+    private var screenTimeTracker = ScreenTimeTracker()
     private let coverageFlushInterval: TimeInterval = 5
     private let faceCoverageMaximumGap: TimeInterval = 0.25
     private let bodyCoverageMaximumGap: TimeInterval = 1.5
@@ -132,6 +133,7 @@ final class AppModel: ObservableObject {
                     self.signalDurationAssessment.removeAll(keepingCapacity: true)
                     self.attentionEpisodeStartedAt.removeAll(keepingCapacity: true)
                     self.lastHistoryState.removeAll(keepingCapacity: true)
+                    self.screenTimeTracker.reset()
                     self.coverageWallOffset = nil
                 }
             }
@@ -167,6 +169,7 @@ final class AppModel: ObservableObject {
             signalDurationAssessment.removeAll(keepingCapacity: true)
             attentionEpisodeStartedAt.removeAll(keepingCapacity: true)
             coverageWallOffset = nil
+            screenTimeTracker.reset()
             lastObservationGeneration = snapshot.generation
             lastObservationContextKey = snapshot.contextKey
             observationContextEpoch &+= 1
@@ -339,6 +342,14 @@ final class AppModel: ObservableObject {
                 maximumGap: faceCoverageMaximumGap,
                 now: now
             )
+            updateCoverage(
+                .screenPresence,
+                reliable: snapshot.facePresence == .present,
+                at: faceObservedAt,
+                maximumGap: 0.35,
+                now: now
+            )
+            consumeScreenTime(snapshot.facePresence, at: faceObservedAt, wallNow: now)
         }
         let bodySignals = PostureObservationEngine.bodySignalIDs.map(snapshot.signal)
         if bodySignals.contains(where: { $0.producedAt == snapshot.producedAt }) {
@@ -353,6 +364,28 @@ final class AppModel: ObservableObject {
                 maximumGap: bodyCoverageMaximumGap,
                 now: now
             )
+        }
+    }
+
+    private func consumeScreenTime(
+        _ presence: ScreenPresence,
+        at uptime: TimeInterval,
+        wallNow: TimeInterval
+    ) {
+        guard let action = screenTimeTracker.consume(presence, at: uptime) else { return }
+        let eventDate = Date(timeIntervalSince1970: wallNow)
+        switch action {
+        case .remind:
+            let identifier = "align.screen-break.\(launchSessionID).\(Int(uptime * 1_000))"
+            history.enqueueScreenBreakEvent(.init(date: eventDate, kind: .reminded))
+            Task { @MainActor [weak self] in
+                guard let self,
+                      await self.notificationService.deliverScreenBreakReminder(
+                        identifier: identifier
+                      ) else { return }
+            }
+        case .breakCompleted:
+            history.enqueueScreenBreakEvent(.init(date: eventDate, kind: .completed))
         }
     }
 

@@ -5,6 +5,8 @@ nonisolated enum LocalPostureNotificationCopy {
     static let authorizationOptions: UNAuthorizationOptions = [.alert, .sound]
     static let testTitle = "Align · Test de rappel"
     static let testBody = "Ceci est un test. Les rappels Align sont activés."
+    static let screenBreakTitle = "Pause visuelle"
+    static let screenBreakBody = "Regarde au loin pendant 20 secondes. Align validera la pause lorsque ton visage quittera l’écran."
     static let foregroundPresentationOptions: UNNotificationPresentationOptions = [
         .banner, .list, .sound
     ]
@@ -133,6 +135,19 @@ final class LocalPostureNotificationService: NSObject {
             scheduleTransientRetraction(for: identifier)
             return true
         }
+        catch { return false }
+    }
+
+    func deliverScreenBreakReminder(identifier: String) async -> Bool {
+        guard await authorization() == .authorized else { return false }
+        let content = UNMutableNotificationContent()
+        content.title = LocalPostureNotificationCopy.screenBreakTitle
+        content.body = LocalPostureNotificationCopy.screenBreakBody
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: identifier, content: content, trigger: nil
+        )
+        do { try await center.add(request); return true }
         catch { return false }
     }
 

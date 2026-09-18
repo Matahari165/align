@@ -1792,6 +1792,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                         sampleID: faceObservationSampleID,
                         capturedAt: capturedAt,
                         now: faceProducedAt,
+                        facePresence: screenPresence(for: continuityDecision),
                         reason: faceTrackingReason(for: continuityDecision)
                     )
                     onEvent(.postureObservations(invalidated), generation)
@@ -2680,6 +2681,16 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
             case .outOfOrder, .invalidTimestamp: "Mesure du visage trop ancienne."
             case .invalidCandidate, .invalidConfiguration: "Image du visage inexploitable."
             }
+        }
+    }
+
+    private func screenPresence(for decision: FaceTargetDecision) -> ScreenPresence {
+        switch decision.reason {
+        case .noFace, .targetLost, .noTarget:
+            .absent
+        case .none, .multipleFaces, .trackingJump, .trackingGap, .outOfOrder,
+             .invalidTimestamp, .invalidCandidate, .invalidConfiguration, .rearmRequired:
+            .unknown
         }
     }
 

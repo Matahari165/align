@@ -12,6 +12,21 @@ private enum PostureHistoryHarness {
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let day = Date(timeIntervalSince1970: 1_700_000_000)
 
+        accumulator.ingestCoverage(
+            channel: .screenPresence,
+            interval: .init(start: day, duration: 1_200),
+            now: day.addingTimeInterval(1_300),
+            calendar: calendar
+        )
+        accumulator.recordScreenBreakEvent(
+            .init(date: day.addingTimeInterval(1_200), kind: .reminded),
+            now: day.addingTimeInterval(1_300)
+        )
+        accumulator.recordScreenBreakEvent(
+            .init(date: day.addingTimeInterval(1_220), kind: .completed),
+            now: day.addingTimeInterval(1_300)
+        )
+
         // Event identity is scoped to the process launch: two launches may
         // both restart generation/episode counters, while a duplicate within
         // one launch must still be ignored.
