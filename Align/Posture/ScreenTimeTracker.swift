@@ -30,7 +30,7 @@ nonisolated struct ScreenTimeTracker: Equatable, Sendable {
         case breakCompleted
     }
 
-    let configuration: Configuration
+    private(set) var configuration: Configuration
     private(set) var continuousWork: TimeInterval = 0
     private(set) var breakProgress: TimeInterval = 0
     private(set) var isBreakDue = false
@@ -39,6 +39,18 @@ nonisolated struct ScreenTimeTracker: Equatable, Sendable {
 
     init(configuration: Configuration = .default) {
         self.configuration = configuration
+    }
+
+    /// Applies a new work/break configuration while preserving the running
+    /// progress. Counters are clamped so a shorter target never keeps a stale
+    /// over-full value.
+    mutating func applyConfiguration(_ configuration: Configuration) {
+        self.configuration = configuration
+        continuousWork = min(continuousWork, configuration.workDuration)
+        breakProgress = min(breakProgress, configuration.breakDuration)
+        if continuousWork < configuration.workDuration {
+            isBreakDue = false
+        }
     }
 
     mutating func consume(_ presence: ScreenPresence, at uptime: TimeInterval) -> Action? {

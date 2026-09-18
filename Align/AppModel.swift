@@ -23,6 +23,8 @@ final class AppModel: ObservableObject {
         globalConfiguration: .normal
     )
     private var alertSettings: PostureAlertSettings
+    private(set) var screenBreakSettings = ScreenBreakSettings()
+    private let screenBreakOverlay = ScreenBreakOverlayController()
     private var observationCancellables = Set<AnyCancellable>()
     private var lastHistoryState: [PostureObservationSignalID: PostureSignalSnapshot] = [:]
     private var signalDurationLastObserved: [PostureObservationSignalID: TimeInterval] = [:]
@@ -91,6 +93,8 @@ final class AppModel: ObservableObject {
         history = PostureHistoryController()
         notificationService = LocalPostureNotificationService()
         alertSettings = PostureAlertSettingsStore().load()
+        screenBreakSettings = ScreenBreakSettingsStore().load()
+        screenTimeTracker = ScreenTimeTracker(configuration: screenBreakSettings.trackerConfiguration)
         alertCoordinator.setSensitivity(alertSettings.sensitivity)
         restoreAlertDeliveryState()
         for (id, control) in alertSettings.controls {
@@ -372,21 +376,76 @@ final class AppModel: ObservableObject {
         at uptime: TimeInterval,
         wallNow: TimeInterval
     ) {
+        guard screenBreakSettings.isEnabled else { return }
         guard let action = screenTimeTracker.consume(presence, at: uptime) else { return }
         let eventDate = Date(timeIntervalSince1970: wallNow)
         switch action {
         case .remind:
             let identifier = "align.screen-break.\(launchSessionID).\(Int(uptime * 1_000))"
             history.enqueueScreenBreakEvent(.init(date: eventDate, kind: .reminded))
-            Task { @MainActor [weak self] in
-                guard let self,
-                      await self.notificationService.deliverScreenBreakReminder(
-                        identifier: identifier
-                      ) else { return }
+            // L'overlay plein-écran est la présentation principale : il floute
+            // tout l'écran avec un fondu doux et disparaît après la durée de
+            // pause avec son compte à rebours. La notification reste un
+            // secours quand l'overlay est désactivé.
+            if screenBreakSettings.usesFullscreenOverlay {
+                screenBreakOverlay.show(totalSeconds: screenBreakSettings.breakDuration)
+            }
+            if screenBreakSettings.sendsNotification {
+                let breakSeconds = Int(screenBreakSettings.breakDuration.rounded())
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          await self.notificationService.deliverScreenBreakReminder(
+                            identifier: identifier,
+                            breakSeconds: breakSeconds
+                          ) else { return }
+                }
             }
         case .breakCompleted:
             history.enqueueScreenBreakEvent(.init(date: eventDate, kind: .completed))
         }
+    }
+
+    /// Affiche l'overlay de pause pour vérifier le fondu, le verre et le
+    /// minuteur sans attendre 20 minutes d'écran.
+    func previewScreenBreakOverlay() {
+        screenBreakOverlay.show(totalSeconds: screenBreakSettings.breakDuration)
+    }
+
+    func setScreenBreakEnabled(_ enabled: Bool) {
+        screenBreakSettings.isEnabled = enabled
+        ScreenBreakSettingsStore().save(screenBreakSettings)
+        objectWillChange.send()
+        history.enqueueControlEvent(.init(
+            date: Date(), signalID: nil,
+            action: enabled ? .reactivated : .disabled,
+            sensitivity: alertCoordinator.sensitivity, ruleProfileID: PostureAlertCoordinator.ruleProfileID
+        ))
+    }
+
+    func setScreenBreakWorkMinutes(_ minutes: Double) {
+        screenBreakSettings.workMinutes = ScreenBreakSettings.clampedWorkMinutes(minutes)
+        ScreenBreakSettingsStore().save(screenBreakSettings)
+        screenTimeTracker.applyConfiguration(screenBreakSettings.trackerConfiguration)
+        objectWillChange.send()
+    }
+
+    func setScreenBreakBreakSeconds(_ seconds: Double) {
+        screenBreakSettings.breakSeconds = ScreenBreakSettings.clampedBreakSeconds(seconds)
+        ScreenBreakSettingsStore().save(screenBreakSettings)
+        screenTimeTracker.applyConfiguration(screenBreakSettings.trackerConfiguration)
+        objectWillChange.send()
+    }
+
+    func setScreenBreakUsesFullscreenOverlay(_ enabled: Bool) {
+        screenBreakSettings.usesFullscreenOverlay = enabled
+        ScreenBreakSettingsStore().save(screenBreakSettings)
+        objectWillChange.send()
+    }
+
+    func setScreenBreakSendsNotification(_ enabled: Bool) {
+        screenBreakSettings.sendsNotification = enabled
+        ScreenBreakSettingsStore().save(screenBreakSettings)
+        objectWillChange.send()
     }
 
     private func restoreAlertDeliveryState() {
