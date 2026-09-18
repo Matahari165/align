@@ -26,6 +26,26 @@ private enum AnalysisCadenceHarness {
                "un fallback atypique doit rester le plus proche de 20, pas le plus élevé")
         expect(CameraCaptureRatePolicy.framesPerSecond(for: []) == nil,
                "aucune plage ne doit produire une cadence inventée")
+        let formatCandidates = [
+            CameraFormatCandidate(index: 0, width: 1920, height: 1080, supportsTwentyFPS: true),
+            CameraFormatCandidate(index: 1, width: 1280, height: 720, supportsTwentyFPS: true),
+            CameraFormatCandidate(index: 2, width: 960, height: 540, supportsTwentyFPS: true),
+            CameraFormatCandidate(index: 3, width: 640, height: 480, supportsTwentyFPS: true)
+        ]
+        expect(CameraResolutionPolicy.preferredIndex(in: formatCandidates) == 2,
+               "la caméra doit préférer exactement 960×540 à 20 fps")
+        expect(CameraResolutionPolicy.preferredIndex(in: Array(formatCandidates.dropFirst(3))) == 3,
+               "640×480 doit être le repli compact lorsqu'il est le seul format sous la cible")
+        expect(CameraResolutionPolicy.preferredIndex(in: [
+            CameraFormatCandidate(index: 7, width: 960, height: 540, supportsTwentyFPS: false),
+            CameraFormatCandidate(index: 8, width: 1280, height: 720, supportsTwentyFPS: true)
+        ]) == 8, "la résolution ne doit jamais sacrifier les 20 fps")
+        let compactWide = CompactBodyFramePolicy.dimensions(sourceWidth: 960, sourceHeight: 540)
+        expect(compactWide?.width == 640 && compactWide?.height == 360,
+               "le corps doit recevoir une copie 640×360 du format 16:9")
+        let compactFourThree = CompactBodyFramePolicy.dimensions(sourceWidth: 640, sourceHeight: 480)
+        expect(compactFourThree?.width == 480 && compactFourThree?.height == 360,
+               "la copie compacte ne doit jamais déformer un format 4:3")
 
         var cadence = AnalysisCadenceController()
         expect(cadence.shouldAnalyze(at: 10), "la première frame doit être analysée")

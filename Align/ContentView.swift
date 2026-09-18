@@ -10,11 +10,17 @@ struct ContentView: View {
     @State private var isPreviewVisible = true
 
     var body: some View {
-        LiveCameraPane(
-            camera: appModel.camera,
-            resourceMonitor: resourceMonitor,
-            isPreviewVisible: isPreviewVisible
-        )
+        Group {
+            if isPreviewVisible {
+                LiveCameraPane(
+                    camera: appModel.camera,
+                    resourceMonitor: resourceMonitor,
+                    isPreviewVisible: true
+                )
+            } else {
+                BackgroundAnalysisPlaceholder()
+            }
+        }
             .frame(minWidth: 560, minHeight: 430)
             .background(AlignTheme.canvas)
             .onAppear {
@@ -78,6 +84,16 @@ struct ContentView: View {
                     isPreviewVisible = presentation.usesForegroundCadence
                 }
             }
+    }
+}
+
+/// Removes the preview layer and every high-frequency camera observer while
+/// Align is a background application. Analysis remains owned by AppModel and
+/// the full tree is recreated from the latest canonical state on activation.
+private struct BackgroundAnalysisPlaceholder: View {
+    var body: some View {
+        Color.clear
+            .accessibilityHidden(true)
     }
 }
 

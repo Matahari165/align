@@ -1,6 +1,7 @@
 @preconcurrency import AVFoundation
 import AppKit
 import Combine
+import CoreImage
 import CoreMedia
 import Foundation
 
@@ -1125,6 +1126,77 @@ nonisolated private enum PoseProcessingEvent: Sendable {
     case benchmarkOverlayVisibility(Bool, TimeInterval)
 }
 
+/// The camera can stay in its compact YUV format while the body model gets
+/// the BGRA input it requires. Only this small, bounded copy crosses the
+/// asynchronous worker boundary, so a full camera buffer is never retained
+/// for the duration of model inference.
+nonisolated private final class UpperBodyFramePreprocessor: @unchecked Sendable {
+    private let context = CIContext(options: [
+        .cacheIntermediates: false,
+        .useSoftwareRenderer: true
+    ])
+    private var pool: CVPixelBufferPool?
+    private var poolDimensions: (width: Int, height: Int)?
+
+    func makeCompactBGRA(from source: CVPixelBuffer) -> CVPixelBuffer? {
+        let sourceWidth = CVPixelBufferGetWidth(source)
+        let sourceHeight = CVPixelBufferGetHeight(source)
+        guard let dimensions = CompactBodyFramePolicy.dimensions(
+            sourceWidth: sourceWidth,
+            sourceHeight: sourceHeight
+        ) else { return nil }
+        if pool == nil || poolDimensions?.width != dimensions.width || poolDimensions?.height != dimensions.height {
+            pool = makePool(width: dimensions.width, height: dimensions.height)
+            poolDimensions = dimensions
+        }
+        guard let pool else { return nil }
+
+        var destination: CVPixelBuffer?
+        let auxiliary: [CFString: Any] = [
+            kCVPixelBufferPoolAllocationThresholdKey: 2
+        ]
+        guard CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(
+            kCFAllocatorDefault,
+            pool,
+            auxiliary as CFDictionary,
+            &destination
+        ) == kCVReturnSuccess, let destination else { return nil }
+
+        let scaleX = CGFloat(dimensions.width) / CGFloat(sourceWidth)
+        let scaleY = CGFloat(dimensions.height) / CGFloat(sourceHeight)
+        let image = CIImage(cvPixelBuffer: source).transformed(
+            by: CGAffineTransform(scaleX: scaleX, y: scaleY)
+        )
+        context.render(
+            image,
+            to: destination,
+            bounds: CGRect(x: 0, y: 0, width: dimensions.width, height: dimensions.height),
+            colorSpace: CGColorSpaceCreateDeviceRGB()
+        )
+        return destination
+    }
+
+    private func makePool(width: Int, height: Int) -> CVPixelBufferPool? {
+        let poolAttributes: [CFString: Any] = [
+            kCVPixelBufferPoolMinimumBufferCountKey: 1
+        ]
+        let bufferAttributes: [CFString: Any] = [
+            kCVPixelBufferWidthKey: width,
+            kCVPixelBufferHeightKey: height,
+            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferIOSurfacePropertiesKey: [:]
+        ]
+        var newPool: CVPixelBufferPool?
+        guard CVPixelBufferPoolCreate(
+            kCFAllocatorDefault,
+            poolAttributes as CFDictionary,
+            bufferAttributes as CFDictionary,
+            &newPool
+        ) == kCVReturnSuccess else { return nil }
+        return newPool
+    }
+}
+
 /// Requête upper-body immuable au moment où la frame entre dans le worker.
 /// Le visage apparié et l'epoch de cible sont capturés ici : le retour du
 /// modèle ne doit jamais relire le visage courant d'une frame ultérieure.
@@ -1346,7 +1418,12 @@ nonisolated private final class CameraSessionRuntime: @unchecked Sendable {
         var addedOutput: AVCaptureOutput?
 
         do {
-            session.sessionPreset = session.canSetSessionPreset(.hd1280x720) ? .hd1280x720 : .medium
+            let compactPreset = AVCaptureSession.Preset(
+                rawValue: "AVCaptureSessionPreset960x540"
+            )
+            session.sessionPreset = session.canSetSessionPreset(compactPreset)
+                ? compactPreset
+                : .medium
 
             guard let camera = AVCaptureDevice.default(for: .video) else {
                 throw CameraError.cameraUnavailable
@@ -1361,6 +1438,30 @@ nonisolated private final class CameraSessionRuntime: @unchecked Sendable {
             addedInput = input
 
             try camera.lockForConfiguration()
+            defer { camera.unlockForConfiguration() }
+            let activeSupportsTwentyFPS = camera.activeFormat.videoSupportedFrameRateRanges.contains {
+                $0.minFrameRate <= CameraCaptureRatePolicy.targetFramesPerSecond &&
+                    $0.maxFrameRate >= CameraCaptureRatePolicy.targetFramesPerSecond
+            }
+            if !activeSupportsTwentyFPS {
+                let formatCandidates = camera.formats.enumerated().map { index, format in
+                    let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+                    let supportsTwentyFPS = format.videoSupportedFrameRateRanges.contains {
+                        $0.minFrameRate <= CameraCaptureRatePolicy.targetFramesPerSecond &&
+                            $0.maxFrameRate >= CameraCaptureRatePolicy.targetFramesPerSecond
+                    }
+                    return CameraFormatCandidate(
+                        index: index,
+                        width: dimensions.width,
+                        height: dimensions.height,
+                        supportsTwentyFPS: supportsTwentyFPS
+                    )
+                }
+                if let selectedIndex = CameraResolutionPolicy.preferredIndex(in: formatCandidates),
+                   camera.formats.indices.contains(selectedIndex) {
+                    camera.activeFormat = camera.formats[selectedIndex]
+                }
+            }
             let supportedRanges = camera.activeFormat.videoSupportedFrameRateRanges.map {
                 (minimum: $0.minFrameRate, maximum: $0.maxFrameRate)
             }
@@ -1370,12 +1471,18 @@ nonisolated private final class CameraSessionRuntime: @unchecked Sendable {
                 camera.activeVideoMinFrameDuration = frameDuration
                 camera.activeVideoMaxFrameDuration = frameDuration
             }
-            camera.unlockForConfiguration()
 
             let output = AVCaptureVideoDataOutput()
             output.alwaysDiscardsLateVideoFrames = true
+            let compactPixelFormats: [OSType] = [
+                kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+                kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+            ]
+            let selectedPixelFormat = compactPixelFormats.first {
+                output.availableVideoPixelFormatTypes.contains($0)
+            } ?? kCVPixelFormatType_32BGRA
             output.videoSettings = [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+                kCVPixelBufferPixelFormatTypeKey as String: selectedPixelFormat
             ]
             output.setSampleBufferDelegate(sampleDelegate, queue: sampleQueue)
 
@@ -1424,6 +1531,7 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     private static let legacyPersonalRuleVersion = "rich-v3"
 
     private let detector = PoseDetector()
+    private let upperBodyFramePreprocessor = UpperBodyFramePreprocessor()
     // Exactly one upper-body engine lives on the worker queue. Switching mode
     // destroys the previous model before activating the replacement.
     private lazy var upperBodyInferenceWorker = UpperBodyInferenceWorker(
@@ -1848,6 +1956,20 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
+        autoreleasepool {
+            processCapturedSample(
+                output,
+                sampleBuffer: sampleBuffer,
+                connection: connection
+            )
+        }
+    }
+
+    private func processCapturedSample(
+        _ output: AVCaptureOutput,
+        sampleBuffer: CMSampleBuffer,
+        connection: AVCaptureConnection
+    ) {
         if frameLivenessGate.claim() {
             onFrameLiveness(livenessEpoch)
         }
@@ -1912,13 +2034,6 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                         ? .sameFrameFace : .recentFace
                 )
             }
-            let frame = UpperBodyFrame(
-                pixelBuffer: pixelBuffer,
-                capturedAt: capturedAt,
-                sampleID: upperBodySampleID,
-                generation: UInt64(generation.activationID),
-                regionOfInterest: frameROI
-            )
             // Keep a valid framing context even when a face anchor is stale
             // or malformed. The engine will then choose its bounded
             // full-frame fallback; rejecting the whole sample here would
@@ -1930,6 +2045,20 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                 upperBodyLastStatus = "rejected:invalid-context"
                 return
             }
+            guard let compactPixelBuffer = upperBodyFramePreprocessor.makeCompactBGRA(
+                from: pixelBuffer
+            ) else {
+                upperBodyLastRejectionReason = "compact-copy-failed"
+                upperBodyLastStatus = "rejected:compact-copy-failed"
+                return
+            }
+            let frame = UpperBodyFrame(
+                pixelBuffer: compactPixelBuffer,
+                capturedAt: capturedAt,
+                sampleID: upperBodySampleID,
+                generation: UInt64(generation.activationID),
+                regionOfInterest: frameROI
+            )
             let request = UpperBodyInferenceRequest(
                 frame: frame,
                 poseGeneration: generation,

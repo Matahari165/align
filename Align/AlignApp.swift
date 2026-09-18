@@ -203,8 +203,10 @@ struct AlignApp: App {
         .defaultSize(width: 760, height: 560)
 
         Window("Statistiques", id: "statistics") {
-            StatisticsView(history: appModel.history) {
-                NSApp.keyWindow?.close()
+            MemoryAwareWindowContent {
+                StatisticsView(history: appModel.history) {
+                    NSApp.keyWindow?.close()
+                }
             }
             .tint(AlignTheme.accent)
             .preferredColorScheme(.dark)
@@ -212,8 +214,10 @@ struct AlignApp: App {
         .defaultSize(width: 720, height: 560)
 
         Window("Réglages", id: "settings") {
-            SettingsView(appModel: appModel, camera: appModel.camera) {
-                NSApp.keyWindow?.close()
+            MemoryAwareWindowContent {
+                SettingsView(appModel: appModel, camera: appModel.camera) {
+                    NSApp.keyWindow?.close()
+                }
             }
             .tint(AlignTheme.accent)
             .preferredColorScheme(.dark)
@@ -226,5 +230,28 @@ struct AlignApp: App {
             StatusMenuLabel(camera: appModel.camera)
         }
         .menuBarExtraStyle(.menu)
+    }
+}
+
+/// Window scenes can outlive their visible NSWindow. Keep only a minimal
+/// reader mounted while the application is inactive so forms and statistics
+/// release their SwiftUI/AttributeGraph storage.
+private struct MemoryAwareWindowContent<Content: View>: View {
+    @State private var presentsContent = false
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        Group {
+            if presentsContent {
+                content()
+            } else {
+                Color.clear.accessibilityHidden(true)
+            }
+        }
+        .background {
+            WindowPresentationReader { presentation in
+                presentsContent = presentation.usesForegroundCadence
+            }
+        }
     }
 }

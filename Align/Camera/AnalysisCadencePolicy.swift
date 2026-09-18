@@ -33,6 +33,64 @@ nonisolated enum CameraCaptureRatePolicy {
     }
 }
 
+nonisolated struct CameraFormatCandidate: Equatable, Sendable {
+    let index: Int
+    let width: Int32
+    let height: Int32
+    let supportsTwentyFPS: Bool
+}
+
+nonisolated enum CameraResolutionPolicy {
+    static let targetWidth: Int32 = 960
+    static let targetHeight: Int32 = 540
+
+    /// Chooses the largest format at or below 960×540 that still sustains
+    /// 20 fps. If the camera exposes no smaller compatible format, retain the
+    /// closest 20 fps format rather than silently reducing frame cadence.
+    static func preferredIndex(in candidates: [CameraFormatCandidate]) -> Int? {
+        let capable = candidates.filter {
+            $0.supportsTwentyFPS && $0.width > 0 && $0.height > 0
+        }
+        let bounded = capable.filter {
+            $0.width <= targetWidth && $0.height <= targetHeight
+        }
+        if let selected = bounded.max(by: { pixelCount($0) < pixelCount($1) }) {
+            return selected.index
+        }
+        let targetPixels = Int64(targetWidth) * Int64(targetHeight)
+        return capable.min {
+            abs(pixelCount($0) - targetPixels) < abs(pixelCount($1) - targetPixels)
+        }?.index
+    }
+
+    private static func pixelCount(_ candidate: CameraFormatCandidate) -> Int64 {
+        Int64(candidate.width) * Int64(candidate.height)
+    }
+}
+
+nonisolated enum CompactBodyFramePolicy {
+    static let maximumWidth = 640
+    static let maximumHeight = 360
+
+    /// Fits the complete camera image inside the inference budget without
+    /// changing its aspect ratio. The full field of view is preserved so the
+    /// body detector does not lose shoulders near the frame edges.
+    static func dimensions(sourceWidth: Int, sourceHeight: Int) -> (width: Int, height: Int)? {
+        guard sourceWidth > 0, sourceHeight > 0 else { return nil }
+        let scale = min(
+            1,
+            min(
+                Double(maximumWidth) / Double(sourceWidth),
+                Double(maximumHeight) / Double(sourceHeight)
+            )
+        )
+        return (
+            width: max(1, Int((Double(sourceWidth) * scale).rounded(.down))),
+            height: max(1, Int((Double(sourceHeight) * scale).rounded(.down)))
+        )
+    }
+}
+
 nonisolated enum VisionAnalysisUnit: String, Sendable {
     case upperBody
     case face
