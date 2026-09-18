@@ -236,6 +236,7 @@ nonisolated struct UpperBodyEngineOutput: Equatable, Sendable {
 /// Scalar-only engine evidence for Diagnostics. It never changes point
 /// validity and never retains an image, tensor or coordinate array.
 nonisolated struct UpperBodyEngineDiagnostics: Equatable, Sendable {
+    let usedCoreML: Bool
     let validLandmarkCount: Int
     let simCCMinimum: Float?
     let simCCMaximum: Float?

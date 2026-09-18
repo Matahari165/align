@@ -47,6 +47,9 @@ nonisolated final class RTMPoseUpperBodyAdapter: UpperBodyPoseEngine, @unchecked
         runner = AlignRTMPoseCreate(
             modelURL.path, runtimeURL.path, useCoreML ? 1 : 0
         )
+        if runner == nil, useCoreML {
+            runner = AlignRTMPoseCreate(modelURL.path, runtimeURL.path, 0)
+        }
     }
 
     func analyze(_ frame: UpperBodyFrame) -> UpperBodyEngineOutput {
@@ -113,6 +116,7 @@ nonisolated final class RTMPoseUpperBodyAdapter: UpperBodyPoseEngine, @unchecked
         }
 
         let diagnostics = UpperBodyEngineDiagnostics(
+            usedCoreML: native.used_coreml != 0,
             validLandmarkCount: max(0, Int(native.valid_count)),
             simCCMinimum: finite(native.simcc_min),
             simCCMaximum: finite(native.simcc_max),

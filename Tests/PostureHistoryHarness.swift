@@ -205,6 +205,10 @@ private enum PostureHistoryHarness {
         await MainActor.run {
             queuedController.enqueue(delivery("queued-before-quit"), now: day)
         }
+        for _ in 0..<4 { await Task.yield() }
+        let beforeFlush = await store.load()
+        expect(beforeFlush == .empty,
+               "une observation doit rester en mémoire avant la sauvegarde horaire")
         await queuedController.flushPending()
         if case .loaded(let queuedDatabase) = await store.load() {
             expect(queuedDatabase.buckets.reduce(0) { $0 + $1.notificationCount } == 1,

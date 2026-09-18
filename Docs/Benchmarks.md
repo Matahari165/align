@@ -4,13 +4,28 @@ Ce fichier conserve uniquement des mesures agrégées. Aucune image, vidéo ou c
 
 ## Protocole always-on — 5 septembre 2026
 
-La politique actuelle vise une capture à 20 images/s, avec analyse visage +
-mains à 10 Hz et RTMPose à 1 Hz hors calibration. La calibration conserve
+La politique actuelle vise une capture à 20 images/s, avec analyse visage à
+10 Hz, mains à 2 Hz et RTMPose à 1 Hz après un mouvement puis 0,2 Hz au repos. La calibration conserve
 RTMPose à 2 Hz pour rassembler sa référence sans ralentissement. Les analyses
 ne sont pas réduites par ce changement de capture : vingt images/s
 permettent un rythme régulier de deux images par échéance faciale et
 conservent la qualité temporelle des signaux. La segmentation reste réservée
 au benchmark.
+
+L'affichage des overlays et indicateurs est plafonné à 4 Hz sans réduire les
+cadences d'analyse ni d'alerte. L'aperçu vidéo est déconnecté lorsque la fenêtre
+n'est pas réellement visible. RTMPose reste sur le chemin CPU vérifié : le test
+Core ML/Neural Engine est désactivé, car le fournisseur actuel provoque une
+exception système avant qu'un repli automatique soit possible. Il est déchargé après
+120 secondes sans visage. L'historique reste agrégé en mémoire, puis est
+publié et sauvegardé au maximum une fois par heure et systématiquement lors de
+la fermeture normale de l'application.
+
+Le réglage « Analyse du corps » permet de remplacer RTMPose-M par BlazePose
+Lite pendant l'exécution. Le moteur précédent est détruit avant l'activation du
+suivant : les deux modèles ne restent jamais chargés ensemble. Le mode Léger
+réduit le coût attendu du corps, au prix d'épaules potentiellement moins stables.
+Le suivi Vision du visage et des clignements ne change pas.
 
 Mesure reproductible, à effectuer sur la même machine et en Release :
 

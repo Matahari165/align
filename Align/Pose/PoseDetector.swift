@@ -429,7 +429,10 @@ nonisolated final class PoseDetector: @unchecked Sendable {
     }()
     private let bodyRequest = VNDetectHumanBodyPoseRequest()
 
-    func detectFace(in pixelBuffer: CVPixelBuffer) throws -> FaceDetectionOutput {
+    func detectFace(
+        in pixelBuffer: CVPixelBuffer,
+        includeHands: Bool = true
+    ) throws -> FaceDetectionOutput {
         let orientation = CGImagePropertyOrientation.up
         let handler = VNImageRequestHandler(
             cvPixelBuffer: pixelBuffer,
@@ -437,13 +440,17 @@ nonisolated final class PoseDetector: @unchecked Sendable {
             options: [:]
         )
 
-        // The face and hand evidence share one Vision pass and one cadence.
-        // A separate hand callback would compete with the existing face/body
-        // budget and could pair landmarks from different frames.
-        try handler.perform([faceRequest, handRequest])
+        // When hands are due, both requests consume the exact same frame.
+        // Intermediate face-only calls preserve blink cadence without paying
+        // for hand landmarks that feed a multi-second contact signal.
+        if includeHands {
+            try handler.perform([faceRequest, handRequest])
+        } else {
+            try handler.perform([faceRequest])
+        }
 
         let faceResults = faceRequest.results ?? []
-        let handResults = handRequest.results ?? []
+        let handResults = includeHands ? (handRequest.results ?? []) : []
         let candidates = faceResults.map { observation in
             FaceDetectionCandidate(
                 boundingBox: observation.boundingBox,

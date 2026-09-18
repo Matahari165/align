@@ -72,7 +72,7 @@ nonisolated struct BlazePoseLiveResult: Sendable {
 /// LiteRT ne reçoit jamais deux inférences concurrentes.
 nonisolated final class BlazePoseLiveEngine: @unchecked Sendable {
     private static let shoulderThreshold: Float = 0.5
-    private static let maximumFilterGap: TimeInterval = BlazePoseOverlayFreshness.maxAge
+    private static let maximumFilterGap: TimeInterval = UpperBodyEngineSession.defaultMaximumAge
     let modelVariant: BlazePoseModelVariant?
     private var runner: OpaquePointer?
 

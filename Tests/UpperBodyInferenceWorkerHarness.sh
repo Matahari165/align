@@ -18,8 +18,10 @@ PY
   Align/Pose/PoseDetector.swift Align/Pose/FaceOrientation.swift \
   Align/Pose/FaceTargetContinuity.swift Align/Pose/FaceGeometrySignal.swift \
   Align/Pose/HandFaceVisionAdapter.swift \
+  Align/Pose/UpperBody/UpperBodyModelMode.swift \
   Align/Pose/UpperBody/UpperBodyTypes.swift Align/Pose/UpperBody/UpperBodyGeometry.swift \
   Align/Pose/UpperBody/UpperBodyEngineSession.swift Align/Posture/PostureSnapshot.swift \
+  Align/Posture/ScreenTimeTracker.swift \
   Align/Posture/HandFaceContactMetric.swift \
   Align/Posture/Observations/PostureObservationTypes.swift \
   Align/Posture/Observations/TemporalObservationMachine.swift \

@@ -1,7 +1,7 @@
 import Foundation
 
-/// Temporary adapter for the currently selected model. A future RTMPose
-/// adapter replaces this object; it never runs beside it in normal use.
+/// Lightweight upper-body adapter. The model selector replaces the active
+/// session, so BlazePose and RTMPose never run beside each other.
 nonisolated final class BlazePoseUpperBodyAdapter: UpperBodyPoseEngine, @unchecked Sendable {
     let descriptor: UpperBodyEngineDescriptor
     private let engine: BlazePoseLiveEngine

@@ -94,6 +94,7 @@ private enum UpperBodyEngineSessionHarness {
             locations: [CGPoint(x: 0.2, y: 0.2), CGPoint(x: 0.8, y: 0.2)],
             isClosed: false
         )], diagnostics: UpperBodyEngineDiagnostics(
+            usedCoreML: false,
             validLandmarkCount: 10,
             simCCMinimum: -0.25,
             simCCMaximum: 0.42,

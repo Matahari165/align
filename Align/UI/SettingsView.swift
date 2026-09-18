@@ -15,6 +15,24 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section("Analyse du corps") {
+                Picker("Modèle", selection: Binding(
+                    get: { camera.upperBodyModelMode },
+                    set: { camera.setUpperBodyModelMode($0) }
+                )) {
+                    ForEach(UpperBodyModelMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Text(camera.upperBodyModelMode.explanation)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Le visage et les clignements utilisent le même suivi dans les deux modes.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Sensibilité des recommandations") {
                 Picker("Sensibilité", selection: Binding(
                     get: { appModel.recommendationSensitivity },

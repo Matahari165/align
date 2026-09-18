@@ -33,10 +33,11 @@ case "$expected_variant" in
 esac
 
 test -f "$info_path"
-actual_variant=$(/usr/bin/plutil -extract BlazePoseModelVariant raw "$info_path")
-if [ "$actual_variant" != "$expected_variant" ]; then
-  echo "Bundle $expected_variant annoncé comme $actual_variant" >&2
-  exit 1
+if actual_variant=$(/usr/bin/plutil -extract BlazePoseModelVariant raw "$info_path" 2>/dev/null); then
+  if [ "$actual_variant" != "$expected_variant" ]; then
+    echo "Bundle $expected_variant annoncé comme $actual_variant" >&2
+    exit 1
+  fi
 fi
 
 test -f "$resources_path/LICENSE-Apache-2.0.txt"
@@ -56,6 +57,10 @@ verify_hash() {
 
 verify_hash "$resources_path/$detector_name" "$detector_hash"
 verify_hash "$resources_path/$landmarks_name" "$landmarks_hash"
+if [ "$expected_variant" = lite ]; then
+  test ! -e "$resources_path/pose_detector_full.tflite"
+  test ! -e "$resources_path/pose_landmarks_detector_full.tflite"
+fi
 
 runtime_id=$(/usr/bin/otool -D "$framework_path" | /usr/bin/tail -n 1)
 if [ "$runtime_id" != "@rpath/libLiteRt.dylib" ]; then

@@ -208,7 +208,7 @@ public final class SystemResourceMonitor: ObservableObject {
 
     public init(
         sampler: SystemResourceSampling = DarwinResourceSampler(),
-        sampleInterval: TimeInterval = 1.5,
+        sampleInterval: TimeInterval = 5,
         initialSnapshot: SystemResourceSnapshot = .init()
     ) {
         self.sampler = sampler

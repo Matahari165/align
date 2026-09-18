@@ -40,7 +40,7 @@ final class AppModel: ObservableObject {
     private var coverageLastRecorded: [PostureCoverageChannel: TimeInterval] = [:]
     private var coverageWallOffset: TimeInterval?
     private var screenTimeTracker = ScreenTimeTracker()
-    private let coverageFlushInterval: TimeInterval = 5
+    private let coverageFlushInterval: TimeInterval = 60
     private let faceCoverageMaximumGap: TimeInterval = 0.25
     private let bodyCoverageMaximumGap: TimeInterval = 1.5
     /// A delivered reminder stays visible briefly, then leaves Notification
@@ -106,7 +106,7 @@ final class AppModel: ObservableObject {
     }
 
     private func connectRuntime() {
-        camera.$postureObservations
+        camera.postureObservationsPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] snapshot in self?.consume(snapshot) }
             .store(in: &observationCancellables)

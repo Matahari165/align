@@ -7,9 +7,14 @@ struct ContentView: View {
     @State private var showsDiagnostics = false
     @State private var showsStatistics = false
     @StateObject private var resourceMonitor = SystemResourceMonitor()
+    @State private var isPreviewVisible = true
 
     var body: some View {
-        LiveCameraPane(camera: appModel.camera, resourceMonitor: resourceMonitor)
+        LiveCameraPane(
+            camera: appModel.camera,
+            resourceMonitor: resourceMonitor,
+            isPreviewVisible: isPreviewVisible
+        )
             .frame(minWidth: 560, minHeight: 430)
             .background(AlignTheme.canvas)
             .onAppear {
@@ -70,6 +75,7 @@ struct ContentView: View {
                         isWindowMiniaturized: presentation.isMiniaturized
                     )
                     resourceMonitor.setPresentationActive(presentation.usesForegroundCadence)
+                    isPreviewVisible = presentation.usesForegroundCadence
                 }
             }
     }
@@ -80,6 +86,7 @@ struct ContentView: View {
 private struct LiveCameraPane: View {
     @ObservedObject var camera: CameraCaptureService
     let resourceMonitor: SystemResourceMonitor
+    let isPreviewVisible: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -90,7 +97,8 @@ private struct LiveCameraPane: View {
                     session: camera.session,
                     overlay: camera.overlay,
                     diagnosticsEnabled: camera.upperBodyDevelopmentVisualizationEnabled,
-                    upperBodyDevelopmentOptions: camera.upperBodyDevelopmentOptions
+                    upperBodyDevelopmentOptions: camera.upperBodyDevelopmentOptions,
+                    isPreviewEnabled: isPreviewVisible
                 )
 
                 if camera.state != .running {

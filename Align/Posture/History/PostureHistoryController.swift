@@ -3,6 +3,8 @@ import Foundation
 
 @MainActor
 final class PostureHistoryController: ObservableObject {
+    static let persistenceInterval: TimeInterval = 3_600
+
     @Published private(set) var loadResult: PostureHistoryLoadResult = .loading
     @Published private(set) var database = PostureHistoryDatabase(buckets: [])
 
@@ -11,6 +13,8 @@ final class PostureHistoryController: ObservableObject {
     private var loadTask: Task<PostureHistoryLoadResult, Never>?
     private var persistTail: Task<Bool, Never>?
     private var operationTail: Task<Void, Never>?
+    private var scheduledPersistence: Task<Void, Never>?
+    private var hasUnpersistedChanges = false
     /// Monotone tombstone for persistence.  A completion from a generation
     /// older than an erase may finish its I/O, but it must not republish stale
     /// state into the actor after the erase has completed.
@@ -39,8 +43,7 @@ final class PostureHistoryController: ObservableObject {
         await loadIfNeeded()
         guard generation == persistenceGeneration else { return }
         accumulator.ingest(observation, now: now)
-        database = accumulator.database
-        await persist()
+        schedulePersistence()
     }
 
     func recordCoverage(
@@ -52,7 +55,7 @@ final class PostureHistoryController: ObservableObject {
         await loadIfNeeded()
         guard generation == persistenceGeneration else { return }
         accumulator.ingestCoverage(channel: channel, interval: interval, now: now)
-        await persist()
+        schedulePersistence()
     }
 
     func recordControlEvent(_ event: PostureHistoryControlEvent, now: Date = Date()) async {
@@ -60,7 +63,7 @@ final class PostureHistoryController: ObservableObject {
         await loadIfNeeded()
         guard generation == persistenceGeneration else { return }
         accumulator.recordControlEvent(event, now: now)
-        await persist()
+        schedulePersistence()
     }
 
     func recordScreenBreakEvent(_ event: ScreenBreakEvent, now: Date = Date()) async {
@@ -68,8 +71,7 @@ final class PostureHistoryController: ObservableObject {
         await loadIfNeeded()
         guard generation == persistenceGeneration else { return }
         accumulator.recordScreenBreakEvent(event, now: now)
-        database = accumulator.database
-        await persist()
+        schedulePersistence()
     }
 
     func enqueueScreenBreakEvent(_ event: ScreenBreakEvent, now: Date = Date()) {
@@ -121,6 +123,9 @@ final class PostureHistoryController: ObservableObject {
 
     func flushPending() async {
         if let operationTail { await operationTail.value }
+        scheduledPersistence?.cancel()
+        scheduledPersistence = nil
+        if hasUnpersistedChanges { await persist() }
         if let persistTail { _ = await persistTail.value }
     }
 
@@ -129,6 +134,9 @@ final class PostureHistoryController: ObservableObject {
         let eraseGeneration = persistenceGeneration
         let queuedOperation = operationTail
         operationTail = nil
+        scheduledPersistence?.cancel()
+        scheduledPersistence = nil
+        hasUnpersistedChanges = false
         queuedOperation?.cancel()
         if let queuedOperation { await queuedOperation.value }
         if let loadTask {
@@ -160,6 +168,8 @@ final class PostureHistoryController: ObservableObject {
 
 
     private func persist() async {
+        guard hasUnpersistedChanges else { return }
+        hasUnpersistedChanges = false
         database = accumulator.database
         let snapshot = database
         let generation = persistenceGeneration
@@ -179,7 +189,26 @@ final class PostureHistoryController: ObservableObject {
         if success {
             loadResult = .loaded(database)
         } else {
+            hasUnpersistedChanges = true
             loadResult = .unavailable
+        }
+    }
+
+    private func schedulePersistence() {
+        hasUnpersistedChanges = true
+        guard scheduledPersistence == nil else { return }
+        let generation = persistenceGeneration
+        scheduledPersistence = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(
+                    nanoseconds: UInt64(Self.persistenceInterval * 1_000_000_000)
+                )
+            } catch {
+                return
+            }
+            guard let self, generation == self.persistenceGeneration else { return }
+            self.scheduledPersistence = nil
+            await self.persist()
         }
     }
 }

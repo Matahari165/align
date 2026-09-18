@@ -21,6 +21,16 @@ nonisolated private final class RTMPoseUpperBodyAdapter: UpperBodyPoseEngine, @u
         return .init(state: .detected, points: [], contours: [])
     }
 }
+nonisolated private enum BlazePoseModelVariant { case lite }
+nonisolated private final class BlazePoseUpperBodyAdapter: UpperBodyPoseEngine, @unchecked Sendable {
+    let descriptor = UpperBodyEngineDescriptor(id: "fake-lite", displayName: "Fake Lite", version: "1", runtime: "test")
+    init(modelVariant: BlazePoseModelVariant) {}
+    func activate(generation: UInt64) {}
+    func deactivate() {}
+    func analyze(_ frame: UpperBodyFrame) -> UpperBodyEngineOutput {
+        .init(state: .detected, points: [], contours: [])
+    }
+}
 @main
 private enum WorkerTest {
     static func expect(_ condition: Bool, _ message: String) { if !condition { fatalError(message) } }
@@ -33,7 +43,7 @@ private enum WorkerTest {
                      contextKey: "camera", targetEpoch: 1, face: nil)
     }
     static func main() {
-        let worker = UpperBodyInferenceWorker { workerProbe.receive($0) }
+        let worker = UpperBodyInferenceWorker(modelMode: .precise) { workerProbe.receive($0) }
         worker.setActive(true, generation: 1)
         let sampleQueue = DispatchQueue(label: "test.capture")
         let accepted = DispatchSemaphore(value: 0)

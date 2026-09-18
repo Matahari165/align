@@ -112,6 +112,29 @@ private enum AnalysisCadenceHarness {
         cadence.reset()
         expect(cadence.shouldAnalyze(at: 20), "la reprise après pause doit accepter la première frame")
 
+        var handCadence = HandAnalysisCadenceController()
+        expect(handCadence.shouldAnalyze(at: 20), "les mains doivent accepter la première frame")
+        expect(!handCadence.shouldAnalyze(at: 20.49), "les mains ne doivent pas dépasser 2 Hz")
+        expect(handCadence.shouldAnalyze(at: 20.5), "les mains doivent reprendre à 2 Hz")
+
+        var adaptiveBody = AdaptiveUpperBodyCadenceController()
+        expect(approximately(adaptiveBody.interval(at: 0, isCalibrating: false), 5),
+               "un corps immobile doit utiliser le contrôle toutes les 5 secondes")
+        adaptiveBody.observeFace(
+            bounds: CGRect(x: 0.40, y: 0.30, width: 0.20, height: 0.30),
+            at: 1
+        )
+        expect(approximately(adaptiveBody.interval(at: 2, isCalibrating: false), 1),
+               "le premier visage fiable doit réveiller l'analyse corporelle")
+        expect(approximately(adaptiveBody.interval(at: 12, isCalibrating: false), 5),
+               "l'analyse corporelle doit ralentir après le mouvement")
+        adaptiveBody.observeFace(
+            bounds: CGRect(x: 0.44, y: 0.30, width: 0.20, height: 0.30),
+            at: 13
+        )
+        expect(approximately(adaptiveBody.interval(at: 14, isCalibrating: false), 1),
+               "un nouveau mouvement du visage doit réveiller le corps")
+
         var upperBodyCadence = UpperBodyCadenceController()
         expect(upperBodyCadence.isDue(at: 30, interval: 1), "upperBody doit accepter la première frame")
         upperBodyCadence.recordAttempt(at: 30)

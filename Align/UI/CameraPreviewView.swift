@@ -7,6 +7,7 @@ struct CameraPreviewView: NSViewRepresentable {
     let overlay: PoseOverlay
     let diagnosticsEnabled: Bool
     let upperBodyDevelopmentOptions: UpperBodyDevelopmentOptions
+    let isPreviewEnabled: Bool
 
     func makeNSView(context: Context) -> CameraPreviewNSView {
         CameraPreviewNSView(session: session)
@@ -16,7 +17,8 @@ struct CameraPreviewView: NSViewRepresentable {
         nsView.update(
             overlay: overlay,
             diagnosticsEnabled: diagnosticsEnabled,
-            upperBodyDevelopmentOptions: upperBodyDevelopmentOptions
+            upperBodyDevelopmentOptions: upperBodyDevelopmentOptions,
+            isPreviewEnabled: isPreviewEnabled
         )
     }
 }
@@ -167,11 +169,13 @@ final class CameraPreviewNSView: NSView {
     func update(
         overlay: PoseOverlay,
         diagnosticsEnabled: Bool,
-        upperBodyDevelopmentOptions: UpperBodyDevelopmentOptions
+        upperBodyDevelopmentOptions: UpperBodyDevelopmentOptions,
+        isPreviewEnabled: Bool
     ) {
         // The preview connection may be created only after the capture input is
         // configured. Reassert the single-mirror contract on SwiftUI updates.
         configureUnmirroredPreviewConnection()
+        previewLayer.connection?.isEnabled = isPreviewEnabled
 
         let renderedOverlay = PoseOverlayRenderSelection.select(
             overlay,

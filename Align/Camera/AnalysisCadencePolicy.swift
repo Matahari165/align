@@ -202,6 +202,55 @@ nonisolated struct UpperBodyCadenceController: Sendable {
     mutating func reset() { lastAttemptUptime = nil }
 }
 
+/// Keeps body analysis responsive after visible motion, then settles to a
+/// low-cost heartbeat. Face landmarks already run for blink detection, so
+/// this controller adds no second motion model.
+nonisolated struct AdaptiveUpperBodyCadenceController: Sendable {
+    static let activeInterval: TimeInterval = 1.0
+    static let restingInterval: TimeInterval = 5.0
+    static let motionBurstDuration: TimeInterval = 10.0
+    static let centerMovementThreshold: CGFloat = 0.015
+    static let sizeChangeThreshold = 0.06
+
+    private(set) var lastFaceBounds: CGRect?
+    private(set) var activeUntil: TimeInterval?
+
+    mutating func observeFace(bounds: CGRect, at uptime: TimeInterval) {
+        guard bounds.isFiniteAndNonEmpty, uptime.isFinite else { return }
+        defer { lastFaceBounds = bounds }
+        guard let previous = lastFaceBounds else {
+            activeUntil = uptime + Self.motionBurstDuration
+            return
+        }
+        let centerDelta = hypot(bounds.midX - previous.midX, bounds.midY - previous.midY)
+        let previousArea = previous.width * previous.height
+        let area = bounds.width * bounds.height
+        let sizeDelta = previousArea > 0 ? abs(area - previousArea) / previousArea : 1
+        if centerDelta >= Self.centerMovementThreshold || sizeDelta >= Self.sizeChangeThreshold {
+            activeUntil = uptime + Self.motionBurstDuration
+        }
+    }
+
+    func interval(at uptime: TimeInterval, isCalibrating: Bool) -> TimeInterval {
+        if isCalibrating { return 0.5 }
+        return activeUntil.map { uptime < $0 } == true
+            ? Self.activeInterval
+            : Self.restingInterval
+    }
+
+    mutating func reset() {
+        lastFaceBounds = nil
+        activeUntil = nil
+    }
+}
+
+nonisolated private extension CGRect {
+    var isFiniteAndNonEmpty: Bool {
+        minX.isFinite && minY.isFinite && width.isFinite && height.isFinite &&
+            width > 0 && height > 0
+    }
+}
+
 nonisolated enum UpperBodyROISpikeStage: Sendable, Equatable {
     case humanRectangle
     case fullFrameBody
@@ -330,6 +379,25 @@ nonisolated struct AnalysisCadenceController: Sendable {
 
     mutating func recordAnalysis(at uptime: TimeInterval) {
         lastAnalysisUptime = uptime
+    }
+
+    mutating func reset() {
+        lastAnalysisUptime = nil
+    }
+}
+
+/// Hand-to-face contact persists for seconds, so hand landmarks do not need
+/// the 10 Hz cadence reserved for short eye blinks.
+nonisolated struct HandAnalysisCadenceController: Sendable {
+    static let interval: TimeInterval = 0.5
+    private(set) var lastAnalysisUptime: TimeInterval?
+
+    mutating func shouldAnalyze(at uptime: TimeInterval) -> Bool {
+        guard lastAnalysisUptime.map({ uptime - $0 >= Self.interval }) ?? true else {
+            return false
+        }
+        lastAnalysisUptime = uptime
+        return true
     }
 
     mutating func reset() {
