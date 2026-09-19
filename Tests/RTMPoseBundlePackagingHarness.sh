@@ -22,13 +22,8 @@ test -f "$frameworks/libonnxruntime.1.19.2.dylib"
 model_hash=$(shasum -a 256 "$resources/rtmpose-m-halpe26-end2end.onnx" | awk '{print $1}')
 test "$model_hash" = "26f3a19e61304a600dfb82d1001d41d24343b89fc70a33ffc84657e0b0bf2ecf"
 
-test ! -e "$frameworks/libLiteRt.dylib"
-test ! -e "$resources/pose_detector.tflite"
-test ! -e "$resources/pose_landmarks_detector.tflite"
-if otool -L "$binary" | grep -q 'libLiteRt'; then
-  echo "RTMPoseBundlePackagingHarness: FAIL — dépendance LiteRT résiduelle" >&2
-  exit 1
-fi
+# BlazePose Lite is now an explicit alternative, not an accidental fallback.
+test -f "$frameworks/libLiteRt.dylib"
 if ! strings "$binary" | grep -q 'rtmpose-m-halpe26'; then
   echo "RTMPoseBundlePackagingHarness: FAIL — moteur RTMPose non identifiable" >&2
   exit 1
