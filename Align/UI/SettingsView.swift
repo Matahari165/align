@@ -62,7 +62,7 @@ struct SettingsView: View {
                     set: { appModel.setScreenBreakEnabled($0) }
                 ))
                 .accessibilityLabel("Activer la pause visuelle")
-                Text("Après un temps d’écran continu, tout l’écran se floute doucement avec un rappel et un compte à rebours, puis s’efface seul.")
+                Text("Après un temps d’écran continu, tout l’écran se floute doucement avec un compte à rebours, puis s’efface seul.")
                     .font(.caption).foregroundStyle(.secondary)
                 Stepper(
                     "Écran continu : \(Int(appModel.screenBreakSettings.workMinutes)) min",
@@ -87,11 +87,6 @@ struct SettingsView: View {
                 Toggle("Écran flouté plein-écran", isOn: Binding(
                     get: { appModel.screenBreakSettings.usesFullscreenOverlay },
                     set: { appModel.setScreenBreakUsesFullscreenOverlay($0) }
-                ))
-                .disabled(!appModel.screenBreakSettings.isEnabled)
-                Toggle("Notification en plus", isOn: Binding(
-                    get: { appModel.screenBreakSettings.sendsNotification },
-                    set: { appModel.setScreenBreakSendsNotification($0) }
                 ))
                 .disabled(!appModel.screenBreakSettings.isEnabled)
                 Button("Tester la pause plein-écran") {
