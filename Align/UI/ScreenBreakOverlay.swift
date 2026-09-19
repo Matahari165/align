@@ -3,76 +3,104 @@
 //  Align
 //
 //  Overlay plein-écran de pause visuelle : un panneau borderless par écran,
-//  affiché au niveau screenSaver avec un fondu doux. Aucun son, aucun
-//  diagnostic, aucune donnée sensible journalisée ou capturée.
+//  affiché au niveau screenSaver avec un fondu doux. Le fond est un vrai flou
+//  du bureau (NSVisualEffectView behindWindow) avec un texte blanc ombré,
+//  lisible sur n'importe quel arrière-plan. Aucun son, aucun diagnostic,
+//  aucune donnée sensible journalisée ou capturée.
 //
 
 import SwiftUI
 import AppKit
 import Combine
 
-/// Carte glass centrée affichée sur chaque écran pendant une pause visuelle.
+/// Contenu centré affiché sur chaque écran pendant une pause visuelle.
+/// Style Lookaway : pas de carte, texte blanc avec ombre portée sur le
+/// bureau flouté, horloge en haut, minuteur mm:ss au centre.
 struct ScreenBreakOverlayContent: View {
     /// Secondes entières restantes, affichées par le minuteur.
     let remainingSeconds: Int
-    /// Durée totale prévue de la pause, en secondes entières.
-    let totalSeconds: Int
-    /// Fraction écoulée de la pause, entre 0 et 1.
-    let progress: Double
+    /// Heure courante affichée en haut, format HH:mm.
+    let timeString: String
     /// Durée nominale de la pause rappelée dans le sous-titre.
     let breakSeconds: Int
     /// Action appelée quand l'utilisateur passe la pause.
     let onSkip: () -> Void
 
+    private var countdownText: String {
+        let clamped = max(0, remainingSeconds)
+        return String(format: "%02d:%02d", clamped / 60, clamped % 60)
+    }
+
     var body: some View {
         ZStack {
-            // Fond plein-écran : matériau + voile sombre léger pour lisibilité.
-            Rectangle().fill(.ultraThinMaterial)
-            Rectangle().fill(Color.black.opacity(0.35))
+            // Voile léger par-dessus le flou : aide la lisibilité sans
+            // masquer le bureau flouté derrière.
+            Color.black.opacity(0.18)
 
-            VStack(spacing: 16) {
-                Label("Pause visuelle", systemImage: "eye")
-                    .font(.headline)
-                    .foregroundStyle(AlignTheme.accent)
+            VStack(spacing: 0) {
+                HStack(spacing: 6) {
+                    Image(systemName: "clock")
+                    Text(timeString)
+                }
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(.white.opacity(0.85))
+                .shadow(color: .black.opacity(0.45), radius: 8, x: 0, y: 2)
+                .accessibilityLabel("Heure actuelle \(timeString)")
+                .padding(.top, 64)
+
+                Spacer(minLength: 0)
 
                 Text("It’s time to take a break.")
-                    .font(.largeTitle)
-                    .bold()
+                    .font(.system(size: 44, weight: .bold))
                     .multilineTextAlignment(.center)
-                    .foregroundStyle(AlignTheme.ivory)
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 2)
+                    .minimumScaleFactor(0.8)
+                    .frame(maxWidth: 640)
+                    .padding(.horizontal, 32)
+                    .padding(.top, 12)
 
-                Text("Regarde au loin pendant \(breakSeconds) secondes.")
-                    .foregroundStyle(.secondary)
+                Text("Fixez un point éloigné jusqu’à la fin du compte à rebours — \(breakSeconds) secondes.")
+                    .font(.system(size: 17))
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.white.opacity(0.85))
+                    .shadow(color: .black.opacity(0.45), radius: 8, x: 0, y: 2)
+                    .frame(maxWidth: 560)
+                    .padding(.horizontal, 32)
+                    .padding(.top, 12)
 
-                Text("\(remainingSeconds)s")
-                    .monospacedDigit()
-                    .font(.system(size: 64, weight: .bold))
-                    .foregroundStyle(AlignTheme.ivory)
+                Rectangle()
+                    .fill(.white.opacity(0.35))
+                    .frame(width: 120, height: 1)
+                    .accessibilityHidden(true)
+                    .padding(.top, 24)
+
+                Text(countdownText)
+                    .font(.system(size: 76, weight: .bold).monospacedDigit())
+                    .foregroundStyle(AlignTheme.accentSoft)
+                    .shadow(color: .black.opacity(0.5), radius: 12, x: 0, y: 3)
                     .accessibilityLabel("Pause visuelle, \(remainingSeconds) secondes restantes")
                     .accessibilityAddTraits(.updatesFrequently)
+                    .padding(.top, 20)
 
-                ProgressView(value: min(1, max(0, progress)))
-                    .frame(width: 280)
-                    .tint(AlignTheme.accent)
+                Spacer(minLength: 0)
 
-                Button("Passer la pause", action: onSkip)
-                    .buttonStyle(.borderedProminent)
-                    .tint(AlignTheme.accent)
-
-                Text("Échap pour passer")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                VStack(spacing: 6) {
+                    Button("Passer la pause", action: onSkip)
+                        .buttonStyle(.plain)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .underline()
+                        .shadow(color: .black.opacity(0.45), radius: 4, x: 0, y: 1)
+                    Text("Échap pour passer")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .shadow(color: .black.opacity(0.45), radius: 4, x: 0, y: 1)
+                }
+                .padding(.bottom, 44)
             }
-            .padding(32)
-            .background(
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(AlignTheme.elevated.opacity(0.9))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 20)
-                    .stroke(AlignTheme.hairline, lineWidth: 1)
-            )
         }
+        .background(Color.clear)
         .ignoresSafeArea()
     }
 }
@@ -81,8 +109,9 @@ struct ScreenBreakOverlayContent: View {
 ///
 /// Chaque `show` couvre les écrans présents à cet instant avec un panneau
 /// `NSPanel` borderless non activant au niveau `.screenSaver`, sans droit
-/// particulier (compatible sandbox). Le compte à rebours avance par pas de
-/// 0,25 s sans jamais bloquer le thread principal.
+/// particulier (compatible sandbox). Le flou est un effet compositeur
+/// (NSVisualEffectView behindWindow), sans capture d'écran. Le compte à
+/// rebours avance par pas de 0,25 s sans jamais bloquer le thread principal.
 @MainActor
 final class ScreenBreakOverlayController: ObservableObject {
     /// Durée du fondu d'apparition (transition douce exigée).
@@ -92,10 +121,15 @@ final class ScreenBreakOverlayController: ObservableObject {
 
     @Published private(set) var isPresented = false
     @Published var remainingSeconds: Int = 0
-    @Published var progress: Double = 0
+    @Published var timeString: String = ""
 
     private static let tickInterval: UInt64 = 250_000_000 // 0,25 s
     private static let escapeKeyCode: UInt16 = 53
+    private static let clockFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter
+    }()
 
     private var panels: [NSPanel] = []
     private var hostingViews: [NSHostingView<ScreenBreakOverlayContent>] = []
@@ -103,7 +137,6 @@ final class ScreenBreakOverlayController: ObservableObject {
     private var escapeMonitor: Any?
     private var screenChangeCancellable: AnyCancellable?
 
-    private var totalSeconds: TimeInterval = 0
     private var breakSecondsValue: Int = 0
     private var endDate = Date()
 
@@ -111,11 +144,10 @@ final class ScreenBreakOverlayController: ObservableObject {
     /// le minuteur est simplement relancé avec la nouvelle durée.
     func show(totalSeconds: TimeInterval) {
         guard totalSeconds > 0 else { return }
-        self.totalSeconds = totalSeconds
         breakSecondsValue = Int(ceil(totalSeconds))
         endDate = Date().addingTimeInterval(totalSeconds)
         remainingSeconds = breakSecondsValue
-        progress = 0
+        updateClock()
 
         if isPresented {
             refreshHostingViews()
@@ -186,8 +218,7 @@ final class ScreenBreakOverlayController: ObservableObject {
     private func makeContent() -> ScreenBreakOverlayContent {
         ScreenBreakOverlayContent(
             remainingSeconds: remainingSeconds,
-            totalSeconds: Int(ceil(totalSeconds)),
-            progress: progress,
+            timeString: timeString,
             breakSeconds: breakSecondsValue,
             onSkip: { [weak self] in
                 Task { @MainActor in self?.skip() }
@@ -209,8 +240,26 @@ final class ScreenBreakOverlayController: ObservableObject {
         panel.hidesOnDeactivate = false
         panel.hasShadow = false
         panel.isMovable = false
+        // Vrai flou du bureau en direct : effet compositeur derrière la
+        // fenêtre, sans capture d'écran ni entitlement. `state: .active`
+        // est obligatoire car un panel non activant ne devient jamais key.
+        let effect = NSVisualEffectView(frame: NSRect(origin: .zero, size: screen.frame.size))
+        effect.material = .fullScreenUI
+        effect.blendingMode = .behindWindow
+        effect.state = .active
+        effect.autoresizingMask = [.width, .height]
+        panel.contentView = effect
         let hostingView = NSHostingView(rootView: makeContent())
-        panel.contentView = hostingView
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = NSColor.clear.cgColor
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        effect.addSubview(hostingView)
+        NSLayoutConstraint.activate([
+            hostingView.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
+            hostingView.trailingAnchor.constraint(equalTo: effect.trailingAnchor),
+            hostingView.topAnchor.constraint(equalTo: effect.topAnchor),
+            hostingView.bottomAnchor.constraint(equalTo: effect.bottomAnchor),
+        ])
         return (panel, hostingView)
     }
 
@@ -235,16 +284,20 @@ final class ScreenBreakOverlayController: ObservableObject {
         }
     }
 
+    private func updateClock() {
+        timeString = Self.clockFormatter.string(from: Date())
+    }
+
     private func tick() {
         let remaining = endDate.timeIntervalSince(Date())
         if remaining <= 0 {
             remainingSeconds = 0
-            progress = 1
+            updateClock()
             refreshHostingViews()
             hide()
         } else {
             remainingSeconds = Int(ceil(remaining))
-            progress = min(1, max(0, 1 - remaining / totalSeconds))
+            updateClock()
             refreshHostingViews()
         }
     }

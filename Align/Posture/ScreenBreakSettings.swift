@@ -6,20 +6,17 @@ nonisolated struct ScreenBreakSettings: Equatable, Codable, Sendable {
     var workMinutes: Double = 20
     var breakSeconds: Double = 20
     var usesFullscreenOverlay = true
-    var sendsNotification = true
 
     init(
         isEnabled: Bool = true,
         workMinutes: Double = 20,
         breakSeconds: Double = 20,
-        usesFullscreenOverlay: Bool = true,
-        sendsNotification: Bool = true
+        usesFullscreenOverlay: Bool = true
     ) {
         self.isEnabled = isEnabled
         self.workMinutes = Self.clampedWorkMinutes(workMinutes)
         self.breakSeconds = Self.clampedBreakSeconds(breakSeconds)
         self.usesFullscreenOverlay = usesFullscreenOverlay
-        self.sendsNotification = sendsNotification
     }
 
     /// Clamped work interval in seconds.

@@ -381,24 +381,12 @@ final class AppModel: ObservableObject {
         let eventDate = Date(timeIntervalSince1970: wallNow)
         switch action {
         case .remind:
-            let identifier = "align.screen-break.\(launchSessionID).\(Int(uptime * 1_000))"
             history.enqueueScreenBreakEvent(.init(date: eventDate, kind: .reminded))
-            // L'overlay plein-écran est la présentation principale : il floute
-            // tout l'écran avec un fondu doux et disparaît après la durée de
-            // pause avec son compte à rebours. La notification reste un
-            // secours quand l'overlay est désactivé.
+            // L'overlay plein-écran est la seule présentation : il floute
+            // tout l'écran avec un fondu doux et disparaît après la durée
+            // de pause avec son compte à rebours.
             if screenBreakSettings.usesFullscreenOverlay {
                 screenBreakOverlay.show(totalSeconds: screenBreakSettings.breakDuration)
-            }
-            if screenBreakSettings.sendsNotification {
-                let breakSeconds = Int(screenBreakSettings.breakDuration.rounded())
-                Task { @MainActor [weak self] in
-                    guard let self,
-                          await self.notificationService.deliverScreenBreakReminder(
-                            identifier: identifier,
-                            breakSeconds: breakSeconds
-                          ) else { return }
-                }
             }
         case .breakCompleted:
             history.enqueueScreenBreakEvent(.init(date: eventDate, kind: .completed))
@@ -438,12 +426,6 @@ final class AppModel: ObservableObject {
 
     func setScreenBreakUsesFullscreenOverlay(_ enabled: Bool) {
         screenBreakSettings.usesFullscreenOverlay = enabled
-        ScreenBreakSettingsStore().save(screenBreakSettings)
-        objectWillChange.send()
-    }
-
-    func setScreenBreakSendsNotification(_ enabled: Bool) {
-        screenBreakSettings.sendsNotification = enabled
         ScreenBreakSettingsStore().save(screenBreakSettings)
         objectWillChange.send()
     }
