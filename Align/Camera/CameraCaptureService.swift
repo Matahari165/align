@@ -1312,8 +1312,14 @@ nonisolated private final class UpperBodyInferenceWorker: @unchecked Sendable {
         switch mode {
         case .precise:
             RTMPoseUpperBodyAdapter()
+        case .nativeCoreML:
+            RTMPoseCoreMLAdapter(precision: .fp32)
+        case .compressedCoreML:
+            RTMPoseCoreMLAdapter(precision: .int8)
         case .lightweight:
             BlazePoseUpperBodyAdapter(modelVariant: .lite)
+        case .appleVision:
+            AppleVisionUpperBodyAdapter()
         }
     }
 }
@@ -1709,9 +1715,13 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
         latestUpperBodyOverlay = .empty
         upperBodyLastStatus = "changement-de-modèle"
         upperBodyLastRejectionReason = nil
-        upperBodyEngineID = mode == .precise
-            ? "rtmpose-m-halpe26"
-            : "blazepose-lite"
+        upperBodyEngineID = switch mode {
+        case .precise: "rtmpose-m-halpe26"
+        case .nativeCoreML: "rtmpose-coreml-fp32"
+        case .compressedCoreML: "rtmpose-coreml-int8"
+        case .lightweight: "blazepose-lite"
+        case .appleVision: "apple-vision-body"
+        }
     }
 
     func setActive(_ isActive: Bool, generation: PoseProcessingGeneration) {

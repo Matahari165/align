@@ -98,6 +98,12 @@ int AlignRTMPoseProjectPointWithContent(
 AlignRTMPosePoint AlignRTMPoseResultPointAt(const AlignRTMPoseResult *result,
                                             size_t index);
 
+/* Shared preprocessing for the native Core ML experiment. Caller owns a
+ * contiguous Float32 NCHW buffer of 3*256*192 elements. */
+int AlignRTMPoseBuildTensor(const uint8_t *bytes, size_t width, size_t height,
+                           size_t bytes_per_row, AlignRTMPoseNormalizedCrop crop,
+                           float *tensor);
+
 const char *AlignRTMPoseKeypointName(size_t index);
 const char *AlignRTMPoseLastError(const AlignRTMPoseRunner *runner);
 

@@ -195,6 +195,15 @@ static void build_tensor(const uint8_t *bytes, size_t width, size_t height,
   }
 }
 
+int AlignRTMPoseBuildTensor(const uint8_t *bytes, size_t width, size_t height,
+                           size_t bytes_per_row, AlignRTMPoseNormalizedCrop crop,
+                           float *tensor) {
+  if (bytes == NULL || tensor == NULL || width == 0 || height == 0 ||
+      bytes_per_row < width * 4 || !finite_crop(crop)) return 0;
+  build_tensor(bytes, width, height, bytes_per_row, crop, tensor);
+  return 1;
+}
+
 /* SimCCLabel's official get_simcc_maximum uses the raw maximum value. The
  * ONNX graph already emits the score representation consumed by that decoder;
  * applying a second softmax over 384/512 bins would shrink every confidence

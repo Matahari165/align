@@ -6,15 +6,17 @@ Align has accumulated several pose and signal experiments. This inventory keeps 
 
 | Experiment | Decision | Current role | Evidence boundary |
 | --- | --- | --- | --- |
-| RTMPose-M Halpe26 through ONNX Runtime 1.19.2 | **Selected in product code** | Sole configured upper-body engine for the product activation. | Source wiring and typed adapter contract are verified. A complete Release build and real camera verification remain pending in this checkout. |
+| RTMPose-M Halpe26 through ONNX Runtime 1.19.2 | **Default engine** | Remains the default and the quality baseline. | Source wiring and typed adapter contract are verified. |
 | Face-anchored RTMPose ROI with bounded fallback | **Adopted with guards** | Uses same-frame or recent admissible face context; falls back to a bounded crop only when the anchor is unavailable. | Admission and ROI harnesses cover geometry and freshness. The fallback is not itself a person detection. |
 | Apple Vision face landmarks and derived face geometry | **Adopted** | Supplies face observations, blink inputs, geometry proxies, and the upper-body ROI anchor. | Implemented in the local capture path. Signals remain 2D proxies and can become unavailable under poor framing or occlusion. |
 | Universal geometric posture reference | **Selected in product code** | Current posture rules use shared camera geometry and guarded signal availability rather than treating a personal calibration pose as a universal “correct” posture. | Signal and runtime harnesses exist; camera-real accuracy still needs a fresh protocol. |
-| BlazePose with LiteRT | **Retained as legacy** | Model/runtime assets, native bridge, and packaging/smoke harnesses remain for historical comparison and compatibility work. | Not in the active target path and never a silent RTMPose fallback. Existing checks describe a legacy bundle. |
+| BlazePose with LiteRT | **Selectable alternative** | Explicit lightweight body mode. | Never a silent RTMPose fallback; compare shoulders in real camera use. |
 | MediaPipe Pose Landmarker spike | **Rejected for product runtime** | Standalone Python research tool for comparing shoulder visibility and timing. | Dry-run passes without camera; the runtime's external telemetry behavior is incompatible with the local-only product boundary. |
 | Person segmentation | **Diagnostic only** | Explicit benchmark/visual experiment for silhouette quality. | Not continuously scheduled in the product loop; its cost and intermittency require a separate decision. |
-| Vision body detection comparison | **Diagnostic only** | Historical baseline and harness input. | It is not the current upper-body engine and should not be used to describe the active architecture. |
-| Core ML execution provider | **Not yet adopted** | Explicit opt-in in the adapter for future evaluation. | No public claim of Core ML performance or compatibility is made. |
+| Apple Vision 2D body | **Selectable experiment** | Replaces only body inference; face and blink tracking are unchanged. | Compile and API contract checked; real-camera quality and RAM need measurement. |
+| Native Core ML RTMPose FP32 | **Selectable experiment** | Runs the same weights without an active ONNX Runtime session. | Converted model and numerical output comparison pass; real-camera RAM/CPU and hardware placement remain unmeasured. |
+| Compressed Core ML RTMPose INT8 weights | **Selectable experiment, quality gate pending** | Keeps FP32 arithmetic while reducing stored weights. | Package generated; numerical drift requires real-camera shoulder/neck validation before recommending it. |
+| ONNX Runtime Core ML execution provider | **Separate fallback path** | Existing RTMPose adapter tries the provider and falls back to CPU. | It is not equivalent to the new native Core ML engine. |
 | Blink reference and reminder policy | **Adopted with safeguards** | Learns bounded local references and uses observation freshness, persistence, and cooldowns before reminders. | Pure state/policy harnesses exist; it is not a medical eye-health measurement. |
 
 ## Why RTMPose is the product engine
@@ -32,6 +34,19 @@ The legacy and research paths are useful for engineering work:
 They are kept separate so the portfolio can show iteration and rejection decisions without implying that every prototype is production code.
 
 ## Evidence and limits
+
+On 2026-09-19, the exact local ONNX model was converted to a native Core ML
+MLProgram (FP32) and a weight-only INT8 variant. The conversion script and
+numeric comparison are in `Tools/`. The FP32 model matched ONNX output bins
+on deterministic inputs. FP16 arithmetic was attempted and rejected because
+it displaced some SimCC peaks; the selectable experimental compression therefore
+uses INT8 weights with FP32 arithmetic. On one public demonstration image,
+the compressed model's two shoulder peaks differed by at most two SimCC bins
+and its neck peak did not move; other synthetic inputs showed larger drift.
+The local generated models are ignored
+by Git, as are the existing private ONNX weights. A compiled bundle or a
+synthetic-output comparison does not establish lower live RAM, actual Neural
+Engine use, or reliable posture tracking on the owner's camera.
 
 The repository contains focused harnesses for geometry, state transitions, frame admission, ROI mapping, presentation, and bundle packaging. The dependency-free Python dry-runs currently pass. None of these checks establishes end-to-end camera accuracy, user comfort, medical validity, or long-term resource usage.
 

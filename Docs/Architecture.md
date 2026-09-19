@@ -68,7 +68,9 @@ confidence-checked Halpe26 points
 typed observations and posture signals
 ```
 
-The engine descriptor is `rtmpose-m-halpe26`. The model is bundled at `Align/Pose/RTMPose/Models/rtmpose-m-halpe26-end2end.onnx`, and the CPU ONNX Runtime path is the configured default. The adapter contains no runtime fallback to BlazePose. A load or inference failure is surfaced as a technical error rather than silently changing model semantics.
+The default engine descriptor is `rtmpose-m-halpe26`. Its ONNX model is a private local asset at `Align/Pose/RTMPose/Models/rtmpose-m-halpe26-end2end.onnx`. The ONNX adapter tries the Core ML execution provider, then falls back to CPU if session creation fails. A load or inference failure does not silently switch to BlazePose.
+
+The model selector can replace this body engine with native Core ML RTMPose FP32, native Core ML with INT8-compressed weights, BlazePose Lite, or Apple Vision 2D body. Exactly one body engine is active at a time; the existing face and blink pipeline stays unchanged. Native Core ML models are generated locally from the private ONNX asset and are not tracked in Git. Experiments are not claims of reduced live memory until measured on the owner's camera.
 
 When the same-frame face ROI is missing or stale, the session may use a bounded full-frame fallback crop. That crop is only an input strategy; it is not evidence that a person exists. The model output still has to pass validity and confidence checks.
 
