@@ -51,3 +51,4 @@ coverage/
 # The RTMPose weight is kept outside the public repository. The setup script
 # verifies and copies the owner's local copy here immediately before a build.
 /Align/Pose/RTMPose/Models/rtmpose-m-halpe26-end2end.onnx
+/Align/Pose/RTMPose/Models/rtmpose-m-halpe26-native-*.mlpackage/

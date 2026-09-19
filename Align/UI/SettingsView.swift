@@ -20,15 +20,15 @@ struct SettingsView: View {
                     get: { camera.upperBodyModelMode },
                     set: { camera.setUpperBodyModelMode($0) }
                 )) {
-                    ForEach(UpperBodyModelMode.allCases) { mode in
+                    ForEach(UpperBodyModelMode.availableCases) { mode in
                         Text(mode.displayName).tag(mode)
                     }
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.menu)
                 Text(camera.upperBodyModelMode.explanation)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text("Le visage et les clignements utilisent le même suivi dans les deux modes.")
+                Text("Le visage et les clignements utilisent le même suivi dans tous les modes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

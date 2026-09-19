@@ -31,6 +31,24 @@ nonisolated private final class BlazePoseUpperBodyAdapter: UpperBodyPoseEngine, 
         .init(state: .detected, points: [], contours: [])
     }
 }
+nonisolated private final class RTMPoseCoreMLAdapter: UpperBodyPoseEngine, @unchecked Sendable {
+    enum Precision { case fp32, int8 }
+    let descriptor = UpperBodyEngineDescriptor(id: "fake-coreml", displayName: "Fake CoreML", version: "1", runtime: "test")
+    init(precision: Precision) {}
+    func activate(generation: UInt64) {}
+    func deactivate() {}
+    func analyze(_ frame: UpperBodyFrame) -> UpperBodyEngineOutput {
+        .init(state: .detected, points: [], contours: [])
+    }
+}
+nonisolated private final class AppleVisionUpperBodyAdapter: UpperBodyPoseEngine, @unchecked Sendable {
+    let descriptor = UpperBodyEngineDescriptor(id: "fake-vision", displayName: "Fake Vision", version: "1", runtime: "test")
+    func activate(generation: UInt64) {}
+    func deactivate() {}
+    func analyze(_ frame: UpperBodyFrame) -> UpperBodyEngineOutput {
+        .init(state: .detected, points: [], contours: [])
+    }
+}
 @main
 private enum WorkerTest {
     static func expect(_ condition: Bool, _ message: String) { if !condition { fatalError(message) } }
@@ -70,6 +88,16 @@ private enum WorkerTest {
         workerProbe.resume.signal()
         expect(workerProbe.delivered.wait(timeout: .now() + 1) == .success, "late completion delivered for rejection")
         expect(workerProbe.values().last?.result == nil && workerProbe.values().last?.rejectionReason == .postInferenceExpired, "expired inference never becomes a valid result")
+        for (mode, expectedID, sample) in [
+            (UpperBodyModelMode.nativeCoreML, "fake-coreml", UInt64(3)),
+            (.compressedCoreML, "fake-coreml", UInt64(4)),
+            (.appleVision, "fake-vision", UInt64(5))
+        ] {
+            worker.replaceEngine(with: mode, generation: 2, isActive: true)
+            expect(worker.submit(request(2, sample)), "switched engine admitted")
+            expect(workerProbe.delivered.wait(timeout: .now() + 1) == .success, "switched engine returns")
+            expect(workerProbe.values().last?.descriptor.id == expectedID, "selected engine runs alone")
+        }
         worker.setActive(false, generation: 2)
         print("UpperBodyInferenceWorkerHarness: OK (actual worker source, fake inference)")
     }

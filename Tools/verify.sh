@@ -38,13 +38,17 @@ if [ ! -d "$app_path" ]; then
 fi
 
 if [ "${ALIGN_SKIP_PRIVATE_MODEL:-0}" = "1" ]; then
-  if find "$app_path" -name 'rtmpose-m-halpe26-end2end.onnx' -print -quit | grep -q .; then
+  if find "$app_path" \( -name 'rtmpose-m-halpe26-end2end.onnx' -o -name 'rtmpose-m-halpe26-native-*.mlmodelc' -o -name 'rtmpose-m-halpe26-native-*.mlpackage' \) -print -quit | grep -q .; then
     echo "Le bundle public ne doit pas contenir le modèle RTMPose privé." >&2
     exit 1
   fi
 else
   echo "== RTMPose bundle =="
   Tests/RTMPoseBundlePackagingHarness.sh "$app_path"
+  if [ -d "$app_path/Contents/Resources/rtmpose-m-halpe26-native-fp32.mlmodelc" ] ||
+     [ -d "$app_path/Contents/Resources/rtmpose-m-halpe26-native-int8.mlmodelc" ]; then
+    sh Tests/RTMPoseCoreMLBundleHarness.sh "$app_path"
+  fi
 fi
 
 echo "== Upper-body inference worker =="
