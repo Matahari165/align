@@ -1324,7 +1324,7 @@ nonisolated private final class UpperBodyInferenceWorker: @unchecked Sendable {
     }
 }
 
-private extension UpperBodyEngineSessionDiagnostics {
+nonisolated private extension UpperBodyEngineSessionDiagnostics {
     static let empty = Self(
         attempts: 0, returnedResults: 0, inferenceResults: 0,
         partialResults: 0, rejected: 0, roiRejected: 0,
@@ -1540,13 +1540,21 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
     private let upperBodyFramePreprocessor = UpperBodyFramePreprocessor()
     // Exactly one upper-body engine lives on the worker queue. Switching mode
     // destroys the previous model before activating the replacement.
-    private lazy var upperBodyInferenceWorker = UpperBodyInferenceWorker(
-        modelMode: upperBodyModelMode
-    ) { [weak self] completion in
-        guard let self else { return }
-        self.sampleQueue.async { [weak self] in
-            self?.handleUpperBodyInference(completion)
+    private var _upperBodyInferenceWorker: UpperBodyInferenceWorker?
+    private var upperBodyInferenceWorker: UpperBodyInferenceWorker {
+        if let existing = _upperBodyInferenceWorker {
+            return existing
         }
+        let worker = UpperBodyInferenceWorker(
+            modelMode: upperBodyModelMode
+        ) { [weak self] completion in
+            guard let self else { return }
+            self.sampleQueue.async { [weak self] in
+                self?.handleUpperBodyInference(completion)
+            }
+        }
+        _upperBodyInferenceWorker = worker
+        return worker
     }
     private let humanRectangleDetector = HumanRectangleDetector()
     private let segmentationDetector = PersonSegmentationDetector()
@@ -2970,7 +2978,6 @@ nonisolated private final class PoseSampleBufferDelegate: NSObject, AVCaptureVid
                   current.generation == UInt64(scheduledGeneration.activationID),
                   current.sampleID == expectedSampleID,
                   current.capturedAt == expectedCapturedAt else { return }
-            let now = ProcessInfo.processInfo.systemUptime
             self.upperBodyCurrentResult = nil
             self.upperBodyLastStatus = UpperBodyEngineState.expired.rawValue
             self.upperBodyValidLandmarks = 0

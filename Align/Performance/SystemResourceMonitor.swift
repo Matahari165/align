@@ -12,7 +12,7 @@ public struct SystemResourceSnapshot: Equatable, Sendable {
     public let appMemoryFootprintBytes: UInt64?
     public let timestamp: Date
 
-    public init(
+    nonisolated public init(
         systemCPUPercentage: Double? = nil,
         systemMemoryPercentage: Double? = nil,
         systemMemoryUsedBytes: UInt64? = nil,
@@ -102,7 +102,7 @@ public actor DarwinResourceSampler: SystemResourceSampling {
         )
     }
 
-    public static func sampleSystemCPUTicks() -> host_cpu_load_info? {
+    nonisolated public static func sampleSystemCPUTicks() -> host_cpu_load_info? {
         var cpuLoad = host_cpu_load_info()
         var count = mach_msg_type_number_t(MemoryLayout<host_cpu_load_info_data_t>.size / MemoryLayout<integer_t>.size)
         let kr = withUnsafeMutablePointer(to: &cpuLoad) {
@@ -114,7 +114,7 @@ public actor DarwinResourceSampler: SystemResourceSampling {
         return cpuLoad
     }
 
-    public static func sampleSystemCPU(previousTicks: host_cpu_load_info?) -> (host_cpu_load_info?, Double?) {
+    nonisolated public static func sampleSystemCPU(previousTicks: host_cpu_load_info?) -> (host_cpu_load_info?, Double?) {
         guard let current = sampleSystemCPUTicks() else { return (nil, nil) }
         guard let prev = previousTicks else { return (current, nil) }
 
@@ -129,7 +129,7 @@ public actor DarwinResourceSampler: SystemResourceSampling {
         return (current, pct)
     }
 
-    public static func sampleSystemMemory(
+    nonisolated public static func sampleSystemMemory(
         totalMemory: UInt64 = ProcessInfo.processInfo.physicalMemory
     ) -> (percentage: Double, usedBytes: UInt64)? {
         var pageSize: vm_size_t = 0
@@ -152,7 +152,7 @@ public actor DarwinResourceSampler: SystemResourceSampling {
         return (max(0.0, min(100.0, percentage)), usedBytes)
     }
 
-    public static func sampleProcessCPU() -> Double? {
+    nonisolated public static func sampleProcessCPU() -> Double? {
         var threadList: thread_act_array_t?
         var threadCount: mach_msg_type_number_t = 0
         let kr = task_threads(mach_task_self_, &threadList, &threadCount)
@@ -181,7 +181,7 @@ public actor DarwinResourceSampler: SystemResourceSampling {
         return Double(totalUsage)
     }
 
-    public static func sampleProcessMemoryFootprint() -> UInt64? {
+    nonisolated public static func sampleProcessMemoryFootprint() -> UInt64? {
         var taskVM = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
         let kr = withUnsafeMutablePointer(to: &taskVM) {
@@ -206,10 +206,18 @@ public final class SystemResourceMonitor: ObservableObject {
     private var appResignObserver: NSObjectProtocol?
     private var presentationAllowsSampling: Bool = false
 
+    public convenience init() {
+        self.init(
+            sampler: DarwinResourceSampler(),
+            sampleInterval: 5,
+            initialSnapshot: SystemResourceSnapshot()
+        )
+    }
+
     public init(
-        sampler: SystemResourceSampling = DarwinResourceSampler(),
+        sampler: SystemResourceSampling,
         sampleInterval: TimeInterval = 5,
-        initialSnapshot: SystemResourceSnapshot = .init()
+        initialSnapshot: SystemResourceSnapshot = SystemResourceSnapshot()
     ) {
         self.sampler = sampler
         self.sampleInterval = sampleInterval
